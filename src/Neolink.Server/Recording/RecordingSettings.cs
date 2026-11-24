@@ -6,12 +6,12 @@ using System.Text.Json;
 namespace Neolink.Recording;
 
 /// <summary>
-/// One camera's runtime recording switches. Immutable — readers always see a
+/// One camera's runtime recording switches. Immutable: readers always see a
 /// consistent snapshot. Retention overrides are per recording type: null = use
 /// the server-wide default, 0 = keep forever, otherwise days. RecordStream picks
 /// which stream is taped ("mainStream"/"subStream"/"externStream"; null = the
 /// server default from the recording config). The capture schedule gates event
-/// recording by local wall-clock time, but ONLY while ScheduleEnabled — the
+/// recording by local wall-clock time, but ONLY while ScheduleEnabled: the
 /// explicit opt-in keeps "capture always" the safe default and lets a schedule
 /// be switched off without losing it. ScheduleDays lists the enabled days
 /// ("mon".."sun", null = every day) and ScheduleStart/ScheduleEnd bound the
@@ -20,7 +20,7 @@ namespace Neolink.Recording;
 /// Archiving (requires recording.archive_path on the server) is a strict opt-in
 /// per camera and per recording type: with ArchiveEvents/ArchiveContinuous on,
 /// footage whose normal retention expires is MOVED to the archive instead of
-/// deleted — retention stays the single knob for when footage leaves the live
+/// deleted, retention stays the single knob for when footage leaves the live
 /// tier; archiving only changes what happens then. Archived footage is deleted
 /// after ArchiveRetentionDays (null or 0 = keep forever). All these fields are
 /// absent from pre-existing settings.json files and default to the old
@@ -33,15 +33,15 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     bool ScheduleEnabled = false,
     bool ArchiveEvents = false, bool ArchiveContinuous = false, int? ArchiveRetentionDays = null,
     // Battery cameras only (sleep-friendly, where 24/7 taping is vetoed): tape
-    // the camera's self-wakes to the timeline as continuous segments — a passive
+    // the camera's self-wakes to the timeline as continuous segments, a passive
     // tap of frames that are already flowing, so it costs the battery nothing.
     // Default ON; footage follows the continuous retention/archive settings.
     bool WakeTimeline = true,
     // AI event descriptions: send this camera's event frames to the configured
     // LLM. Strict opt-in, and inert unless the feature is also enabled globally
-    // (Settings → AI) — the global switch owns the endpoint.
+    // (Settings → AI): the global switch owns the endpoint.
     bool AiDescribe = false,
-    // Owner's scene notes for the LLM ("faces the street — passing cars are
+    // Owner's scene notes for the LLM ("faces the street: passing cars are
     // routine; the white SUV belongs here"). Threat calls are mostly context,
     // and this is the only place the model can get any. Null/blank = none.
     string? AiContext = null,
@@ -49,7 +49,7 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
     // notification recipient. Per-camera opt-in; inert until email is set up
     // under Server settings → Notifications, which owns recipient and SMTP.
     // The camera's event-type filter already decided what got recorded, so
-    // emails follow it for free — no second type matrix.
+    // emails follow it for free, no second type matrix.
     bool EmailEvents = false,
     // Same opt-in for the webhook channel (Server settings → Notifications owns
     // the endpoint and format).
@@ -66,7 +66,7 @@ public sealed record CameraRecordingSettings(bool Events, bool Continuous, List<
         "crying",
         // Perimeter protection (line/zone crossing set up in the Reolink app):
         // record on these INSTEAD of the plain detections, no non-detection
-        // zones needed — untick person/vehicle and keep these.
+        // zones needed, untick person/vehicle and keep these.
         "line-crossing", "intrusion", "loitering", "object-left", "object-taken",
         "motion",
     };
@@ -144,8 +144,8 @@ public sealed class RecordingSettings
     private readonly string _file;
     private readonly object _gate = new();
     private readonly object _saveGate = new();
-    // Copy-on-write: a published dictionary is never mutated, so Get — which the
-    // record pumps call per packet — reads it without the lock.
+    // Copy-on-write: a published dictionary is never mutated, so Get, which the
+    // record pumps call per packet, reads it without the lock.
     private volatile Dictionary<string, CameraRecordingSettings> _cameras = new(StringComparer.OrdinalIgnoreCase);
 
     public RecordingSettings(string stateDir, params string?[] legacyDirs)
@@ -246,7 +246,7 @@ public sealed class RecordingSettings
             changed = true;
         }
         if (!changed) return;
-        Log.Info($"{camera}: Detection events switched {(eventsDefault ? "on" : "off")} — this camera can now " +
+        Log.Info($"{camera}: Detection events switched {(eventsDefault ? "on" : "off")}: this camera can now " +
                  "detect over ONVIF, and the stored setting predates that (turn it off in the camera's " +
                  "Recording tab if that is not wanted)");
         Save();
@@ -257,8 +257,8 @@ public sealed class RecordingSettings
 
     /// <summary>
     /// Applies a partial update (null = leave unchanged; for the type filter and
-    /// the retention overrides, the matching set* flag distinguishes "set" — even
-    /// to null, meaning back to the server default — from "unchanged") and
+    /// the retention overrides, the matching set* flag distinguishes "set", even
+    /// to null, meaning back to the server default, from "unchanged") and
     /// persists the result.
     /// </summary>
     public CameraRecordingSettings Update(string camera, bool? events, bool? continuous,
@@ -327,7 +327,7 @@ public sealed class RecordingSettings
             catch (Exception ex)
             {
                 // Never let a broken state volume take the settings update down with
-                // it — the in-memory switch already applied; only persistence failed.
+                // it: the in-memory switch already applied; only persistence failed.
                 Log.Warn($"Cannot persist recording settings: {ex.Message}");
             }
         }

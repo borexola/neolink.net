@@ -9,7 +9,7 @@ namespace Neolink;
 
 /// <summary>Auto discover: a Baichuan hello to port 9000 over the ranges asked for (or
 /// each local /24) and the /24 of every configured camera, plus ONVIF WS-Discovery for
-/// model and name — multicast, and unicast to every swept host so routed subnets answer
+/// model and name, multicast, and unicast to every swept host so routed subnets answer
 /// too. Battery models answer neither; they are found by UID only.</summary>
 public static class LanScan
 {

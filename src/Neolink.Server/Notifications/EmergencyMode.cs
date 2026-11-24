@@ -32,7 +32,7 @@ public sealed record EmergencyCamera(string Name, ICameraControl Control)
     public Func<bool>? Suspended { get; init; }
     /// <summary>Suspends/resumes at runtime; persisted.</summary>
     public Action<bool>? SetSuspended { get; init; }
-    /// <summary>Privacy mode as last pushed — a "dark" camera showing nothing.</summary>
+    /// <summary>Privacy mode as last pushed: a "dark" camera showing nothing.</summary>
     public Func<bool?>? PrivacyOn { get; init; }
     /// <summary>Stops a battery camera dozing (and lets it doze again).</summary>
     public Action<bool>? SetHoldAwake { get; init; }
@@ -91,7 +91,7 @@ public sealed class EmergencyStore
         public List<string> PendingSiren { get; set; } = new();
         public List<string> PendingLight { get; set; } = new();
         /// <summary>Cameras emergency mode resumed, held awake, or took out of
-        /// privacy mode — the states to hand back when it is switched off.</summary>
+        /// privacy mode: the states to hand back when it is switched off.</summary>
         public List<string> Resumed { get; set; } = new();
         public List<string> HeldAwake { get; set; } = new();
         public List<string> Unhidden { get; set; } = new();
@@ -181,7 +181,7 @@ public sealed class EmergencyStore
 /// Applies emergency mode to the cameras. Siren and light are LATCHED while
 /// armed, so disarming must always run: every camera call is best-effort and
 /// logged, never thrown, or one unreachable camera would strand the rest.
-/// The store write and the camera pass share one lock — split, two racing
+/// The store write and the camera pass share one lock: split, two racing
 /// requests can leave a siren sounding with the stored state disarmed.
 /// A camera that answered and REFUSED is done with; anything else (offline,
 /// dropped link, no acknowledgement) may or may not have happened, so the
@@ -233,7 +233,7 @@ public sealed class EmergencyMode
 
     public EmergencySettings Snapshot() => _store.Snapshot();
 
-    /// <summary>Cameras the last pass could not set, one line each — an armed
+    /// <summary>Cameras the last pass could not set, one line each: an armed
     /// siren that never sounded is worth saying out loud, not just logging.</summary>
     public IReadOnlyList<EmergencyIssue> Issues
     {
@@ -289,7 +289,7 @@ public sealed class EmergencyMode
             SeedIfRestartedLocked(cur);
             if (cur.Enabled)
             {
-                Log.Warn("Emergency mode is still ARMED from before the restart — re-applying sirens and lights");
+                Log.Warn("Emergency mode is still ARMED from before the restart: re-applying sirens and lights");
                 await PassLockedAsync(new EmergencySettings(), cur, ct).ConfigureAwait(false);
                 return;
             }
@@ -316,7 +316,7 @@ public sealed class EmergencyMode
     /// when everything stuck.</summary>
     public async Task RetryPendingAsync(CancellationToken ct)
     {
-        // Anything unreached, or anything still owed back — a privacy mode to
+        // Anything unreached, or anything still owed back: a privacy mode to
         // restore counts as much as a siren to silence.
         lock (_state)
             if (_pendingSiren.Count == 0 && _pendingLight.Count == 0 && _pendingPrivacy.Count == 0
@@ -335,8 +335,8 @@ public sealed class EmergencyMode
 
     /// <summary>First pass of this process with the store ARMED: the cameras were
     /// forced before the restart. Whatever the runtime file did not record is
-    /// assumed on — a siren wrongly assumed sounding costs one harmless off; one
-    /// wrongly assumed silent could sound for good — and its light restores to
+    /// assumed on: a siren wrongly assumed sounding costs one harmless off; one
+    /// wrongly assumed silent could sound for good, and its light restores to
     /// off, the earlier state being unknowable. Must run before any camera is
     /// read, or the forced-on light would be captured as the state to go back to.</summary>
     private void SeedIfRestartedLocked(EmergencySettings cur)
@@ -398,7 +398,7 @@ public sealed class EmergencyMode
             if (!next.Enabled && (owed || retryPrivacy || prev.Enabled != next.Enabled))
                 await LiveAsync(cam, false, ct).ConfigureAwait(false);
             // Switched off with nothing of ours left on the camera: nothing to
-            // retry and nothing worth reporting. Only ever while disarmed — while
+            // retry and nothing worth reporting. Only ever while disarmed, while
             // armed, an unreached camera is outstanding work, not noise.
             if (!next.Enabled)
                 lock (_state)
@@ -430,7 +430,7 @@ public sealed class EmergencyMode
 
     /// <summary>Brings a camera fully live for the emergency, or hands back exactly
     /// what was changed. A camera the user suspended reconnects, a dozing battery
-    /// camera stops dozing, and one sitting in privacy mode starts seeing again —
+    /// camera stops dozing, and one sitting in privacy mode starts seeing again:
     /// each recorded, so nothing that was already live is "restored" into a state
     /// the user never chose.</summary>
     private async Task LiveAsync(EmergencyCamera cam, bool arming, CancellationToken ct)
@@ -510,7 +510,7 @@ public sealed class EmergencyMode
         else
         {
             // null is "the camera has not told us yet", which is exactly the
-            // state a just-woken camera is in — treating that as "not dark" is
+            // state a just-woken camera is in: treating that as "not dark" is
             // how a dark camera stays dark through the whole emergency. Keep it
             // queued and let the sweep look again once a push has arrived.
             var dark = cam.PrivacyOn?.Invoke();
@@ -533,12 +533,12 @@ public sealed class EmergencyMode
                 if (on) _unhidden.Remove(name); else _unhidden.Add(name);
                 _pendingPrivacy.Remove(name);
                 // The siren and light clear their own line before they run; this
-                // path can run alone, so it clears its own — unless one of them
+                // path can run alone, so it clears its own, unless one of them
                 // is still outstanding and the line belongs to that instead.
                 if (!_pendingSiren.Contains(name) && !_pendingLight.Contains(name))
                     _issues.Remove(name);
             }
-            Log.Info($"Emergency mode: {name} privacy mode {(on ? "restored" : "off — the camera can see again")}");
+            Log.Info($"Emergency mode: {name} privacy mode {(on ? "restored" : "off: the camera can see again")}");
         }
         catch (Exception ex)
         {
@@ -581,8 +581,8 @@ public sealed class EmergencyMode
         bool sent = false;
         try
         {
-            // Arming probes. Disarming does not — a camera whose capabilities can no
-            // longer be read must still be reached — unless the latch was only
+            // Arming probes. Disarming does not, a camera whose capabilities can no
+            // longer be read must still be reached, unless the latch was only
             // assumed after a restart, in which case a probe that answers settles it.
             if (on || assumed)
             {
@@ -612,7 +612,7 @@ public sealed class EmergencyMode
             lock (_state)
             {
                 // Sent but unacknowledged is not refused: the command may have run,
-                // so the siren counts as sounding — a stray off is harmless, a
+                // so the siren counts as sounding, a stray off is harmless, a
                 // missed one is not. A probe that failed sent nothing.
                 if (on && sent && !refused) _latched.Add(name);
                 if (!on && refused) { _latched.Remove(name); _assumed.Remove(name); }
@@ -635,7 +635,7 @@ public sealed class EmergencyMode
             var f = (await control.GetCapabilitiesAsync(ct).ConfigureAwait(false)).Features;
             if (!f.Floodlight && !f.Spotlight && !f.WhiteLed)
             {
-                // Nothing to drive — including a restore seeded by a restart.
+                // Nothing to drive, including a restore seeded by a restart.
                 lock (_state) { _priorLight.Remove(name); _pendingLight.Remove(name); }
                 return;
             }

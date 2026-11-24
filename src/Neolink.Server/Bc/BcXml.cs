@@ -33,7 +33,7 @@ public sealed class BcXmlBody
     /// Every child element of the body as raw XML, in wire order. This keeps
     /// messages we have no typed model for (Support, LedState, RfAlarmCfg,
     /// BatteryInfo, ...) fully accessible, and enables read-modify-write of
-    /// camera settings without modelling — and risking reordering — every field.
+    /// camera settings without modelling, and risking reordering, every field.
     /// </summary>
     public List<XElement> Raw { get; } = new();
 
@@ -143,7 +143,7 @@ public sealed class BcXmlBody
                 new XElement("speed", PtzControl.Speed),
                 new XElement("command", PtzControl.Command)));
         }
-        // Raw elements ride along verbatim — but never duplicate an element the
+        // Raw elements ride along verbatim, but never duplicate an element the
         // typed properties above already emitted (a parsed body has both views).
         foreach (var el in Raw)
         {
@@ -196,7 +196,7 @@ public sealed class DeviceInfoXml
     public uint Width;
     public uint Height;
 
-    /// <summary>Whether the login DeviceInfo advertises a &lt;sleep&gt; element —
+    /// <summary>Whether the login DeviceInfo advertises a &lt;sleep&gt; element:
     /// Reolink's actual support signal for Privacy Mode. Firmware without the
     /// feature still answers the state query, so this is the reliable gate
     /// (it is what Home Assistant's reolink library keys on too).</summary>

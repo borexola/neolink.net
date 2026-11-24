@@ -14,15 +14,15 @@ namespace Neolink.Recording;
 /// back off) keeps playing forever, side by side with encrypted files.
 ///
 /// Threat model: protects footage against a stolen/decommissioned disk, a NAS
-/// share mounted elsewhere, and backups — NOT against an attacker with full
+/// share mounted elsewhere, and backups, NOT against an attacker with full
 /// access to the running host, who can read the key like the server does. The
 /// master key derives from the same secret as <see cref="Neolink.Notifications.SecretProtector"/>
 /// (NEOLINK_SECRET_KEY env var, or the state dir's secret.key): lose that key,
-/// lose the encrypted footage — back it up, and ideally keep the state dir on
+/// lose the encrypted footage, back it up, and ideally keep the state dir on
 /// a different disk than the recordings.
 ///
 /// The vault is configured once at startup and consulted from static call
-/// sites (ClipWriter recovery, VirtualMp4) as well as instance ones — a
+/// sites (ClipWriter recovery, VirtualMp4) as well as instance ones: a
 /// process-wide setting, like the storage metrics.
 /// </summary>
 public static class FootageVault
@@ -45,7 +45,7 @@ public static class FootageVault
     /// <summary>New footage files will be written encrypted.</summary>
     public static bool EncryptingNew => _encryptNew;
 
-    /// <summary>Creates a footage file for writing (replacing any existing file) —
+    /// <summary>Creates a footage file for writing (replacing any existing file):
     /// encrypted when the vault says so, plain otherwise. The returned stream is
     /// seekable and readable either way, exactly like the FileStream it replaces.</summary>
     public static Stream Create(string path)
@@ -74,7 +74,7 @@ public static class FootageVault
     {
         // Sniff with a positional read on the raw handle: a buffered FileStream
         // would fill its whole buffer (a 1 MB read at the file head) just to
-        // answer an 8-byte question, then discard it when the caller seeks — a
+        // answer an 8-byte question, then discard it when the caller seeks, a
         // wasted megabyte and a disk seek on EVERY range request, which is what
         // high-speed playback is made of. RandomAccess reads exactly 8 bytes and
         // moves no file pointer; the same handle then backs the real stream.
@@ -92,13 +92,13 @@ public static class FootageVault
                 // Large buffer: fewer, bigger reads are what serving video wants.
                 // Position pinned to 0: a positional sniff that short-reads at EOF
                 // (file smaller than the magic) leaves the handle's pointer at the
-                // end, and a stream served from there writes 0 of Length bytes —
+                // end, and a stream served from there writes 0 of Length bytes,
                 // Kestrel turns that mismatch into a 500.
                 return new FileStream(handle, access, bufferSize: writable ? 1 : bufferSize) { Position = 0 };
             }
             if (_master == null)
                 throw new InvalidDataException(
-                    $"{Path.GetFileName(path)} is encrypted footage but no key is available — " +
+                    $"{Path.GetFileName(path)} is encrypted footage but no key is available: " +
                     "is the state dir (secret.key) or NEOLINK_SECRET_KEY intact?");
             // Unbuffered: the encrypting layer does its own slot-sized IO.
             var raw = new FileStream(handle, access, bufferSize: 1);
@@ -112,7 +112,7 @@ public static class FootageVault
     }
 
     /// <summary>Writes a small artifact (a thumbnail) in one go, encrypted when the
-    /// vault says so — the drop-in for File.WriteAllBytes on footage artifacts.</summary>
+    /// vault says so: the drop-in for File.WriteAllBytes on footage artifacts.</summary>
     public static async Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken ct)
     {
         await using var s = Create(path);
@@ -131,12 +131,12 @@ public static class FootageVault
 /// GCM tag authenticates the slot's position via AAD (file id + slot index), so
 /// slots cannot be reordered or transplanted between files. Only the final slot
 /// may be short; that is also why it can be rewritten in place as the recorder
-/// appends — its slot offset never moves. Integrity is per-slot: any in-place
+/// appends: its slot offset never moves. Integrity is per-slot: any in-place
 /// tamper is detected on read; a truncated tail behaves like a crash-truncated
 /// recording, which every consumer already copes with (that trade is what lets
 /// a live file grow and be watched at the same time).
 ///
-/// Position, Length and all offsets are in PLAINTEXT coordinates — callers seek
+/// Position, Length and all offsets are in PLAINTEXT coordinates: callers seek
 /// and patch exactly as they would a plain file. One slot is cached; sequential
 /// IO touches each slot once, and a range request decrypts only what it covers.
 /// AES-GCM is hardware-accelerated, so throughput dwarfs footage bitrates.
@@ -183,7 +183,7 @@ public sealed class EncryptedFootageStream : Stream
             // A file still being written reseals its short tail slot in place,
             // so that slot may not decrypt at any given instant. A reader's
             // length is a promise (HTTP Content-Length): pin it at open to what
-            // provably decrypts, and never read past it — the sealed prefix of
+            // provably decrypts, and never read past it, the sealed prefix of
             // a growing file is immutable, so the whole response stays coherent.
             long lastIdx = (_plainLen - 1) / _chunk;
             _slotIdx = lastIdx;
@@ -212,7 +212,7 @@ public sealed class EncryptedFootageStream : Stream
         inner.ReadExactly(header);
         if (header[7] != Magic[7])
             throw new InvalidDataException(
-                $"encrypted footage format v{header[7]} — this Neolink version reads v{Magic[7]}; " +
+                $"encrypted footage format v{header[7]}: this Neolink version reads v{Magic[7]}; " +
                 "upgrade the server to play this file");
         var chunk = (int)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(8));
         if (chunk is < 4096 or > (1 << 24))
@@ -221,7 +221,7 @@ public sealed class EncryptedFootageStream : Stream
     }
 
     /// <summary>Does this 8-byte header carry the footage magic? Matches ANY
-    /// format version — an unknown (future) version must fail loudly in
+    /// format version: an unknown (future) version must fail loudly in
     /// <see cref="Open"/>, never fall through and be served as plaintext video.</summary>
     internal static bool IsMagic(ReadOnlySpan<byte> head) =>
         head.Length >= 7 && head[..7].SequenceEqual(Magic.AsSpan(0, 7));
@@ -264,7 +264,7 @@ public sealed class EncryptedFootageStream : Stream
             catch (CryptographicException)
             {
                 // A slot being rewritten right now (the recorder appending, or a
-                // finalize patch) reads torn — the window is microseconds, so a
+                // finalize patch) reads torn: the window is microseconds, so a
                 // few retries ride it out; a final slot that still fails IS the
                 // growing tail, so treat it as not-there-yet.
                 if (attempt < 3) { Thread.Sleep(2); continue; }
@@ -305,7 +305,7 @@ public sealed class EncryptedFootageStream : Stream
         _dirty = false;
     }
 
-    /// <summary>Plaintext length as derivable from the bytes on disk — every slot
+    /// <summary>Plaintext length as derivable from the bytes on disk: every slot
     /// is full except a shorter final one, so the math is exact.</summary>
     private long DiskPlainLength()
     {
@@ -323,7 +323,7 @@ public sealed class EncryptedFootageStream : Stream
     public override bool CanWrite => _writable;
 
     /// <summary>Write mode tracks what was written; read mode is PINNED to the
-    /// decryptable length measured at open — a growing file's unsealed tail must
+    /// decryptable length measured at open: a growing file's unsealed tail must
     /// not be promised to a reader that could then come up short mid-response.</summary>
     public override long Length => _plainLen;
 

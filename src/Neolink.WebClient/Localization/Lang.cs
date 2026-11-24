@@ -5,7 +5,7 @@ namespace Neolink.WebClient.Localization;
 
 /// <summary>One language the UI can be displayed in.</summary>
 /// <param name="Code">BCP-47 primary subtag, lowercase ("en", "fr").</param>
-/// <param name="Native">What speakers of it call it — what the picker shows.</param>
+/// <param name="Native">What speakers of it call it: what the picker shows.</param>
 /// <param name="English">The English name, for logs and English-language docs.</param>
 public sealed record LangOption(string Code, string Native, string English);
 

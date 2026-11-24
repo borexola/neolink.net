@@ -13,7 +13,7 @@ public readonly record struct CameraHealth(string Name, bool Online, bool Asleep
 /// Polls the server's health every 30s and reports each critical condition to the
 /// <see cref="Notifier"/> (which handles edge-detection, de-duplication and email).
 /// Level-triggered and idempotent: it just states the CURRENT truth each tick, so
-/// there is no state to get out of sync. Every tick is wrapped — a probe hiccup
+/// there is no state to get out of sync. Every tick is wrapped: a probe hiccup
 /// can never stop the loop or touch anything else.
 /// </summary>
 public sealed class AlertMonitor
@@ -79,12 +79,12 @@ public sealed class AlertMonitor
         var full = _storage!.Sample().FirstOrDefault(s => s.Full);
         _notifier.Report("storage", full != null,
             () => new Alert("storage", false, $"{_server}: storage full",
-                "Recording has stopped — a drive is out of space",
+                "Recording has stopped: a drive is out of space",
                 $"The \"{full!.Label}\" volume ({full.Path}) has no room left, so recording to it has halted. " +
                 "Free up space, or lower retention / enable archiving to another drive.",
                 $"{full!.Label}: {Gb(full.FreeBytes)} free of {Gb(full.TotalBytes)}"),
             () => new Alert("storage", true, $"{_server}: storage recovered",
-                "Recording resumed — storage has space again",
+                "Recording resumed: storage has space again",
                 "A recording drive that had filled up now has free space, and recording has resumed."));
     }
 
@@ -97,7 +97,7 @@ public sealed class AlertMonitor
         _notifier.Report("overload", overloaded,
             () => new Alert("overload", false, $"{_server}: sustained high load",
                 "The server has been running at very high CPU",
-                "CPU has stayed near maximum for several minutes — live streams or recording may be lagging. " +
+                "CPU has stayed near maximum for several minutes: live streams or recording may be lagging. " +
                 "Check for a stuck camera reconnect loop, or a host that's overcommitted.",
                 $"~{avg:0}% CPU averaged over {OverloadWindow.TotalMinutes:0} minutes"),
             () => new Alert("overload", true, $"{_server}: load back to normal",
@@ -137,7 +137,7 @@ public sealed class AlertMonitor
                 if (left <= TimeSpan.Zero)
                 {
                     // Out of budget this tick; the next one picks it up.
-                    Log.Debug($"{name}: offline-alert snapshots deferred — tick budget spent");
+                    Log.Debug($"{name}: offline-alert snapshots deferred: tick budget spent");
                 }
                 else
                 {
@@ -172,7 +172,7 @@ public sealed class AlertMonitor
         _notifier.Report("writefail", bad.Count > 0,
             () => new Alert("writefail", false, $"{_server}: recording write errors",
                 "Recording is failing to write to disk",
-                "The server hit errors writing footage to disk — a failing or disconnected drive, or a permissions " +
+                "The server hit errors writing footage to disk: a failing or disconnected drive, or a permissions " +
                 "problem. Recent recordings may be incomplete. (This is different from a drive simply being full.)",
                 string.Join(", ", bad)),
             () => new Alert("writefail", true, $"{_server}: recording writes recovered",

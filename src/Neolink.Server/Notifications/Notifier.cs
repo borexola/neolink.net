@@ -19,7 +19,7 @@ public sealed record EventInfo(string Camera, IReadOnlyList<string> Labels,
 /// <summary>One alert to deliver. <paramref name="Key"/> is the dedup identity
 /// (e.g. "storage", "camera:Driveway"); <paramref name="Recovery"/> marks the
 /// paired "resolved" message. <paramref name="Brief"/> is the push-length text
-/// a webhook prefers over <paramref name="Body"/> — a phone notification wants
+/// a webhook prefers over <paramref name="Body"/>: a phone notification wants
 /// "Person on Driveway at 14:32", not the email's story.</summary>
 public sealed record Alert(string Key, bool Recovery, string Subject, string Headline,
     string Body, string? Context = null, IReadOnlyList<EmailAttachment>? Attachments = null,
@@ -31,8 +31,8 @@ public sealed record EmailAttachment(string Name, string ContentType, byte[] Dat
 /// <summary>
 /// Sends the app's critical alerts as email, in complete isolation from the rest
 /// of the server: a bounded background queue, all sends wrapped so an unreachable
-/// or misconfigured mail server can never throw into recording, streaming or MQTT
-/// — worst case an alert is logged and dropped. Alerts are edge-detected here, so
+/// or misconfigured mail server can never throw into recording, streaming or MQTT,
+/// worst case an alert is logged and dropped. Alerts are edge-detected here, so
 /// callers just <see cref="Report"/> the CURRENT state each poll: the first time a
 /// condition goes bad emails once, it re-reminds at most every few hours while it
 /// persists, and clearing it emails a one-line "resolved".
@@ -79,8 +79,8 @@ public sealed class Notifier
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
                 catch (Exception ex)
                 {
-                    Log.Warn($"Notification delivery failed ({alert.Subject}): {Log.Flatten(ex)} " +
-                             "— check Server settings → Notifications; nothing else is affected");
+                    Log.Warn($"Notification delivery failed ({alert.Subject}): {Log.Flatten(ex)}. " +
+                             "Check Server settings → Notifications; nothing else is affected");
                 }
             }
         }
@@ -90,7 +90,7 @@ public sealed class Notifier
     /// <summary>Level-triggered report of a condition. <paramref name="active"/>
     /// true = the problem is happening now. Emails the problem once on the leading
     /// edge (and re-reminds every few hours while active); emails
-    /// <paramref name="recovery"/> when it clears — but only if the problem was
+    /// <paramref name="recovery"/> when it clears, but only if the problem was
     /// actually emailed. Enabled/toggle checks happen at the source, plus a master
     /// Enabled guard here.</summary>
     public void Report(string key, bool active, Func<Alert> problem, Func<Alert> recovery)
@@ -121,7 +121,7 @@ public sealed class Notifier
             }
         }
         if (toSend == null || _queue.Writer.TryWrite(toSend with { Channels = ch })) return;
-        Log.Warn($"Notification queue is full — dropped: {toSend.Subject}");
+        Log.Warn($"Notification queue is full, dropped: {toSend.Subject}");
         // Un-stamp so the next poll retries instead of going quiet for hours
         // (or, for a dropped recovery, forgetting the problem was ever emailed).
         lock (_gate)
@@ -131,7 +131,7 @@ public sealed class Notifier
         }
     }
 
-    /// <summary>One-shot send, no edge detection — detection-event emails: each
+    /// <summary>One-shot send, no edge detection: detection-event emails: each
     /// event either mails or it doesn't (the cooldown decides at the source).
     /// Same bounded queue and the same "never throws into the caller" contract.
     /// Returns whether the alert was queued (a full queue drops it, logged).</summary>
@@ -139,7 +139,7 @@ public sealed class Notifier
     {
         if ((alert.Channels & ReadyChannels(_store.Snapshot())) == AlertChannels.None) return false;
         if (_queue.Writer.TryWrite(alert)) return true;
-        Log.Warn($"Notification queue is full — dropped: {alert.Subject}");
+        Log.Warn($"Notification queue is full, dropped: {alert.Subject}");
         return false;
     }
 
@@ -209,8 +209,8 @@ public sealed class Notifier
             catch (Exception ex)
             {
                 Log.Warn($"Notification email failed ({alert.Subject}) via " +
-                         $"{s.SmtpHost}:{s.SmtpPort} [{s.Security}]: {Log.Flatten(ex)} " +
-                         "— check Server settings → Notifications; nothing else is affected");
+                         $"{s.SmtpHost}:{s.SmtpPort} [{s.Security}]: {Log.Flatten(ex)}. " +
+                         "Check Server settings → Notifications; nothing else is affected");
             }
         }
         if (alert.Channels.HasFlag(AlertChannels.Webhook) && WebhookReady(s))
@@ -227,7 +227,7 @@ public sealed class Notifier
                 // Scheme and host only: a Discord or Slack webhook URL carries its
                 // own token in the path, and logs get pasted into bug reports.
                 Log.Warn($"Notification webhook failed ({alert.Subject}) via {WebhookHost(s.WebhookUrl)}: " +
-                         $"{Log.Flatten(ex)} — check Server settings → Notifications; nothing else is affected");
+                         $"{Log.Flatten(ex)}: check Server settings → Notifications; nothing else is affected");
             }
         }
     }

@@ -1,11 +1,11 @@
 # Web UI
 
-The built-in browser UI — no plugins, no transcoding, no GStreamer. Serve it
+The built-in browser UI, no plugins, no transcoding, no GStreamer. Serve it
 on `web_port` (default 8655) or turn it off with `"webui": false`.
 
 ## Live viewing
 
-- Video arrives as **fMP4 over WebSocket + Media Source Extensions** — a
+- Video arrives as **fMP4 over WebSocket + Media Source Extensions**: a
   ~0.35 s cushion for cameras that deliver per-frame (it grows only if the
   link stutters), more for cameras that batch whole GOPs (an adaptive jitter
   buffer measures each stream's cadence).
@@ -13,14 +13,14 @@ on `web_port` (default 8655) or turn it off with `"webui": false`.
   speaker button unmutes; event clips and 24/7 recordings carry audio too.
   ADPCM-only cameras play audio via RTSP only.
 - **H.265 main streams** need hardware decode (Safari, Edge, Chrome with HW
-  support; not Firefox) — the UI detects this and suggests the H.264 sub
+  support; not Firefox): the UI detects this and suggests the H.264 sub
   stream. The RTSP side serves H.265 regardless.
 - **Two-way talk (opt-in)** for cameras with a speaker: a mic button on the
   maximized tile / quick view streams your microphone to the camera
   (resampled and ADPCM-encoded server-side). Enable in *Server settings →
-  Web UI*; needs HTTPS or localhost — browsers only expose the mic in secure
+  Web UI*; needs HTTPS or localhost: browsers only expose the mic in secure
   contexts. Talk uses the system-default microphone unless you pick one
-  under *Server settings → Connection* (per device — do this when the
+  under *Server settings → Connection* (per device, do this when the
   default is a headset amp or virtual cable, which capture only silence; the
   UI warns when a live talk session is carrying no signal). This matters
   especially in the desktop app, whose permission prompt has no device
@@ -28,9 +28,9 @@ on `web_port` (default 8655) or turn it off with `"webui": false`.
 
 ## Layouts
 
-Five wall modes — **Grid** (1–16 tiles), **Focus** (hero + thumbnail strip),
+Five wall modes, **Grid** (1–16 tiles), **Focus** (hero + thumbnail strip),
 **Mosaic** (classic CCTV wall), **Theater** (one camera), **Free** (draggable
-floating windows) — with per-tile stream selection (main/sub), maximize and
+floating windows), with per-tile stream selection (main/sub), maximize and
 browser fullscreen. Signed-in accounts keep their layouts, tiles and filters
 server-side, so they follow you across browsers; signed-out browsers fall
 back to localStorage.
@@ -45,15 +45,15 @@ Each plug-in Reolink camera found is listed by its Baichuan port and, where
 ONVIF is on, with its model and name (asked of each address directly, so a
 camera VLAN the server is not on answers too); **Add…** closes the dialog and
 opens the add-camera form with the address and name filled in. Battery
-cameras do not answer a scan — add those by UID. A camera whose IP has changed
+cameras do not answer a scan: add those by UID. A camera whose IP has changed
 is followed automatically and shows *now at …* with a **Use new address**
 button that updates the file.
 
 ## Camera settings & controls
 
 The ⚙ panel next to each camera is built from what the camera itself
-reports: device info, full stream encode tables, battery status, and — where
-supported — PTZ, optical zoom/focus, status LED / floodlight with
+reports: device info, full stream encode tables, battery status, and, where
+supported, PTZ, optical zoom/focus, status LED / floodlight with
 brightness, PIR, a latched siren, privacy mode and reboot. Over the camera's
 HTTP API (beta) it adds picture sliders, day/night and anti-flicker, HDR,
 speaker volume, motion and per-type AI detection sensitivity, the on-screen
@@ -89,7 +89,7 @@ to point it somewhere else.
 
 Every camera has one, behind **Edit zone…**: drag boxes over the camera's
 own picture to mark what is worth watching, in Block or Watch mode, then
-apply. Where it is KEPT depends on the camera and the editor says which —
+apply. Where it is KEPT depends on the camera and the editor says which,
 **on the camera** for a Reolink with its HTTP API (the same grid the Reolink
 app edits, governing the camera's own motion and AI alarms) and for a
 non-Reolink camera whose ONVIF analytics runs a cell motion detector (its own
@@ -97,7 +97,7 @@ motion grid, which governs its motion alarms only), or **on Neolink** for any
 camera that keeps no zone of its own (generic RTSP without such a detector,
 and Reolink models whose firmware carries no grid). A Neolink-kept zone writes
 nothing to the camera and leaves its own alerts alone; it governs what
-Neolink watches — today, the live object boxes. Cameras with no snapshot
+Neolink watches: today, the live object boxes. Cameras with no snapshot
 command of their own get the editor's backdrop from the stream Neolink is
 already carrying, decoded with ffmpeg.
 
@@ -115,7 +115,7 @@ already carrying, decoded with ffmpeg.
   its incidents: from wherever the cursor stands, playback hops to the next
   event, plays through it, hops again, and pauses after the day's last
   event (Play at that point starts the reel over). It obeys the EVENTS
-  filter — hide a category and it is skipped too. Off by default; the
+  filter: hide a category and it is skipped too. Off by default; the
   classic continuous play-through is untouched.
 - **Recording is switched on from Settings → Recording.** The example config
   ships with the `recording` section commented out, so a fresh server keeps
@@ -123,7 +123,7 @@ already carrying, decoded with ffmpeg.
   confirmed **Disable recording** to remove the section again. Footage
   already on disk is never touched either way, and a restart applies the
   change. Under Docker the storage path must be a mounted volume.
-- **Export** downloads a chosen period of one camera's day — one combined
+- **Export** downloads a chosen period of one camera's day: one combined
   MP4 (joined without re-encoding, trimmed to the range) or a zip of the
   original segments. The dialog pre-fills the zoomed window and shows the
   size first; mind that a full high-bitrate day is tens of gigabytes.
@@ -131,7 +131,7 @@ already carrying, decoded with ffmpeg.
 ## Camera SD-card playback (beta)
 
 The Events page's **SD card** mode lists and plays the recordings a camera
-stored on its own card — footage from when the server was down, and
+stored on its own card: footage from when the server was down, and
 battery-camera clips that never streamed. Day calendar from the camera,
 playback with scrubbing, download. Uses the camera's HTTP API, or Baichuan
 when it has none or won't serve a clip; what the camera records onto its card
@@ -149,7 +149,7 @@ See [battery cameras](battery-cameras.md).
 
 Chrome/Edge show an install icon in the address bar; iPhone/iPad use
 Safari's *Share → Add to Home Screen*; macOS Safari has *File → Add to
-Dock*. The installed app is the same live UI in its own window — nothing is
+Dock*. The installed app is the same live UI in its own window, nothing is
 cached, so it is always as current as the server. Requires a secure context
 (HTTPS or localhost); on plain `http://lan-ip` the install option is hidden
 though the UI works as always.
@@ -181,11 +181,11 @@ the flag turns itself off after one reset. Locked-out
 callers get one generic answer
 whether the account exists or not, every lock is logged with its source
 address (fail2ban-friendly), and the panel lists live lockouts with an
-"unlock everything now" button. A server restart also clears every lock —
+"unlock everything now" button. A server restart also clears every lock:
 the way back in if you lock yourself out.
 
 Behind a reverse proxy (Home Assistant ingress, nginx, Caddy) the caller's
-real address comes from the forwarded-for header the proxy adds — the last
+real address comes from the forwarded-for header the proxy adds: the last
 hop, the only one the proxy itself vouched for, so a caller cannot forge a
 fresh address by sending the header themselves. A proxy that adds no such
 header leaves every sign-in looking like the proxy, in which case account
@@ -195,14 +195,14 @@ lockouts carry the load and the per-address block is best left off.
 
 The UI ships in English, French, German, Spanish, Dutch, Polish and
 Portuguese. Every language beyond English is AI-translated and cannot be fully
-verified for accuracy — corrections are very welcome (the catalogues are plain
+verified for accuracy: corrections are very welcome (the catalogues are plain
 JSON). The first-run "Secure this server" dialog
-asks for the language alongside the admin account — that choice becomes both
+asks for the language alongside the admin account, that choice becomes both
 the admin's own and the server default. Afterwards it lives under
 ⚙ → *Language*, a tab every account gets: your pick applies to the whole UI
 **instantly** (no restart, no reload) and is saved to your account, so it
-follows you to other browsers. The admin separately sets the *server default*
-— what the sign-in screen uses and what accounts that never chose follow. A
+follows you to other browsers. The admin separately sets the *server default*:
+what the sign-in screen uses and what accounts that never chose follow. A
 cookie carries the choice into the first frame of the next page load, so
 there is no English flash. For provisioned deploys, `ui.language` in
 `config.json` seeds the default on a server whose state has none yet.

@@ -6,10 +6,10 @@ namespace Neolink.Media;
 /// <summary>
 /// Incremental Ogg reader that extracts Opus packets from an ogg/opus byte
 /// stream (ffmpeg's stdout in the audio transcoder). The OpusHead/OpusTags
-/// header packets are swallowed — they describe the stream, they are not audio.
+/// header packets are swallowed: they describe the stream, they are not audio.
 /// Page CRCs are not verified: the source is a local pipe, not a lossy
 /// transport, and a desynced page is caught by the capture-pattern scan.
-/// One instance per ffmpeg process — a restart starts a fresh stream (new
+/// One instance per ffmpeg process: a restart starts a fresh stream (new
 /// OpusHead) and must start a fresh reader.
 /// </summary>
 public sealed class OggOpusReader
@@ -30,7 +30,7 @@ public sealed class OggOpusReader
         {
             if (_len + data.Length > MaxBuffer)
             {
-                _len = 0; // not an Ogg stream — drop and resync on the next capture
+                _len = 0; // not an Ogg stream: drop and resync on the next capture
                 _packet.SetLength(0);
             }
             Array.Resize(ref _buf, Math.Max(_buf.Length * 2, _len + data.Length));

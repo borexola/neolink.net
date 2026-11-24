@@ -13,10 +13,10 @@ namespace Neolink.Media;
 /// media byte before it knows what any of them is, and ffmpeg gives up ("partial
 /// file", no frames). The plan moves the index ahead of the media, shifts every
 /// chunk offset by the bytes the index now displaces, and retypes the free boxes
-/// to mdat so the reader stops walking atoms and starts reading samples — which
+/// to mdat so the reader stops walking atoms and starts reading samples, which
 /// it then does in file order, so every seek is a forward one. A file that
 /// already leads with its index (still recording, pre-upgrade fragmented, foreign
-/// fast-start) copies as-is, cut-off tail included — a clip still being written
+/// fast-start) copies as-is, cut-off tail included: a clip still being written
 /// ends mid-box, and the reader copes with that as it always has.
 /// </summary>
 public sealed class Mp4Pipe

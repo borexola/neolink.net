@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CI smoke test for the add-on launcher (run by docker.yml's addon-check job).
 #
-# run.sh executes at every add-on boot for every user — a jq typo in its
+# run.sh executes at every add-on boot for every user: a jq typo in its
 # options -> config.json mapping crash-loops them all, and nothing else ever
 # runs the script before an image ships. So: run the REAL script against
 # fixtures and assert the config.json it writes. `exec dotnet` at the end is
@@ -35,7 +35,7 @@ assert_cameras() { # $1 = expected cameras JSON, $2 = test name
 bash -n ../run.sh || fail "run.sh has a bash syntax error"
 
 # --- 1. First start, NVR channels: channel_id 2, explicit 0, and absent -----
-# (A camera with no options password gets NO password key — the app treats
+# (A camera with no options password gets NO password key, the app treats
 # absent and empty the same, and omitting is what lets a stored one survive.)
 cat > "$work/options.json" <<'JSON'
 {

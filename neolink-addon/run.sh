@@ -44,23 +44,23 @@ build_config() {
     if jq -e . "$CONFIG" >/dev/null 2>&1; then
       base=$(cat "$CONFIG")
     else
-      log "config.json is hand-edited (comments or non-JSON syntax) — leaving it untouched"
+      log "config.json is hand-edited (comments or non-JSON syntax): leaving it untouched"
       return 0
     fi
   else
-    log "first start — creating $CONFIG"
+    log "first start: creating $CONFIG"
     base=$(template)
   fi
 
   # Cameras: the options BOOTSTRAP the list, they do not own it. Each options
-  # camera is merged onto the config.json camera of the same name — the
+  # camera is merged onto the config.json camera of the same name: the
   # options' own fields win, and everything the web UI's Cameras editor set
   # (uid, wake_capture, udp, http_address, streams, ...) survives. Cameras
   # that exist only in config.json are KEPT: deleting happens in the web UI.
   # An empty options password keeps the stored one.
   # Only fields the user actually SET are carried over: a blank text field or an
   # untouched toggle must not overwrite what the web UI holds. Booleans are
-  # therefore applied on true only — turning one back off is the web UI's job,
+  # therefore applied on true only: turning one back off is the web UI's job,
   # because Home Assistant stores an untouched toggle as false and that would
   # silently revert the web UI's setting at every boot.
   cams=$(jq '[.cameras[]? | . as $c
@@ -99,23 +99,23 @@ build_config() {
     # empty Options page as "my cameras are gone".
     have=$(jq '(.cameras // []) | length' <<<"$base")
     if [ "$have" -gt 0 ]; then
-      log "no cameras in the add-on options — running the $have camera(s) from config.json (add and edit them in Neolink's web UI, camera ⚙)"
+      log "no cameras in the add-on options: running the $have camera(s) from config.json (add and edit them in Neolink's web UI, camera ⚙)"
     fi
   fi
 
   # "udp": true with no uid is a config the app refuses to load, and the merge
-  # above can neither unset a boolean nor invent the uid — so the Options page
+  # above can neither unset a boolean nor invent the uid, so the Options page
   # could write an entry only a hand edit could take back, and one such entry
   # used to stop every camera. Repair it instead of shipping it.
   local noudp
   noudp=$(jq -r '[(.cameras // [])[] | select(.udp == true and ((.uid // "") == "")) | .name] | join(", ")' <<<"$base")
   if [ -n "$noudp" ]; then
     base=$(jq '(.cameras // []) |= map(if .udp == true and ((.uid // "") == "") then del(.udp) else . end)' <<<"$base")
-    log "dropped \"udp\" from $noudp — UDP needs the camera's UID; set one in Neolink's web UI (camera ⚙) to turn it back on"
+    log "dropped \"udp\" from $noudp: UDP needs the camera's UID; set one in Neolink's web UI (camera ⚙) to turn it back on"
   fi
 
   # MQTT: fetch the broker the Mosquitto add-on provides and merge ONLY the
-  # connection fields — base_topic, stats_interval and anything else set in the
+  # connection fields, base_topic, stats_interval and anything else set in the
   # web UI survive. auto_mqtt: false leaves the whole block alone (own broker).
   if [ "$(jq -r '.auto_mqtt' "$OPTIONS")" = "true" ] && [ -n "${SUPERVISOR_TOKEN:-}" ]; then
     local svc
@@ -127,9 +127,9 @@ build_config() {
                   + {broker: $m.host, port: ($m.port // 1883),
                      username: ($m.username // ""), password: ($m.password // "")}
                   + (if $m.ssl == true then {tls: true} else {} end))' <<<"$base")
-      log "MQTT wired to the Home Assistant broker at $(jq -r '.data.host' <<<"$svc") — entities appear automatically"
+      log "MQTT wired to the Home Assistant broker at $(jq -r '.data.host' <<<"$svc"): entities appear automatically"
     else
-      log "no MQTT broker service found — install the 'Mosquitto broker' add-on to get Home Assistant entities"
+      log "no MQTT broker service found: install the 'Mosquitto broker' add-on to get Home Assistant entities"
     fi
   fi
 

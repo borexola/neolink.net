@@ -10,12 +10,12 @@ namespace Neolink.Desktop;
 /// <summary>
 /// Puts an <see cref="Alert"/> on screen, preferring a real Windows toast (it
 /// carries the camera's thumbnail and survives in the Action Center) and falling
-/// back to a tray balloon wherever that is refused — an unpackaged app only gets
+/// back to a tray balloon wherever that is refused: an unpackaged app only gets
 /// toasts once an AUMID shortcut exists, and there is no reason to lose
 /// notifications over it.
 ///
 /// Click-to-open toasts activate through the neolink-desktop: protocol, so a
-/// click works from the Action Center too — even hours later, even if the app
+/// click works from the Action Center too, even hours later, even if the app
 /// quit meanwhile. <see cref="Activated"/> still carries balloon clicks and
 /// the no-deep-link foreground case.
 /// </summary>
@@ -30,7 +30,7 @@ internal sealed class Toaster : IDisposable
     public event Action<string?>? Activated;
 
     /// <param name="ensureShortcut">Whether to CREATE the AUMID shortcut when none
-    /// exists. The app proper says yes; the selftest says no — a test run must not
+    /// exists. The app proper says yes; the selftest says no: a test run must not
     /// leave a Start Menu entry behind as a side effect.</param>
     public Toaster(NotifyIcon tray, string exePath, bool ensureShortcut = true)
     {
@@ -73,8 +73,8 @@ internal sealed class Toaster : IDisposable
     {
         if (_rich && TryShowToast(alert, settings, imageFile)) return;
         DesktopLog.Write(_rich
-            ? $"alert {alert.Tag}: toast REFUSED by Windows — falling back to a tray balloon"
-            : $"alert {alert.Tag}: rich toasts unavailable (no AUMID shortcut) — tray balloon");
+            ? $"alert {alert.Tag}: toast REFUSED by Windows, falling back to a tray balloon"
+            : $"alert {alert.Tag}: rich toasts unavailable (no AUMID shortcut), tray balloon");
         ShowBalloon(alert, settings);
     }
 
@@ -103,15 +103,15 @@ internal sealed class Toaster : IDisposable
     }
 
     /// <summary>The toast payload. Kept as hand-built XML rather than a builder
-    /// library — it is twenty lines and it costs no dependency.</summary>
+    /// library: it is twenty lines and it costs no dependency.</summary>
     internal static string BuildToastXml(Alert alert, DesktopSettings settings, string? imageFile)
     {
         var sb = new StringBuilder();
         sb.Append("<toast");
         // Protocol activation, not "foreground": the in-process click event only
         // reaches a toast while its banner is up. A card clicked later in the
-        // Action Center needs Windows to LAUNCH something — the neolink-desktop:
-        // URI — and the single-instance machinery routes it to the live window.
+        // Action Center needs Windows to LAUNCH something, the neolink-desktop:
+        // URI, and the single-instance machinery routes it to the live window.
         if (settings.ClickOpensEvent && alert.DeepLink != null)
             sb.Append(" launch=\"").Append(Escape(ProtocolLink.Scheme + ":" + alert.DeepLink))
               .Append("\" activationType=\"protocol\"");
@@ -155,7 +155,7 @@ internal sealed class Toaster : IDisposable
 
     /// <summary>How many of this app's toasts Windows is currently holding in the
     /// Action Center. Used by --test-notification to tell "Windows accepted it and
-    /// you missed it" apart from "Windows refused it" — the second is a settings
+    /// you missed it" apart from "Windows refused it": the second is a settings
     /// problem, the first is not. -1 when there is no history to ask about.</summary>
     public int HistoryCount()
     {
@@ -164,7 +164,7 @@ internal sealed class Toaster : IDisposable
         catch { return -1; }
     }
 
-    /// <summary>Clears this app's notifications from the Action Center — used on
+    /// <summary>Clears this app's notifications from the Action Center: used on
     /// exit so a quit app leaves no live cards behind.</summary>
     public void ClearHistory()
     {

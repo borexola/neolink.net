@@ -22,9 +22,9 @@ services:
       # in config.json to capture detection events (clips + thumbnails) here.
       # - ./recordings:/recordings
       # Optional tiered storage (see "Tiered storage" in the README):
-      # fast SSD tier for event clips — pair with "clips_path": "/clips"
+      # fast SSD tier for event clips, pair with "clips_path": "/clips"
       # - /mnt/fast-ssd/neolink:/clips
-      # cold archive tier on a different (bigger/slower) drive — pair with
+      # cold archive tier on a different (bigger/slower) drive, pair with
       # "archive_path": "/archive"; expired footage moves here instead of
       # being deleted once archiving is enabled per camera in the web UI
       # - /mnt/bigdisk/neolink:/archive
@@ -32,6 +32,6 @@ services:
     # cameras ("udp": true in config.json): their handshake puts the client's
     # port inside the packet and their discovery relies on LAN broadcast, so
     # neither survives a bridge network. Also needed for RTSP over UDP
-    # transport. Delete the `ports:` block above when you enable this — the
+    # transport. Delete the `ports:` block above when you enable this, the
     # container binds 8654/8655 on the host directly.
     # network_mode: host

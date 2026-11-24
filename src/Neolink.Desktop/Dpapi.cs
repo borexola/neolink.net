@@ -7,7 +7,7 @@ using System.Text;
 namespace Neolink.Desktop;
 
 /// <summary>
-/// Windows DPAPI, straight off crypt32 — no NuGet package for forty lines of
+/// Windows DPAPI, straight off crypt32, no NuGet package for forty lines of
 /// interop. Protects the saved server password and session token with the
 /// LOGGED-IN USER's key: the settings file is unreadable by other accounts and
 /// worthless if copied to another machine.
@@ -67,8 +67,8 @@ internal static class Dpapi
         }
     }
 
-    /// <summary>A base64 DPAPI blob back to plaintext. Anything unreadable —
-    /// wrong user, wrong machine, junk — comes back null.</summary>
+    /// <summary>A base64 DPAPI blob back to plaintext. Anything unreadable,
+    /// wrong user, wrong machine, junk, comes back null.</summary>
     public static string? Unprotect(string? protectedBase64)
     {
         if (string.IsNullOrEmpty(protectedBase64)) return null;

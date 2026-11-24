@@ -18,7 +18,7 @@ namespace Neolink.Recording;
 ///  - the event loop consumes motion pushes and drives the event lifecycle.
 ///
 /// Grouping: one event spans a burst of activity. It opens on the first detection,
-/// keeps extending while the camera reports activity (labels accumulate — a person
+/// keeps extending while the camera reports activity (labels accumulate, a person
 /// walking to their car becomes one "person + vehicle" event, not five), and closes
 /// after PostSeconds of quiet or at the MaxClipSeconds cap. A thumbnail is captured
 /// via the camera's own JPEG snapshot command, so no server-side decoding is needed.
@@ -44,7 +44,7 @@ public sealed class EventRecorder
     // loop under one gate; all touch them briefly (never blocking on disk).
     // Each buffered packet carries its drop flag so a clip started later still
     // knows where the stream was discontinuous. The optional preview capture
-    // records the sub stream into preview.mp4 alongside the full clip — that's
+    // records the sub stream into preview.mp4 alongside the full clip: that's
     // what the review strip's ambient players use, keeping client decode cheap.
     private readonly object _mediaGate = new();
     private readonly List<(HubPacket Packet, bool Gap)> _preroll = new();
@@ -55,7 +55,7 @@ public sealed class EventRecorder
     // path must still await their finalize and read their WroteVideo verdict.
     private ClipWriter? _gapClosedWriter;
     private ClipWriter? _gapClosedPreview;
-    /// <summary>The hub the record pump is subscribed to RIGHT NOW — clips must
+    /// <summary>The hub the record pump is subscribed to RIGHT NOW: clips must
     /// take their codec parameters from here, never from a just-changed selection.</summary>
     private volatile IStreamHub? _activeRecordHub;
 
@@ -130,12 +130,12 @@ public sealed class EventRecorder
     /// <summary>True while an event (camera detection or on-demand) is being captured.</summary>
     public bool EventInProgress => _eventActive;
 
-    /// <summary>Fires when event capture starts (true) / ends (false) — the MQTT
+    /// <summary>Fires when event capture starts (true) / ends (false): the MQTT
     /// bridge mirrors it into the camera's "Recording" status sensor.</summary>
     public event Action<bool>? RecordingChanged;
 
     /// <summary>Fires the moment a detection event is created, before any media
-    /// work — the MQTT bridge forwards the id to HA so an automation firing on
+    /// work: the MQTT bridge forwards the id to HA so an automation firing on
     /// the same trigger can deep-link to the exact clip (/events?event={id}).</summary>
     public event Action<EventRecord>? EventStarted;
 
@@ -149,7 +149,7 @@ public sealed class EventRecorder
 
     /// <summary>A running user-commanded recording (web UI record button / HA Record switch).</summary>
     /// <summary>Fires once per finished (non-provisional) event, after the record,
-    /// clip and thumbnail have all settled on disk — the seam event emails ride.
+    /// clip and thumbnail have all settled on disk: the seam event emails ride.
     /// Must not block: heavy work belongs on the handler's own task.</summary>
     public Action<EventRecord>? OnEventClosed { get; set; }
 
@@ -163,27 +163,27 @@ public sealed class EventRecorder
     private volatile OnDemandSession? _onDemand;
 
     /// <summary>Fires on start (the session) and on end (null), whatever the trigger
-    /// path — the MQTT bridge mirrors this onto the HA switch state.</summary>
+    /// path: the MQTT bridge mirrors this onto the HA switch state.</summary>
     public event Action<OnDemandSession?>? OnDemandChanged;
 
     /// <summary>The on-demand recording in progress, if any.</summary>
     public OnDemandSession? OnDemand => _onDemand;
 
-    /// <summary>On-demand capture needs the camera's master events switch on —
+    /// <summary>On-demand capture needs the camera's master events switch on:
     /// the event loop discards every push, external or not, while it is off.</summary>
     public bool OnDemandAvailable => EventsEnabled;
 
-    /// <summary>The camera's "Detection events" master switch — the live setting
+    /// <summary>The camera's "Detection events" master switch: the live setting
     /// behind the web UI toggle; while off, every detection push is discarded.</summary>
     public bool EventsEnabled => _settings.Get(_camera).Events;
 
     /// <summary>Flips the master switch at runtime and persists it, exactly like
-    /// the web UI's Events toggle — the HA switch shares this one path.</summary>
+    /// the web UI's Events toggle: the HA switch shares this one path.</summary>
     public void SetEventsEnabled(bool on) =>
         _settings.Update(_camera, events: on, continuous: null, eventTypes: null, setEventTypes: false);
 
     // Per-camera notification opt-ins, the same stored settings as the web UI
-    // toggles — the HA switches share this path. Setting them while the channel
+    // toggles: the HA switches share this path. Setting them while the channel
     // is unconfigured is allowed and inert (delivery re-checks readiness).
     public bool EmailEventsEnabled => _settings.Get(_camera).EmailEvents;
     public bool WebhookEventsEnabled => _settings.Get(_camera).WebhookEvents;
@@ -246,7 +246,7 @@ public sealed class EventRecorder
     {
         // Stop pulsing early enough that the post-roll closes the event just under
         // the MaxClipSeconds hard stop. Pulsing right up to the cap would let the
-        // recorder cut the event at the cap while pulses keep coming — which would
+        // recorder cut the event at the cap while pulses keep coming, which would
         // open a second event and produce a surprise extra clip.
         var pulseUntil = session.StartedUtc.AddSeconds(
             Math.Max(2, _cfg.MaxClipSeconds - _cfg.PostSeconds - 2));
@@ -327,7 +327,7 @@ public sealed class EventRecorder
 
     /// <summary>
     /// The record pump follows the user's stream choice: it resubscribes when the
-    /// selection changes, but only while no clip is being written — one clip must
+    /// selection changes, but only while no clip is being written, one clip must
     /// stay a single codec/resolution end to end.
     /// </summary>
     private async Task PumpRecordAsync(CancellationToken ct)
@@ -360,8 +360,8 @@ public sealed class EventRecorder
                                 _preroll.Clear();
                                 // A clip mid-write ends AT the gap (same rule as the
                                 // preview pump): gluing resumed footage in makes an
-                                // undecodable seam — the first frames back reference
-                                // pictures the clip never held — plus a time jump.
+                                // undecodable seam, the first frames back reference
+                                // pictures the clip never held, plus a time jump.
                                 // The event itself stays open; its clip is done.
                                 if (_writer != null)
                                 {
@@ -372,7 +372,7 @@ public sealed class EventRecorder
                                 }
                             }
                             if (closedAtGap)
-                                Log.Info($"{_camera}: stream gap while recording — the clip ends at the gap; the event continues");
+                                Log.Info($"{_camera}: stream gap while recording: the clip ends at the gap; the event continues");
                             lastIndex = -1; // the drop flag is meaningless across a gap
                         }
                         lastPacketAt = now;
@@ -409,7 +409,7 @@ public sealed class EventRecorder
         catch (OperationCanceledException) { }
     }
 
-    /// <summary>Pre-roll of the old stream can't seed a clip of the new one — drop it on switch.</summary>
+    /// <summary>Pre-roll of the old stream can't seed a clip of the new one: drop it on switch.</summary>
     private bool TrySwitchWhileIdle(IStreamHub from)
     {
         lock (_mediaGate)
@@ -427,14 +427,14 @@ public sealed class EventRecorder
         try
         {
             // The hub index is global across video AND audio packets, so it must be
-            // tracked for every packet — a video-only view sees non-consecutive
+            // tracked for every packet: a video-only view sees non-consecutive
             // indices whenever audio is interleaved, and treating those as drops
             // would discard all P-frames (0-second clips).
             long lastIndex = -1;
             var lastPacketAt = DateTime.UtcNow;
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
-                // Stale pre-roll across a quiet stretch — see the idle watcher.
+                // Stale pre-roll across a quiet stretch: see the idle watcher.
                 var now = DateTime.UtcNow;
                 if (now - lastPacketAt > ContinuousRecorder.SilenceRoll)
                 {
@@ -560,27 +560,27 @@ public sealed class EventRecorder
             // Runtime switches (web UI): events off, outside the camera's capture
             // schedule, or every label of this push filtered out by the camera's
             // event-type selection → discard, SAYING SO (a detection that vanishes
-            // without a trace is undiagnosable — asked live: "person detection
+            // without a trace is undiagnosable, asked live: "person detection
             // never got picked up", and the log had nothing to show for it).
             // External pushes (the HA "Record" switch) are explicit user intent:
-            // only the master events switch can veto them — no schedule, no filter.
+            // only the master events switch can veto them, no schedule, no filter.
             var settings = _settings.Get(_camera);
             if (!settings.Events)
             {
-                // Deliberately off is a quiet state — visible at debug only.
-                Log.Debug($"{_camera}: detection push ({string.Join("+", LabelsOf(push))}) ignored — " +
+                // Deliberately off is a quiet state: visible at debug only.
+                Log.Debug($"{_camera}: detection push ({string.Join("+", LabelsOf(push))}) ignored: " +
                           "the camera's Detection events switch is off");
                 continue;
             }
             // The synthetic self-wake (wake-capture) is neither a detection nor a
             // user command: it starts a PROVISIONAL recording that is kept only if
-            // a detection this camera is configured to record confirms it — the
+            // a detection this camera is configured to record confirms it, the
             // event-type selection in the camera's settings stays in charge of
             // what actually becomes a stored video. The schedule applies too.
             bool wakeProvisional = push.External && push.Status == "wake";
             // A hint-opened wake: the camera's call home is itself the detection
             // (some models never push one to a late session), so it starts
-            // announced as motion — sent only when Motion is ticked.
+            // announced as motion, sent only when Motion is ticked.
             bool hintWake = push.External && push.Status == "hint";
             List<string> labels;
             if (wakeProvisional || hintWake)
@@ -610,7 +610,7 @@ public sealed class EventRecorder
             try
             {
                 await RunEventAsync(labels, wakeProvisional, ct,
-                    hintWake ? " — hint-opened wake" : null,
+                    hintWake ? ": hint-opened wake" : null,
                     wakeOpened: wakeProvisional || hintWake).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -639,8 +639,8 @@ public sealed class EventRecorder
         CancellationToken ct, string? startNote = null, bool wakeOpened = false)
     {
         // The stored start reaches back only as far as footage actually exists.
-        // A battery camera's wake event has almost nothing buffered — its stream
-        // began at the wake — and stamping start-minus-PreSeconds there promises
+        // A battery camera's wake event has almost nothing buffered, its stream
+        // began at the wake, and stamping start-minus-PreSeconds there promises
         // footage that never left the camera: the tile claims a time half a
         // minute before the clip's first frame, and the duration counts the
         // fiction too (reported live from a Video Doorbell as "missing" video).
@@ -649,10 +649,10 @@ public sealed class EventRecorder
             initialLabels);
         if (provisional)
         {
-            // A self-wake: footage is being captured, but nothing is announced —
+            // A self-wake: footage is being captured, but nothing is announced,
             // no HA trigger, no browser alert, no "event started". Promotion (a
             // detection this camera records) announces; otherwise it all vanishes.
-            Log.Info($"{_camera}: self-wake — recording tentatively (kept only if a detection " +
+            Log.Info($"{_camera}: self-wake: recording tentatively (kept only if a detection " +
                      "this camera's event types allow arrives)");
         }
         else
@@ -681,7 +681,7 @@ public sealed class EventRecorder
     private async Task RunEventCoreAsync(EventRecord rec, bool provisional, bool wakeOpened,
         CancellationToken ct)
     {
-        // The pre-roll buffers hold the trigger moment itself — the seconds the
+        // The pre-roll buffers hold the trigger moment itself: the seconds the
         // live snapshot burst can never reach. StartClip is about to drain them
         // into the clip writer, so the AI's copy (packet refs only) goes first.
         var aiPreroll = !provisional && _ai?.WantsCapture(_camera) == true
@@ -691,7 +691,7 @@ public sealed class EventRecorder
         // The AI frames ride the event: with ffmpeg and a flowing stream, a
         // passive tap of the recording's own keyframes (zero camera cost);
         // otherwise one low-res snapshot per second via the camera's command.
-        // A tentative self-wake captures nothing until promoted — its footage
+        // A tentative self-wake captures nothing until promoted: its footage
         // usually gets discarded, and every shot would cost the battery camera
         // awake-time for nothing.
         var aiCapture = provisional ? null
@@ -731,7 +731,7 @@ public sealed class EventRecorder
                 // still-tentative recording (only a real detection may), never
                 // re-add the wake label, and never extend the event. (Seen live:
                 // back-to-back wake sessions promoted a lingering tentative event
-                // with no labels at all — "event started ( — confirmed…".)
+                // with no labels at all, "event started ( confirmed…".)
                 if (push.Status is "wake" or "hint")
                 {
                     // A marker means a NEW wake session, so this event's own session
@@ -744,7 +744,7 @@ public sealed class EventRecorder
                     }
                     continue;
                 }
-                // Filtered-out detection types don't extend the event either —
+                // Filtered-out detection types don't extend the event either,
                 // as far as recording is concerned, they never happened.
                 // External holds always extend: the switch is still on.
                 var allowed = push.External
@@ -775,10 +775,10 @@ public sealed class EventRecorder
                 if (provisional)
                 {
                     // A detection this camera records arrived: the tentative wake
-                    // recording becomes a real event, announced only NOW — with
+                    // recording becomes a real event, announced only NOW, with
                     // the footage reaching back to the wake itself. The wake tag
                     // comes off: from here this is an ordinary detection event
-                    // ("Human detected", never "Wake") — wakes as such belong to
+                    // ("Human detected", never "Wake"): wakes as such belong to
                     // the timeline, not the events list.
                     provisional = false;
                     aiCapture ??= _ai?.TryBeginCapture(_camera, _control, ct,
@@ -788,7 +788,7 @@ public sealed class EventRecorder
                         rec.Labels = rec.Labels.Where(l => l != "wake").ToList();
                         _store.Save(rec);
                     }
-                    Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)} — " +
+                    Log.Info($"{_camera}: ⚡ event started ({string.Join("+", rec.Labels)}: " +
                              "confirmed self-wake, footage from the wake onward)");
                     EventStarted?.Invoke(rec);
                     _eventActive = true;
@@ -828,7 +828,7 @@ public sealed class EventRecorder
         rec.EndUtc = DateTime.UtcNow;
         // Ongoing=false is every consumer's cue that clip.mp4 is complete (the
         // browser may cache it as immutable; a delay-0 email samples it whole),
-        // and the store serves this same instance — so the finalize must land
+        // and the store serves this same instance, so the finalize must land
         // before the flag flips. Bounded: a dead disk faults the writer and
         // completes it early.
         foreach (var w in new[] { closingWriter, closingPreview })
@@ -838,7 +838,7 @@ public sealed class EventRecorder
             catch { }
         }
         // An empty capture (a stream that never delivered a frame) is not a
-        // playable artifact — the record must not send players to it. Only
+        // playable artifact: the record must not send players to it. Only
         // trusted when the writer actually finished (a timed-out wait proves
         // nothing about what landed).
         if (closingWriter is { } cw && cw.Completion.IsCompletedSuccessfully && !cw.WroteVideo)
@@ -852,7 +852,7 @@ public sealed class EventRecorder
         if (provisional)
         {
             // Still tentative at the end: nothing this camera is configured to
-            // record happened. The footage is deleted, not kept — the event-type
+            // record happened. The footage is deleted, not kept: the event-type
             // selection decides what becomes a stored video, and a bare wake is
             // not on the list. (The thumbnail task must finish before the tree
             // goes, or its write recreates the directory.)
@@ -860,7 +860,7 @@ public sealed class EventRecorder
             try { await thumbTask.ConfigureAwait(false); } catch { }
             _store.DeleteEvent(rec.Id);
             Log.Info($"{_camera}: self-wake ended with no matching detection " +
-                     $"({(rec.EndUtc - rec.StartUtc).TotalSeconds:0}s) — footage discarded, as this " +
+                     $"({(rec.EndUtc - rec.StartUtc).TotalSeconds:0}s), footage discarded, as this " +
                      "camera's event types direct");
             return;
         }
@@ -886,7 +886,7 @@ public sealed class EventRecorder
             {
                 if (!_fullLogged)
                 {
-                    Log.Error($"{_camera}: clips storage is FULL — events are stored without video until space is freed");
+                    Log.Error($"{_camera}: clips storage is FULL: events are stored without video until space is freed");
                     _fullLogged = true;
                 }
                 _preroll.Clear();
@@ -895,7 +895,7 @@ public sealed class EventRecorder
             }
             if (_fullLogged)
             {
-                Log.Info($"{_camera}: storage has room again — event clips resume");
+                Log.Info($"{_camera}: storage has room again: event clips resume");
                 _fullLogged = false;
             }
             _gapClosedWriter = null;
@@ -959,8 +959,8 @@ public sealed class EventRecorder
     }
 
     /// <summary>The hub the AI stream tap should listen to: the sub-stream twin
-    /// when it's flowing (model-sized frames), else the record stream, else null
-    /// — and always null without ffmpeg, since compressed keyframes would be
+    /// when it's flowing (model-sized frames), else the record stream, else null,
+    /// and always null without ffmpeg, since compressed keyframes would be
     /// undecodable; the snapshot burst then carries the event as before.</summary>
     private IStreamHub? PickAiStreamHub()
     {
@@ -968,18 +968,18 @@ public sealed class EventRecorder
         if (_previewHub is { VideoReady: true }) return _previewHub;
         var hub = _activeRecordHub ?? _hub;
         if (hub.VideoReady) return hub;
-        // ffmpeg is there but no stream is decodable yet — say so, or this
+        // ffmpeg is there but no stream is decodable yet: say so, or this
         // event's snapshot sampling looks like the feature silently not working.
         Log.Info($"{_camera}: AI stream sampling unavailable for this event (no live " +
-                 "stream at its start) — using camera snapshots");
+                 "stream at its start): using camera snapshots");
         return null;
     }
 
     /// <summary>A frozen copy of the pre-roll for the AI describer, taken under
     /// the media gate BEFORE StartClip consumes the buffers. Prefers the
     /// sub-stream twin (small frames, same size class as the snapshot burst);
-    /// falls back to the record stream. Packet byte arrays are shared refs — the
-    /// copy costs a list, not a re-buffer — and they live only until the event's
+    /// falls back to the record stream. Packet byte arrays are shared refs, the
+    /// copy costs a list, not a re-buffer, and they live only until the event's
     /// describe job finishes.</summary>
     private Neolink.Ai.AiPrerollVideo? SnapshotPrerollForAi()
     {
@@ -1014,7 +1014,7 @@ public sealed class EventRecorder
             var jpeg = await _control.SnapshotAsync(ct).ConfigureAwait(false);
             // A non-Reolink camera may have no snapshot command at all, or one that
             // came back empty; its only other picture is the stream this very event
-            // is being cut from. A Reolink camera keeps its own snap, full stop —
+            // is being cut from. A Reolink camera keeps its own snap, full stop:
             // decoding video here is not something its event path has ever paid.
             // From whichever stream is carrying video right now: the sub stream when it is
             // (a small frame decodes fastest), else the one being recorded.
@@ -1051,7 +1051,7 @@ public sealed class EventRecorder
             // "other" is Reolink's own vocabulary for "motion, no AI class" (their
             // HTTP AI-state API uses exactly people/vehicle/dog_cat/other). Battery
             // cameras (Argus Solar, live 2026-07-22) report PIR wake detections as
-            // it — left unmapped it became a raw "other" label no filter allows,
+            // it: left unmapped it became a raw "other" label no filter allows,
             // so every wake-capture recording on those models was discarded even
             // though the default event types include "motion".
             "other" => "motion",

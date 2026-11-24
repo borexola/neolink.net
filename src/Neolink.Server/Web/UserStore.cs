@@ -18,7 +18,7 @@ public sealed class UserRecord
     public string? Lang { get; set; }
     public string? Settings { get; set; }
     /// <summary>Additional per-page settings blobs (raw JSON), keyed by page name
-    /// (e.g. "timeline") — so each page owns its state without racing the main blob.</summary>
+    /// (e.g. "timeline"), so each page owns its state without racing the main blob.</summary>
     public Dictionary<string, string>? Pages { get; set; }
     /// <summary>The only cameras a normal user may see; null = all of them. Admins always see all.</summary>
     public List<string>? Cameras { get; set; }
@@ -27,10 +27,10 @@ public sealed class UserRecord
 /// <summary>
 /// Web-UI accounts, deliberately database-free: users.json next to the config
 /// file holds the accounts and a server secret. Authentication stays DISABLED
-/// until the first account exists — creating it (the admin) turns it on.
+/// until the first account exists: creating it (the admin) turns it on.
 ///
 /// Passwords are stored as PBKDF2-SHA256 (210k iterations, 16-byte random salt,
-/// constant-time comparison) — the file is safe to check into a password-manager
+/// constant-time comparison): the file is safe to check into a password-manager
 /// era world, nothing recoverable. Sessions are stateless signed tokens:
 /// base64url(name|expiry|pwTag).base64url(HMAC-SHA256(secret, payload)); the
 /// pwTag is derived from the current password hash, so changing a password
@@ -61,11 +61,11 @@ public sealed class UserStore
         public string Secret { get; set; } = "";
         /// <summary>The UI language for anyone who has not chosen one: the sign-in
         /// and first-run screens, and accounts that never picked. Kept here rather
-        /// than in config.json so changing it applies live — config edits need a
+        /// than in config.json so changing it applies live: config edits need a
         /// restart, and a language change must not.</summary>
         public string? DefaultLanguage { get; set; }
         /// <summary>Sign-in protection (lockouts); null in files from before the
-        /// feature, which reads as the defaults — off, so upgrading never changes
+        /// feature, which reads as the defaults: off, so upgrading never changes
         /// how an existing install answers a sign-in.</summary>
         public LoginGuardSettings? Security { get; set; }
         public List<UserRecord> Users { get; set; } = new();
@@ -107,16 +107,16 @@ public sealed class UserStore
         {
             // Fail CLOSED. A half-read account list used to leave the web UI with
             // no accounts, which is indistinguishable from a fresh install and
-            // therefore turns authentication OFF — a silent bypass on a server
+            // therefore turns authentication OFF: a silent bypass on a server
             // that had accounts a moment ago.
             _loadFailed = true;
             _users = new List<UserRecord>();
             Log.Error($"users.json unreadable ({ex.Message}); web-UI sign-in is LOCKED until the file is " +
-                      "repaired or removed — removing it starts first-run setup over");
+                      "repaired or removed: removing it starts first-run setup over");
         }
     }
 
-    /// <summary>Authentication is enforced once any account exists — and while the
+    /// <summary>Authentication is enforced once any account exists, and while the
     /// account list is unreadable, when nobody may sign in at all.</summary>
     public bool Enabled
     {
@@ -154,7 +154,7 @@ public sealed class UserStore
     // ------------------------------------------------------------------ accounts
 
     /// <summary>A hash belonging to nobody, built once. Unknown users verify
-    /// against it so their attempt costs exactly one PBKDF2 pass — the same as a
+    /// against it so their attempt costs exactly one PBKDF2 pass: the same as a
     /// wrong password on a real account, which is what keeps timing uninformative.
     /// Must stay a single stored hash: hashing per attempt costs two passes.</summary>
     private static readonly string DummyHash =
@@ -199,7 +199,7 @@ public sealed class UserStore
     // ------------------------------------------------------------------ language
 
     /// <summary>The language for accounts that never chose one, and for anyone not
-    /// signed in. Null until someone sets it — the caller decides what that means
+    /// signed in. Null until someone sets it: the caller decides what that means
     /// (the config file's ui.language seeds it at startup).</summary>
     public string? DefaultLanguage
     {
@@ -218,7 +218,7 @@ public sealed class UserStore
 
     // ------------------------------------------------------------------ sign-in protection
 
-    /// <summary>The persisted sign-in protection settings (a copy — mutate via
+    /// <summary>The persisted sign-in protection settings (a copy, mutate via
     /// <see cref="SetSecurity"/> so changes always hit disk).</summary>
     public LoginGuardSettings GetSecurity()
     {

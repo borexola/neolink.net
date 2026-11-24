@@ -12,7 +12,7 @@ public enum SmtpSecurity { StartTls, Ssl, None }
 /// <summary>
 /// User-configured email-notification settings, persisted as notifications.json
 /// in the state dir. The SMTP password is stored ONLY as an AES-GCM token
-/// (<see cref="PasswordEnc"/>) via <see cref="SecretProtector"/> — never in
+/// (<see cref="PasswordEnc"/>) via <see cref="SecretProtector"/>, never in
 /// plaintext, and never returned to the UI (write-only).
 /// </summary>
 public sealed class NotificationSettings
@@ -63,7 +63,7 @@ public sealed class NotificationSettings
     // knobs that shape every event email live here with the rest of the mail
     // config).
     /// <summary>Snapshots attached to each event email, sampled evenly across
-    /// the clip. 1–50; 50 is deliberately the ceiling — beyond that the mail
+    /// the clip. 1–50; 50 is deliberately the ceiling: beyond that the mail
     /// stops being a notification and starts being the recording.</summary>
     public int EventSnapshots { get; set; } = 3;
 
@@ -77,7 +77,7 @@ public sealed class NotificationSettings
 
     /// <summary>Where event snapshots come from. "clip" (default) decodes the
     /// saved clip file; "memory" samples the recording's own stream in RAM and
-    /// never opens the clip — for clip storage on network mounts, where reading
+    /// never opens the clip, for clip storage on network mounts, where reading
     /// a file mid-write can damage it.</summary>
     public string EventSnapshotMode { get; set; } = "clip";
 
@@ -95,15 +95,15 @@ public sealed class NotificationSettings
     /// <summary>"POST" or "PUT".</summary>
     public string WebhookMethod { get; set; } = "POST";
     /// <summary>"json" (full event + snapshots base64), "text" (rendered
-    /// template), "snapshot" (first image as body, text in headers — ntfy),
-    /// "multipart" (payload_json + image files — Discord).</summary>
+    /// template), "snapshot" (first image as body, text in headers, ntfy),
+    /// "multipart" (payload_json + image files, Discord).</summary>
     public string WebhookBodyMode { get; set; } = "json";
     /// <summary>Body template for text/multipart modes; blank = mode default.
     /// Placeholders render here and in header values.</summary>
     public string WebhookBodyTemplate { get; set; } = "";
     /// <summary>Extra request headers, one "Name: value" line each.</summary>
     public List<string> WebhookHeaders { get; set; } = new();
-    /// <summary>UI memory only — which preset filled the knobs.</summary>
+    /// <summary>UI memory only, which preset filled the knobs.</summary>
     public string WebhookPreset { get; set; } = "json";
     /// <summary>Send server alerts (storage, offline…) to the webhook too.</summary>
     public bool WebhookServerAlerts { get; set; } = true;
@@ -232,7 +232,7 @@ public sealed class NotificationStore
     /// <summary>Replaces the settings. <paramref name="newPassword"/> and
     /// <paramref name="newWebhookToken"/> are write-only: null keeps the stored
     /// value, non-null re-encrypts (""=clear it). A pasted "Bearer " prefix is
-    /// forgiven — the sender adds the scheme itself.</summary>
+    /// forgiven: the sender adds the scheme itself.</summary>
     public void Save(NotificationSettings incoming, string? newPassword, string? newWebhookToken = null)
     {
         lock (_gate)

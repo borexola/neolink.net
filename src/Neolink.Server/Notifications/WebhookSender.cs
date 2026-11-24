@@ -12,13 +12,13 @@ namespace Neolink.Notifications;
 /// <summary>
 /// Delivers an alert to the user-configured HTTP endpoint. Body modes:
 /// "json" (full alert, snapshots base64), "text" (rendered template),
-/// "snapshot" (first image as body, text in headers — the ntfy shape),
-/// "multipart" (payload_json plus image files — the Discord shape).
+/// "snapshot" (first image as body, text in headers, the ntfy shape),
+/// "multipart" (payload_json plus image files, the Discord shape).
 /// Placeholders render in the template and in header values.
 /// </summary>
 internal static class WebhookSender
 {
-    // The clients' own timeout is only a backstop — the real budget is
+    // The clients' own timeout is only a backstop: the real budget is
     // per-request (TimeoutFor), scaled to what the body carries.
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
 
@@ -32,7 +32,7 @@ internal static class WebhookSender
     /// <summary>Per-request budget: a fixed window plus upload time by
     /// attachment size (base64 in json mode makes the payload 4/3 the raw
     /// bytes), sized for a ~256 kbit/s worst-case uplink, capped at ten
-    /// minutes — a fixed window can never deliver a snapshot-heavy body on a
+    /// minutes, a fixed window can never deliver a snapshot-heavy body on a
     /// slow uplink.</summary>
     internal static TimeSpan TimeoutFor(Alert alert)
     {
@@ -194,7 +194,7 @@ internal static class WebhookSender
     }
 
     /// <summary>Substitutes the documented placeholders; anything else in the
-    /// template — JSON braces included — passes through untouched. With
+    /// template, JSON braces included, passes through untouched. With
     /// <paramref name="jsonEscape"/> the substituted VALUES are JSON-string
     /// escaped (the template's own syntax is the user's business). {message} is
     /// the push-length Brief when the alert carries one; {detail} is always the
@@ -221,7 +221,7 @@ internal static class WebhookSender
     }
 
     /// <summary>"Name: value" lines; blank lines, colon-less lines and lines
-    /// whose name is not an RFC 7230 token are skipped — one saved typo like
+    /// whose name is not an RFC 7230 token are skipped: one saved typo like
     /// "X Title: x" must not abort every delivery at request-build time.</summary>
     internal static List<(string Name, string Value)> ParseHeaderLines(IEnumerable<string>? lines)
     {
@@ -250,7 +250,7 @@ internal static class WebhookSender
         foreach (var c in v)
             sb.Append(c switch
             {
-                '—' or '–' => '-',
+                '\u2014' or '–' => '-',
                 < ' ' => ' ',
                 > '~' => '?',
                 _ => c,

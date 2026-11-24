@@ -9,7 +9,7 @@ namespace Neolink.WebClient.Localization;
 /// chosen one follows.
 ///
 /// It is a live singleton rather than a config value read at startup so that
-/// changing it in Server Settings reaches the very next render — the whole point
+/// changing it in Server Settings reaches the very next render: the whole point
 /// being that a language change never requires restarting the container.
 /// </summary>
 public sealed class ServerLanguage

@@ -20,9 +20,9 @@ Available tags:
 | Tag | Meaning |
 |---|---|
 | `latest` | most recent build of `main` |
-| `0.6.0`, `0.6` | a specific release (created from `v0.6.0` git tags) — pin these in production |
+| `0.6.0`, `0.6` | a specific release (created from `v0.6.0` git tags): pin these in production |
 | `main` | same as `latest`, explicit branch tag |
-| `beta` | rolling pre-release test channel (built from the `beta` branch) — try new features early; not for production |
+| `beta` | rolling pre-release test channel (built from the `beta` branch): try new features early; not for production |
 
 Verify the pull:
 
@@ -32,9 +32,9 @@ docker image inspect ghcr.io/borexola/neolink.net:latest --format '{{.Os}}/{{.Ar
 
 > **`denied` or `unauthorized` when pulling?** The package is public, so no login is
 > needed. If you see this on a fresh setup you are likely logged into ghcr.io with an
-> expired token — run `docker logout ghcr.io` and pull again.
+> expired token: run `docker logout ghcr.io` and pull again.
 > **`manifest unknown`?** The tag doesn't exist (typo, or a release tag that hasn't
-> been built yet) — check the available tags on the
+> been built yet): check the available tags on the
 > [package page](https://github.com/borexola/neolink.net/pkgs/container/neolink.net).
 
 ## 2. Create a config
@@ -48,7 +48,7 @@ Edit it: camera names, IP addresses, and credentials (same login as the Reolink 
 
 > **New to it?** You can skip this step. If `config.json` doesn't exist on
 > first start, Neolink.NET writes a commented starter config and boots straight to
-> the web UI (empty, no crash-loop) — then add your cameras under Server settings
+> the web UI (empty, no crash-loop), then add your cameras under Server settings
 > (the gear icon) and restart. Handy for one-click installs (Unraid, Portainer).
 
 ## 3. Run
@@ -91,13 +91,13 @@ services:
       - "8655:8655"   # web UI + API; remove if webui:false and API unused
     volumes:
       - ./config:/config   # holds config.json + web-UI settings.json
-      # Recording storage — uncomment and set "recording": { "path": "/recordings" } in config.json:
+      # Recording storage: uncomment and set "recording": { "path": "/recordings" } in config.json:
       # - ./recordings:/recordings
       # Optional tiered storage (see "Tiered storage" in docs/recording.md). Map a volume for EVERY tier
       # path you set, or that footage lands inside the container and is lost on recreate:
       # - /mnt/fast-ssd/neolink:/clips     # fast SSD tier  → "clips_path": "/clips"
       # - /mnt/bigdisk/neolink:/archive    # cold archive   → "archive_path": "/archive"
-    # Host networking instead of port maps — REQUIRED for UDP-only battery
+    # Host networking instead of port maps: REQUIRED for UDP-only battery
     # cameras ("udp": true), and needed for RTSP over UDP transport. Delete the
     # `ports:` block above when you enable it. See "UDP-only battery models".
     # network_mode: host
@@ -115,7 +115,7 @@ docker compose logs -f    # shows the rtsp:// and web UI URLs
 An Unraid [Community Applications](https://forums.unraid.net/topic/38582-plug-in-community-applications/)
 template ships in [`unraid/`](../unraid/). Add
 `https://github.com/borexola/neolink.net` under **Apps → Settings → Template
-Repositories**, then search **Neolink.NET** in *Apps* — or paste the raw
+Repositories**, then search **Neolink.NET** in *Apps*, or paste the raw
 [template URL](https://raw.githubusercontent.com/borexola/neolink.net/main/unraid/neolink.net.xml)
 into **Docker → Add Container**. First start writes a starter config and opens
 the web UI; add cameras under Server settings (the gear icon) and restart. See

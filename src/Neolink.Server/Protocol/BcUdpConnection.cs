@@ -16,7 +16,7 @@ using Neolink.Bc;
 namespace Neolink.Protocol;
 
 /// <summary>
-/// A Baichuan connection carried over UDP — what battery-only cameras (Argus
+/// A Baichuan connection carried over UDP: what battery-only cameras (Argus
 /// family) speak instead of TCP. It performs the discovery handshake, then runs a
 /// small reliable-ordered-datagram layer (sequence numbers, cumulative acks,
 /// timed retransmission, heartbeats) beneath the <b>identical</b> BC framing: the
@@ -32,21 +32,21 @@ public sealed class BcUdpConnection : IBcConnection
     private const int ChunkSize = 1024;
     private static readonly TimeSpan RetxAfter = TimeSpan.FromMilliseconds(500);
     // Match the official client EXACTLY: a 1 s heartbeat plus a continuous 10 ms ack.
-    // The reference transport documents this precisely — the official app acks every
+    // The reference transport documents this precisely: the official app acks every
     // 10 ms, and a camera that stops seeing acks at that cadence decides the client
     // has a poor connection, re-offers the session (repeated D2C_C_R) and then closes
-    // it cleanly (D2C_DISC) after ~3 tries (~8 s). We had been acking at 20 ms — half
-    // the official rate — which the camera treated as a failing link. The ack timer
+    // it cleanly (D2C_DISC) after ~3 tries (~8 s). We had been acking at 20 ms, half
+    // the official rate, which the camera treated as a failing link. The ack timer
     // is decoupled from downstream delivery so the cadence never slips.
     private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan AckInterval = TimeSpan.FromMilliseconds(10);
 
     private readonly UdpClient _udp;
     private readonly IPEndPoint _camera;
-    private readonly int _cid; // our id — inbound packets carry this
-    private readonly int _did; // camera id — we stamp outbound with it
+    private readonly int _cid; // our id: inbound packets carry this
+    private readonly int _did; // camera id: we stamp outbound with it
     // The discovery tid the handshake ran under. The camera keys its session to it
-    // and ignores discovery-layer packets under any other tid — heartbeats sent
+    // and ignores discovery-layer packets under any other tid: heartbeats sent
     // with fresh random tids read as silence, and the camera recycles the session
     // (D2C_C_R retries, then a clean D2C_DISC at ~8 s). Every discovery-layer
     // packet (C2D_HB, C2D_A, C2D_DISC) must carry this tid.
@@ -66,7 +66,7 @@ public sealed class BcUdpConnection : IBcConnection
 
     private readonly CancellationTokenSource _cts;
     // A generous pause threshold so the receive loop's writes complete synchronously
-    // under normal video rates — a blocked write would stall socket draining and,
+    // under normal video rates: a blocked write would stall socket draining and,
     // with it, the ack timer's view of progress.
     private readonly Pipe _pipe = new(new PipeOptions(
         pauseWriterThreshold: 8 * 1024 * 1024, resumeWriterThreshold: 4 * 1024 * 1024,
@@ -102,9 +102,9 @@ public sealed class BcUdpConnection : IBcConnection
     private readonly HashSet<string> _rxEndpoints = new();
     private DateTime _lastRxUtc, _lastDataUtc, _lastCtrlUtc;
     // Per-session tally of the camera's control messages (D2C_T, D2C_HB, ...), so the
-    // one-line D2C_DISC summary shows what the camera sent — no debug level needed.
+    // one-line D2C_DISC summary shows what the camera sent, no debug level needed.
     private readonly Dictionary<string, int> _ctrlTally = new();
-    // First control messages in detail (root, did, arrival offset) — the tally says
+    // First control messages in detail (root, did, arrival offset): the tally says
     // WHAT arrived, this says WHEN and FOR WHICH SESSION, which is what finally
     // distinguishes "camera gave up on us" from "another session's paperwork".
     private readonly List<string> _ctrlDetail = new();
@@ -245,7 +245,7 @@ public sealed class BcUdpConnection : IBcConnection
             {
                 UdpReceiveResult r;
                 try { r = await _udp.ReceiveAsync(ct).ConfigureAwait(false); }
-                catch (SocketException se) // transient (e.g. ICMP) — keep listening
+                catch (SocketException se) // transient (e.g. ICMP): keep listening
                 {
                     if (Dbg) Log.Debug($"{_tag}: udp {El} recv socket signal {se.SocketErrorCode}");
                     continue;
@@ -269,7 +269,7 @@ public sealed class BcUdpConnection : IBcConnection
                 var d = r.Buffer;
                 // Endpoint forensics: if the camera sources data/acks from a DIFFERENT
                 // port than the handshake endpoint we reply to, our acks are landing on
-                // the wrong peer — log each distinct source once.
+                // the wrong peer, log each distinct source once.
                 if (Dbg && _rxEndpoints.Add($"{BcUdp.PeekKind(d)} {r.RemoteEndPoint}"))
                     Log.Debug($"{_tag}: udp {El} source {r.RemoteEndPoint} first {BcUdp.PeekKind(d)} " +
                               $"(session endpoint {_camera})");
@@ -285,7 +285,7 @@ public sealed class BcUdpConnection : IBcConnection
                         if (!_connIdWarned && dcid != _cid)
                         {
                             _connIdWarned = true;
-                            Log.Info($"{_tag}: UDP note — camera stamps data with connId {dcid}, not our cid {_cid}");
+                            Log.Info($"{_tag}: UDP note: camera stamps data with connId {dcid}, not our cid {_cid}");
                         }
                         if (Dbg && _rxData == 1)
                             Log.Debug($"{_tag}: udp {El} first DATA pid={pid} connId={dcid} ({pLen}B)");
@@ -310,7 +310,7 @@ public sealed class BcUdpConnection : IBcConnection
                         if (root.Contains("DISC", StringComparison.Ordinal))
                         {
                             // The camera runs one session PER HELLO it answers, all
-                            // sharing our socket — the handshake's retransmits (two
+                            // sharing our socket: the handshake's retransmits (two
                             // ports, 500 ms) can leave duplicate sessions behind, and
                             // when one of those starves out (~3×def ms) its D2C_DISC
                             // lands here too. Only a disconnect addressed to OUR
@@ -319,13 +319,13 @@ public sealed class BcUdpConnection : IBcConnection
                             if (ctrlDid is int fdid && fdid != _did)
                             {
                                 if (_foreignDiscLogged.Add(fdid))
-                                    Log.Info($"{_tag}: ignoring D2C_DISC for another session (did {fdid}; ours is {_did}) — stream continues");
+                                    Log.Info($"{_tag}: ignoring D2C_DISC for another session (did {fdid}; ours is {_did}): stream continues");
                                 break;
                             }
                             var sinceData = _lastDataUtc == default ? -1 : (DateTime.UtcNow - _lastDataUtc).TotalMilliseconds;
                             // One compact Info line (no debug level needed): everything
                             // needed to see WHY the camera closed and what it sent.
-                            Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC, our did {_did}) after {(DateTime.UtcNow - _t0).TotalSeconds:0.0}s — " +
+                            Log.Info($"{_tag}: UDP camera closed the session (D2C_DISC, our did {_did}) after {(DateTime.UtcNow - _t0).TotalSeconds:0.0}s, " +
                                      $"rx {_rxData} data (last {sinceData:0}ms ago), camera sent [{TallyString()}]; " +
                                      $"we sent {_txAck} acks/{_txHb} hb/{_txC2dA} C2D_A; " +
                                      $"keepalive (msg 234): {_rxKa} from camera, {_txKa} answered; " +
@@ -369,7 +369,7 @@ public sealed class BcUdpConnection : IBcConnection
     private async Task OnDataAsync(uint pid, ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
         // The in-order packet (the overwhelmingly common case) goes to the pipe
-        // straight from the datagram buffer — copied only once, by the pipe
+        // straight from the datagram buffer: copied only once, by the pipe
         // itself; only out-of-order holds materialize an array.
         bool deliverDirect = false;
         List<byte[]>? drained = null;
@@ -379,7 +379,7 @@ public sealed class BcUdpConnection : IBcConnection
             // deliberate camera-side redundancy from "camera never registered our
             // acks and is retransmitting". Some battery firmwares (Argus MagiCam)
             // re-send EVERY data packet ~3x with backoff regardless of acks, which
-            // eats their own radio budget — tracked here so the session can say so.
+            // eats their own radio budget: tracked here so the session can say so.
             {
                 var now = DateTime.UtcNow;
                 if (_pidSeen.TryGetValue(pid, out var seen))
@@ -404,7 +404,7 @@ public sealed class BcUdpConnection : IBcConnection
                 }
                 // One-time diagnosis, no debug level needed: over half the packets the
                 // camera sends are retransmit copies while nothing is actually lost on
-                // our side. The camera's transport is saturated — its encoder outruns
+                // our side. The camera's transport is saturated: its encoder outruns
                 // what its UDP path ships (single 1080p encoder + slow wake-chip radio
                 // on some battery models), so video WILL lag and stutter on every
                 // client, the official app included. Named here so a user reading the
@@ -412,7 +412,7 @@ public sealed class BcUdpConnection : IBcConnection
                 if (!_saturationLogged && _rxData > 600 && _rxDup * 2 > _rxData)
                 {
                     _saturationLogged = true;
-                    Log.Info($"{_tag}: UDP transport saturated — {_rxDup} of {_rxData} data packets were " +
+                    Log.Info($"{_tag}: UDP transport saturated: {_rxDup} of {_rxData} data packets were " +
                              "retransmit copies (the camera re-sends everything ~3x). Its radio path ships " +
                              "less video than its encoder produces, so expect choppy playback on ALL clients " +
                              "including the Reolink app; this is camera firmware behavior, not a network or " +
@@ -434,12 +434,12 @@ public sealed class BcUdpConnection : IBcConnection
             {
                 // Bounded: a gap this deep means the stream is already lost, and
                 // an unbounded hold is memory anyone on the path could grow.
-                _rxBuffer[pid] = payload.ToArray(); // out of order — hold until the gap fills
+                _rxBuffer[pid] = payload.ToArray(); // out of order: hold until the gap fills
             }
             // pid < _rxNext: already delivered; drop. The ack timer re-acks anyway.
         }
 
-        // Acking is NOT done here — a dedicated timer (AckLoopAsync) sends the
+        // Acking is NOT done here: a dedicated timer (AckLoopAsync) sends the
         // cumulative ack continuously, so the camera keeps seeing acks even if this
         // delivery write briefly stalls. The generous pipe threshold keeps the write
         // synchronous under normal video rates, so the receive loop keeps draining.
@@ -468,7 +468,7 @@ public sealed class BcUdpConnection : IBcConnection
             {
                 if (uint.TryParse(el.Element("sid")?.Value, out var s)) sid = s;
                 conn = el.Element("conn")?.Value is { Length: > 0 } c ? c : "local";
-                // Echo the D2C_T's own ids — the camera may be confirming a session
+                // Echo the D2C_T's own ids: the camera may be confirming a session
                 // other than the one we stream on, and the reply must match its offer.
                 if (int.TryParse(el.Element("cid")?.Value, out var pc)) cid = pc;
                 if (int.TryParse(el.Element("did")?.Value, out var pd)) did = pd;
@@ -501,7 +501,7 @@ public sealed class BcUdpConnection : IBcConnection
                 uint rxNext; lock (_rxGate) rxNext = _rxNext;
                 double dataAge = _lastDataUtc == default ? -1 : (DateTime.UtcNow - _lastDataUtc).TotalMilliseconds;
                 double rxAge = _lastRxUtc == default ? -1 : (DateTime.UtcNow - _lastRxUtc).TotalMilliseconds;
-                Log.Debug($"{_tag}: udp {El} state — rx {_rxData} data ({_rxDup} dup, next {rxNext}, maxPid {_rxMaxPid}, " +
+                Log.Debug($"{_tag}: udp {El} state: rx {_rxData} data ({_rxDup} dup, next {rxNext}, maxPid {_rxMaxPid}, " +
                           $"lastData {dataAge:0}ms, lastRx {rxAge:0}ms), rxCtrl {_rxCtrl}; " +
                           $"tx {_txData} data ({unacked} unacked), {_txAck} acks, {_txHb} hb, {_txC2dA} C2D_A, " +
                           $"ka {_rxKa}rx/{_txKa}tx");
@@ -511,7 +511,7 @@ public sealed class BcUdpConnection : IBcConnection
     }
 
     /// <summary>
-    /// Continuous cumulative ack — the flow-control + keepalive signal the camera
+    /// Continuous cumulative ack: the flow-control + keepalive signal the camera
     /// expects (the official client sends it every ~10 ms regardless of new data).
     /// Sending it on its own timer, decoupled from delivery, is what stops the
     /// camera closing the session with a clean D2C_DISC after a few seconds.
@@ -534,7 +534,7 @@ public sealed class BcUdpConnection : IBcConnection
                     else
                     {
                         group = 0; ackId = _rxNext - 1;
-                        // Truth table: one byte per pid after ackId — 1 = held in the
+                        // Truth table: one byte per pid after ackId, 1 = held in the
                         // reorder buffer, 0 = missing. Without it, a single lost packet
                         // makes the camera retransmit its ENTIRE unacked window (it has
                         // no idea we already hold everything past the hole), which eats
@@ -595,7 +595,7 @@ public sealed class BcUdpConnection : IBcConnection
         lock (_txGate)
         {
             // Cumulative: everything up to and including pid is confirmed. The
-            // keys are sorted, so the walk stops at the first unconfirmed one —
+            // keys are sorted, so the walk stops at the first unconfirmed one:
             // the common everything-already-acked ack costs one comparison.
             List<uint>? drop = null;
             foreach (var k in _unacked.Keys)
@@ -611,7 +611,7 @@ public sealed class BcUdpConnection : IBcConnection
 
     // ------------------------------------------------------------------ BC framing (shared)
 
-    // Last successfully framed BC message — the desync forensics: when the parser
+    // Last successfully framed BC message: the desync forensics: when the parser
     // slips, the message BEFORE the slip is the one whose length lied.
     private uint _lastBcId, _lastBcLen;
     private ushort _lastBcClass;
@@ -641,7 +641,7 @@ public sealed class BcUdpConnection : IBcConnection
                 if (msg.Meta.MsgId == BcConstants.MsgIdUdpKeepAlive)
                 {
                     if (_rxKa++ == 0)
-                        Log.Info($"{_tag}: camera sent its UDP keepalive (msg 234) — replying " +
+                        Log.Info($"{_tag}: camera sent its UDP keepalive (msg 234): replying " +
                                  "(unanswered, battery cameras drop the session after ~8s)");
                     var pong = new BcMessage
                     {
@@ -677,7 +677,7 @@ public sealed class BcUdpConnection : IBcConnection
                     bool first;
                     lock (_subGate) { first = _reportedUnhandled.Add(msg.Meta.MsgId); }
                     if (first && msg.Meta.MsgId == BcConstants.MsgIdMotion)
-                        Log.Info($"{_tag}: alarm push (msgId=33) arrived with no motion watch subscribed — " +
+                        Log.Info($"{_tag}: alarm push (msgId=33) arrived with no motion watch subscribed: " +
                                  $"detection dropped{XmlPreview(msg)}");
                     else if (first)
                         Log.Debug($"{_tag}: BC(udp) unhandled push msgId={msg.Meta.MsgId}{XmlPreview(msg)}");
@@ -694,7 +694,7 @@ public sealed class BcUdpConnection : IBcConnection
                 // message framed last (its length is the prime suspect) and whether
                 // the reliable layer was clean (dups/holes) when the parser slipped.
                 uint rxNext; int held; lock (_rxGate) { rxNext = _rxNext; held = _rxBuffer.Count; }
-                Log.Warn($"{_tag}: udp {El} BC stream desynced after {_bcParsed} messages — " +
+                Log.Warn($"{_tag}: udp {El} BC stream desynced after {_bcParsed} messages: " +
                          $"last good msgId={_lastBcId} class=0x{_lastBcClass:x4} binLen={_lastBcLen}; " +
                          $"transport rx {_rxData} data ({_rxDup} dup, next pid {rxNext}, maxPid {_rxMaxPid}, " +
                          $"{held} held out-of-order); {ex.Message}");

@@ -6,13 +6,13 @@ namespace Neolink.Desktop;
 /// <summary>
 /// The always-on half of the desktop app: a poll against the server that turns
 /// new events, camera faults and server conditions into native notifications,
-/// running for as long as the process does — window open, window hidden in the
+/// running for as long as the process does, window open, window hidden in the
 /// tray, or the user parked on some other page entirely.
 ///
 /// The rules it applies belong to the ACCOUNT, not to this machine: they are
 /// fetched from and written back to /api/me/settings/notifications, the same
 /// blob the web UI's alert panel edits, so the two never disagree. What the
-/// machine owns is in <see cref="DesktopSettings"/> — the master switch for this
+/// machine owns is in <see cref="DesktopSettings"/>: the master switch for this
 /// PC, quiet hours, sound, poll cadence.
 /// </summary>
 internal sealed class AlertEngine : IDisposable
@@ -37,7 +37,7 @@ internal sealed class AlertEngine : IDisposable
     /// <summary>A notification was clicked: show the window on this deep link.</summary>
     public event Action<string?>? OpenRequested;
 
-    /// <summary>Connection state changed — drives the tray tooltip and the status
+    /// <summary>Connection state changed: drives the tray tooltip and the status
     /// line. Null message means healthy.</summary>
     public event Action<string?>? StatusChanged;
 
@@ -74,7 +74,7 @@ internal sealed class AlertEngine : IDisposable
 
     /// <summary>Pulls the account's rules from the server, falling back to the
     /// cached copy when the server has none (or cannot be reached). The cache is
-    /// rewritten only when the rules actually changed — this runs on every poll
+    /// rewritten only when the rules actually changed: this runs on every poll
     /// for the app's whole life, and that must not mean a disk write every few
     /// seconds.</summary>
     private DateTime _lastLocalSaveUtc = DateTime.MinValue;
@@ -144,7 +144,7 @@ internal sealed class AlertEngine : IDisposable
                 {
                     // Nothing answered: the server is down or we are not signed in.
                     // Once that has gone on longer than the event list's own window,
-                    // the baseline is meaningless — drop it so the reconnect seeds
+                    // the baseline is meaningless: drop it so the reconnect seeds
                     // quietly instead of firing an hour of history.
                     if (DateTime.UtcNow - lastGood > AlertRules.MaxEventAge)
                         _rules.Reset();
@@ -158,7 +158,7 @@ internal sealed class AlertEngine : IDisposable
                     var alerts = _rules.Evaluate(_prefs, events, cameras, features, DateTime.UtcNow,
                         DesktopLog.Write);
                     if (!_settings.NotificationsEnabled && alerts.Count > 0)
-                        DesktopLog.Write($"{alerts.Count} alert(s) suppressed — notifications are OFF on this PC (tray menu)");
+                        DesktopLog.Write($"{alerts.Count} alert(s) suppressed: notifications are OFF on this PC (tray menu)");
                     if (_settings.NotificationsEnabled)
                         foreach (var alert in alerts)
                             await RaiseAsync(alert, ct).ConfigureAwait(false);
@@ -183,12 +183,12 @@ internal sealed class AlertEngine : IDisposable
         if (_settings.InQuietHours(DateTime.Now)
             && AlertRules.QuietCanSuppress(alert.Kind, _settings.QuietSilencesSystem))
         {
-            DesktopLog.Write($"alert {alert.Tag}: suppressed — quiet hours");
+            DesktopLog.Write($"alert {alert.Tag}: suppressed, quiet hours");
             return;
         }
         if (!MarkShown(alert.Tag))
         {
-            DesktopLog.Write($"alert {alert.Tag}: suppressed — already shown moments ago (web UI or this engine)");
+            DesktopLog.Write($"alert {alert.Tag}: suppressed, already shown moments ago (web UI or this engine)");
             return;
         }
 
@@ -203,8 +203,8 @@ internal sealed class AlertEngine : IDisposable
     /// <summary>
     /// A notification the WEB UI raised inside the WebView, handed over so it comes
     /// out as a native toast instead of a browser popup the shell would otherwise
-    /// have to allow. Returns false when this engine already showed the same thing
-    /// — which is the normal case, and exactly why the two are matched by tag.
+    /// have to allow. Returns false when this engine already showed the same thing,
+    /// which is the normal case, and exactly why the two are matched by tag.
     /// The kind is read back off the web UI's tag scheme so quiet hours treat a
     /// storage-full alert here exactly as they treat the engine's own.
     /// </summary>
@@ -277,7 +277,7 @@ internal sealed class AlertEngine : IDisposable
         Post(() => StatusChanged?.Invoke(message));
     }
 
-    /// <summary>Hops to the UI thread — the poll runs on the thread pool and every
+    /// <summary>Hops to the UI thread: the poll runs on the thread pool and every
     /// consumer of these events touches WinForms.</summary>
     private void Post(Action action)
     {

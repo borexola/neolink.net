@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace Neolink.Desktop;
 
 /// <summary>
-/// `Neolink.Desktop.exe --selftest` — the decision logic exercised without a
+/// `Neolink.Desktop.exe --selftest`: the decision logic exercised without a
 /// window, a server or a person. Everything that decides WHETHER to notify lives
 /// behind pure functions precisely so this can run in CI on a machine with no
 /// cameras attached.
@@ -35,10 +35,10 @@ internal static class SelfTest
         Console.WriteLine();
         if (Failures.Count == 0)
         {
-            Console.WriteLine($"selftest OK — {_passed} assertions passed");
+            Console.WriteLine($"selftest OK: {_passed} assertions passed");
             return true;
         }
-        Console.WriteLine($"selftest FAILED — {Failures.Count} of {_passed + Failures.Count} assertions:");
+        Console.WriteLine($"selftest FAILED: {Failures.Count} of {_passed + Failures.Count} assertions:");
         foreach (var f in Failures) Console.WriteLine("  " + f);
         return false;
     }
@@ -53,7 +53,7 @@ internal static class SelfTest
 
     /// <summary>The build must NOT be globalization-invariant: WinForms resolves a
     /// real culture on every keyboard-layout switch (WM_INPUTLANGCHANGE), and in
-    /// invariant mode that lookup throws inside WndProc and takes the app down —
+    /// invariant mode that lookup throws inside WndProc and takes the app down,
     /// seen live with an en-CA layout (LCID 0x1009). The csproj must never get
     /// the server's InvariantGlobalization flag; this is the tripwire.</summary>
     private static void RealCulturesAvailable()
@@ -347,7 +347,7 @@ internal static class SelfTest
         Assert(loud.Contains("launch=\"neolink-desktop:/events?event=e1\""),
             "the deep link rides the toast as a protocol URI");
         Assert(loud.Contains("activationType=\"protocol\""),
-            "click-to-open toasts use protocol activation — the only kind an Action Center click can deliver");
+            "click-to-open toasts use protocol activation: the only kind an Action Center click can deliver");
         Assert(loud.Contains("ms-winsoundevent"), "sound on means a sound is named");
 
         var quiet = Toaster.BuildToastXml(alert, new DesktopSettings { Sound = false, ClickOpensEvent = false }, null);
@@ -405,7 +405,7 @@ internal static class SelfTest
             "pause-when-hidden ON reaches the page before any of its scripts run");
         Assert(MainForm.BuildBootstrapScript(null, origin, pauseVideoWhenHidden: false)
             .Contains("__neolinkShellPauseHidden = false"),
-            "pause-when-hidden OFF is stated, not merely absent — the page must not guess");
+            "pause-when-hidden OFF is stated, not merely absent: the page must not guess");
 
         // The origin guard is the security boundary: the token-seeding script runs
         // on every document, so it must refuse to run anywhere but the server.

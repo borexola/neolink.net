@@ -20,13 +20,13 @@ public sealed class Bookmark
 }
 
 /// <summary>
-/// Timeline bookmarks — one bookmarks.json living IN the recordings root, so the
+/// Timeline bookmarks: one bookmarks.json living IN the recordings root, so the
 /// notes travel with the footage they describe (a backup of the recordings
 /// directory keeps them; pointing a new server at old storage finds them).
 /// Same zero-dependency file pattern as the other state stores: in-memory list,
 /// atomic replace on every change. Bookmarks are shared by every user of the
 /// server, like the recordings themselves. A bookmark whose footage has aged
-/// out of retention still lists (the note may outlive the pixels) — the
+/// out of retention still lists (the note may outlive the pixels): the
 /// timeline simply shows "no footage" there.
 /// </summary>
 public sealed class BookmarkStore
@@ -66,11 +66,11 @@ public sealed class BookmarkStore
         }
         catch (Exception ex)
         {
-            // A corrupt file must not take the server down — but silently starting
+            // A corrupt file must not take the server down, but silently starting
             // an empty list would OVERWRITE the damaged file (and every bookmark in
             // it) on the next save. Set it aside instead: the list starts fresh and
             // the damaged original stays recoverable by hand.
-            Log.Warn($"bookmarks.json unreadable ({ex.Message}) — set aside as bookmarks.json.corrupt, starting empty");
+            Log.Warn($"bookmarks.json unreadable ({ex.Message}): set aside as bookmarks.json.corrupt, starting empty");
             try { File.Move(path, path + ".corrupt", overwrite: true); } catch { }
         }
         return new List<Bookmark>();
@@ -116,7 +116,7 @@ public sealed class BookmarkStore
         lock (_gate)
         {
             if (_bookmarks.Count >= MaxBookmarks)
-                throw new FormatException($"bookmark limit reached ({MaxBookmarks}) — delete some first");
+                throw new FormatException($"bookmark limit reached ({MaxBookmarks}): delete some first");
             _bookmarks.Add(bookmark);
             Save();
         }

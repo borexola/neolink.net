@@ -37,7 +37,7 @@ public sealed class LoginGuard
         public DateTime BlockedUntil;
     }
 
-    /// <summary>An address gets this many times an account's allowance — room
+    /// <summary>An address gets this many times an account's allowance: room
     /// for a shared NAT, far below any useful spray rate.</summary>
     private const int IpFactor = 4;
 
@@ -82,7 +82,7 @@ public sealed class LoginGuard
     /// The address to hold responsible for an attempt. Behind a local proxy every
     /// caller shares its address, so the forwarded header names the real client.
     /// The LAST hop is taken, never the first: proxies append the peer they saw,
-    /// so only the trailing entry is one this deployment's proxy vouched for —
+    /// so only the trailing entry is one this deployment's proxy vouched for,
     /// earlier entries may be caller-supplied. A peer that is not a local proxy
     /// is used as-is and its header ignored.
     /// </summary>
@@ -160,7 +160,7 @@ public sealed class LoginGuard
                          $"after {Math.Max(1, s.MaxAttempts)} failed sign-ins" +
                          (address == null ? "" : $" (last from {address})"));
             if (address != null && Bump(_addresses, address, now, span, Math.Max(1, s.MaxAttempts) * IpFactor))
-                Log.Warn($"Sign-in protection: address {address} blocked for {span.TotalMinutes:0} min — " +
+                Log.Warn($"Sign-in protection: address {address} blocked for {span.TotalMinutes:0} min, " +
                          "repeated failures across accounts (intrusion attempt)");
         }
     }

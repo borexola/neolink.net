@@ -12,7 +12,7 @@ namespace Neolink.Desktop;
 /// anything that describes CAMERAS or ALERT RULES belongs to the server account
 /// (see <see cref="AlertPrefs"/>) and is only mirrored here so a server that is
 /// briefly unreachable does not silence notifications.
-/// The password and session token are DPAPI blobs — see <see cref="Dpapi"/>.
+/// The password and session token are DPAPI blobs: see <see cref="Dpapi"/>.
 /// </summary>
 internal sealed class DesktopSettings
 {
@@ -24,7 +24,7 @@ internal sealed class DesktopSettings
     public string? Username { get; set; }
 
     /// <summary>DPAPI blob. Kept (opt-in) so an unattended boot can re-authenticate
-    /// by itself when the session token has expired — a tray app that silently
+    /// by itself when the session token has expired: a tray app that silently
     /// stops alerting because nobody typed a password is worse than useless.</summary>
     public string? ProtectedPassword { get; set; }
 
@@ -46,7 +46,7 @@ internal sealed class DesktopSettings
 
     public bool StartWithWindows { get; set; }
 
-    /// <summary>Start into the tray with no window — the point of autostart.</summary>
+    /// <summary>Start into the tray with no window: the point of autostart.</summary>
     public bool StartMinimized { get; set; } = true;
 
     /// <summary>Closing the window hides it instead of quitting, so alerts survive
@@ -54,7 +54,7 @@ internal sealed class DesktopSettings
     public bool CloseToTray { get; set; } = true;
 
     /// <summary>While the window is hidden or minimised, the web page drops every
-    /// live video stream and picks them back up on show — the bandwidth and
+    /// live video stream and picks them back up on show: the bandwidth and
     /// decoding of a camera wall nobody is looking at. Alerts are unaffected:
     /// the shell polls the server itself, outside the page.</summary>
     public bool PauseVideoWhenHidden { get; set; } = true;
@@ -106,7 +106,7 @@ internal sealed class DesktopSettings
     /// <summary>Every server this PC has connected to, credentials included (the
     /// same DPAPI blobs the active connection uses), so switching between a home
     /// and a remote instance is a pick, not a retype. The ACTIVE connection stays
-    /// in the top-level fields — everything else reads those — and re-registers
+    /// in the top-level fields, everything else reads those, and re-registers
     /// itself here on every successful connect.</summary>
     public List<SavedServer> Servers { get; set; } = new();
 
@@ -139,7 +139,7 @@ internal sealed class DesktopSettings
     }
 
     /// <summary>Makes a saved server the active connection (the caller restarts
-    /// the app — the WebView session, token and alert baseline all keyed on the
+    /// the app, the WebView session, token and alert baseline all keyed on the
     /// old server).</summary>
     public void ActivateServer(SavedServer s)
     {
@@ -173,7 +173,7 @@ internal sealed class DesktopSettings
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>%APPDATA%\Neolink.NET — per user, roams with the profile, and
+    /// <summary>%APPDATA%\Neolink.NET: per user, roams with the profile, and
     /// survives an MSI upgrade because the installer never touches it.</summary>
     public static string Dir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Neolink.NET");
@@ -239,8 +239,8 @@ internal sealed class DesktopSettings
     public bool Configured => !string.IsNullOrWhiteSpace(ServerUrl);
 
     /// <summary>
-    /// Accepts what a person actually types — "10.1.0.60:8000", "neolink.lan",
-    /// "https://cams.example.com/" — and returns a base URL, or null when there is
+    /// Accepts what a person actually types: "10.1.0.60:8000", "neolink.lan",
+    /// "https://cams.example.com/", and returns a base URL, or null when there is
     /// no reading that makes sense. A bare host defaults to http, because that is
     /// what a LAN server is.
     /// </summary>
@@ -260,7 +260,7 @@ internal sealed class DesktopSettings
     }
 
     /// <summary>True when local time falls inside the configured quiet hours.
-    /// Parsing failures mean "no quiet hours" — a broken time string must not
+    /// Parsing failures mean "no quiet hours": a broken time string must not
     /// silence alerts forever.</summary>
     public bool InQuietHours(DateTime localNow)
     {

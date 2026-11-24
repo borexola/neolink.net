@@ -8,7 +8,7 @@ namespace Neolink.Detect;
 /// <summary>
 /// Live object boxes: the browser outlines what it recognises on the camera you
 /// are watching. One server-wide switch, because it is the browser that does the
-/// work — there is nothing to turn on per camera, and a setting stored here is the
+/// work: there is nothing to turn on per camera, and a setting stored here is the
 /// same on every device you sign in from. Boxes are drawn on the SINGLE-camera
 /// view only (/cameras/{name}); a wall of tiles would mean one detector per tile.
 /// </summary>
@@ -27,7 +27,7 @@ public sealed class DetectSettings
     public List<string>? Groups { get; set; }
 
     /// <summary>Frames put through the model per second. The tile keeps playing at
-    /// its own frame rate either way — this is only how often the boxes are
+    /// its own frame rate either way: this is only how often the boxes are
     /// recomputed, and it is the whole cost of the feature.</summary>
     public int Fps { get; set; } = 5;
 

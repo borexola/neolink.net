@@ -22,7 +22,7 @@ public sealed class MqttClientOptions
 
     /// <summary>Largest packet the broker accepts. Mosquitto 2.1+ defaults to a
     /// 2 MB max_packet_size and DISCONNECTS a client that exceeds it ("oversize
-    /// packet") — one big publish (a 4K camera snapshot) would kill the whole
+    /// packet"): one big publish (a 4K camera snapshot) would kill the whole
     /// connection. Oversized publishes are dropped with a warning instead.</summary>
     public int MaxPacketBytes { get; init; } = 2_000_000;
 }
@@ -31,7 +31,7 @@ public sealed class MqttClientOptions
 /// A minimal, resilient MQTT 3.1.1 client: one background task owns the socket,
 /// runs the keep-alive ping loop and the read loop, and reconnects with backoff
 /// on any failure. Publishing and subscribing are thread-safe and simply no-op
-/// while disconnected — the owner republishes state on <see cref="Connected"/>.
+/// while disconnected: the owner republishes state on <see cref="Connected"/>.
 /// Only QoS 0 is used (sufficient, with retained state, for Home Assistant).
 /// </summary>
 public sealed class MqttClient
@@ -52,11 +52,11 @@ public sealed class MqttClient
     public event Action<string, byte[]>? MessageReceived;
 
     /// <summary>Test hook: wraps the raw connection stream. The selftest injects a
-    /// stallable stream to exercise write-failure handling deterministically —
+    /// stallable stream to exercise write-failure handling deterministically:
     /// kernel send buffering makes a real stalled socket write unreproducible.</summary>
     internal Func<Stream, Stream>? StreamWrapper { get; set; }
 
-    /// <summary>Raised after each successful CONNACK — the owner (re)announces and subscribes here.</summary>
+    /// <summary>Raised after each successful CONNACK: the owner (re)announces and subscribes here.</summary>
     public event Func<Task>? Connected;
 
     public bool IsConnected => _stream != null;
@@ -79,7 +79,7 @@ public sealed class MqttClient
             {
                 // A session that reached CONNACK was a working connection: start the backoff over.
                 if (_reachedBroker) backoff = MinBackoff;
-                Log.Warn($"MQTT: {_opt.Host}:{_opt.Port} — {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
+                Log.Warn($"MQTT: {_opt.Host}:{_opt.Port}, {Log.Flatten(ex)}; retrying in {backoff.TotalSeconds:0}s");
             }
             finally
             {
@@ -106,7 +106,7 @@ public sealed class MqttClient
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                throw new IOException($"broker did not answer within 10s — is '{_opt.Host}' the right address?");
+                throw new IOException($"broker did not answer within 10s: is '{_opt.Host}' the right address?");
             }
         }
         Stream stream = tcp.GetStream();
@@ -181,12 +181,12 @@ public sealed class MqttClient
         if (packet.Length > _opt.MaxPacketBytes)
         {
             // Never hand the broker a packet over its limit: it doesn't reject the
-            // one packet, it DISCONNECTS the client — one oversized camera snapshot
+            // one packet, it DISCONNECTS the client, one oversized camera snapshot
             // would cycle the connection every camera shares.
             bool first;
             lock (_oversizeWarned) first = _oversizeWarned.Add(topic);
             if (first)
-                Log.Warn($"MQTT: not publishing '{topic}' — the packet ({packet.Length / 1024} KB) exceeds " +
+                Log.Warn($"MQTT: not publishing '{topic}', the packet ({packet.Length / 1024} KB) exceeds " +
                          $"mqtt.max_packet_size ({_opt.MaxPacketBytes / 1024} KB). Mosquitto 2.1+ disconnects " +
                          "clients over its 2 MB default; raise max_packet_size on the broker AND in the neolink " +
                          "config to publish payloads this large.");
@@ -214,14 +214,14 @@ public sealed class MqttClient
 
     private async Task<bool> SendAsync(Stream stream, byte[] packet, CancellationToken ct)
     {
-        // The caller's token only gates the wait for the gate — cancelling there is
+        // The caller's token only gates the wait for the gate: cancelling there is
         // harmless because nothing was written yet.
         await _writeGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             // Once a frame starts, it must complete: callers (a camera session
             // winding down, a timed-out probe) must never abort a write partway,
-            // or the frame boundary is lost and every later packet lands mid-frame —
+            // or the frame boundary is lost and every later packet lands mid-frame,
             // the broker absorbs the garbage and eventually kills the client with
             // "oversize packet". So the write runs under its own watchdog, not the
             // caller's token; one flaky camera can't disturb the shared connection.
@@ -237,7 +237,7 @@ public sealed class MqttClient
             _stream = null;
             try { stream.Close(); } catch { }
             if (ex is OperationCanceledException)
-                Log.Warn($"MQTT: a {packet.Length}-byte send stalled for {WriteTimeout.TotalSeconds:0}s — closing the connection to reconnect cleanly");
+                Log.Warn($"MQTT: a {packet.Length}-byte send stalled for {WriteTimeout.TotalSeconds:0}s, closing the connection to reconnect cleanly");
             return false;
         }
         finally

@@ -43,7 +43,7 @@ public static class H26x
             var s = nal.Span;
             int len = nal.Length;
             while (len > 0 && s[len - 1] == 0) len--;
-            // Keep at least 1 byte; some encoders legitimately end with 0x00 in cabac? (rare) — trailing
+            // Keep at least 1 byte; some encoders legitimately end with 0x00 in cabac? (rare): trailing
             // zeros between NALs are far more common, so trim is the right default.
             if (len > 0 && len != nal.Length) result[k] = nal[..len];
         }
@@ -65,7 +65,7 @@ public static class H26x
 
     /// <summary>
     /// Parses the coded picture size out of an SPS NAL. Needed for sources that
-    /// carry no side-channel resolution (generic RTSP pulls) — MSE refuses a
+    /// carry no side-channel resolution (generic RTSP pulls): MSE refuses a
     /// 0×0 decoder config. Returns false on anything it can't follow.
     /// </summary>
     public static bool TryGetDimensions(VideoCodec codec, ReadOnlySpan<byte> sps, out uint width, out uint height)

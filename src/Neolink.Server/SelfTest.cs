@@ -69,7 +69,7 @@ public static class SelfTest
             // The wire path now uses AesCfbDecrypt (one keystream pass) and
             // AesCfbEncrypt (cached key schedule). Both must be byte-identical to
             // the block-loop reference for every length shape: empty, sub-block,
-            // aligned, one over, and video-sized — a mismatch on FullAes firmware
+            // aligned, one over, and video-sized, a mismatch on FullAes firmware
             // would corrupt every frame.
             var key = Encoding.ASCII.GetBytes("0123456789ABCDEF");
             var state = new Bc.EncryptionState();
@@ -101,7 +101,7 @@ public static class SelfTest
             // On-demand video (connected for sensors/controls, video only while
             // consumed) applies to wired cameras with always_on unset. Whether
             // such a camera actually idles is then decided LIVE: no viewers AND
-            // no recording switch on (events, 24/7, or a running clip capture) —
+            // no recording switch on (events, 24/7, or a running clip capture),
             // the switches count, not whether a recorder object is wired.
             Assert(Streaming.CameraService.MediaOnDemandPolicy(null, false),
                 "wired camera, default power settings -> may idle on demand");
@@ -144,7 +144,7 @@ public static class SelfTest
         Test("always_on battery camera is treated exactly like a wired camera", () =>
         {
             // The contract: always_on: true opts a battery camera OUT of every
-            // battery behavior — no parking, no wake probing, no short battery
+            // battery behavior, no parking, no wake probing, no short battery
             // idle grace or demand window, no asleep badge / click-to-view gate
             // in the UI (all keyed on SleepFriendly). Only the battery SENSORS
             // remain. Pinned here because every one of those behaviors reads
@@ -161,7 +161,7 @@ public static class SelfTest
                 };
                 var svc = new Streaming.CameraService(cfg, Protocol.StreamKind.Main,
                     new Streaming.StreamHub("batt"), TimeSpan.Zero);
-                svc.BatteryDetected(); // it IS a battery model — the setting must win anyway
+                svc.BatteryDetected(); // it IS a battery model: the setting must win anyway
                 return svc;
             }
 
@@ -179,7 +179,7 @@ public static class SelfTest
         {
             // The web UI disables the toggle and the API refuses the switch, but
             // the recorder's own gate is the backstop: a stale settings.json with
-            // continuous=true must never hold a dozing battery camera awake — the
+            // continuous=true must never hold a dozing battery camera awake, the
             // on-demand video hold asks ContinuousEnabled to decide frame demand.
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
             Directory.CreateDirectory(dir);
@@ -196,24 +196,24 @@ public static class SelfTest
                 Assert(!recorder.ContinuousEnabled,
                     "switch ON + sleep-friendly -> effectively OFF (no frame demand, no taping)");
                 // What a vetoed camera gets instead: the passive wake tap (default
-                // ON) — tapes frames that already flow, but must never register as
+                // ON), tapes frames that already flow, but must never register as
                 // a consumer, or it would hold the camera awake like 24/7 would.
                 Assert(recorder.WakeTapActive,
                     "sleep-friendly -> wake tap active by default (self-wakes land on the timeline)");
                 Assert(!recorder.ContinuousEnabled,
-                    "the tap NEVER counts as frame demand — only ContinuousEnabled feeds the hold");
+                    "the tap NEVER counts as frame demand, only ContinuousEnabled feeds the hold");
                 settings.Update("dozer", events: null, continuous: null, eventTypes: null,
                     setEventTypes: false, wakeTimeline: false);
-                Assert(!recorder.WakeTapActive, "wake tap is a real switch — off means off");
+                Assert(!recorder.WakeTapActive, "wake tap is a real switch: off means off");
                 settings.Update("dozer", events: null, continuous: null, eventTypes: null,
                     setEventTypes: false, wakeTimeline: true);
                 // The veto is live: battery status heals in after connect, and
-                // always_on can change on a config reload — no restart needed.
+                // always_on can change on a config reload, no restart needed.
                 sleepFriendly = false;
                 Assert(recorder.ContinuousEnabled,
                     "veto lifted -> the persisted switch takes effect again");
                 Assert(!recorder.WakeTapActive,
-                    "the tap is battery-cam-only — a wired/always_on camera uses the real 24/7 switch");
+                    "the tap is battery-cam-only: a wired/always_on camera uses the real 24/7 switch");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         });
@@ -223,11 +223,11 @@ public static class SelfTest
             // The samples below are a REAL ping trace of a sleeping Argus Solar
             // (2026-07-21): power-save sawtooth ramps while asleep, a dead-flat
             // 2-3 ms run when PIR wakes the main processor. The detector must read
-            // patterns, not samples — the trace has mid-sleep dips (37/52/60 ms)
+            // patterns, not samples: the trace has mid-sleep dips (37/52/60 ms)
             // that a naive threshold would call a wake.
             var d = new Streaming.WakeRttDetector();
 
-            // Awake camera (flat and fast) never arms — no false asleep.
+            // Awake camera (flat and fast) never arms, no false asleep.
             foreach (var ms in new double[] { 2, 2, 15, 3, 2, 8, 2, 2, 2, 2, 2, 2 })
                 Assert(!d.OnSample(ms), "fast flat samples while awake -> no edge");
             Assert(!d.Armed, "an awake camera's flat pings never read as sleep");
@@ -237,7 +237,7 @@ public static class SelfTest
             foreach (var ms in sawtooth) d.OnSample(ms);
             Assert(d.Armed, "sustained power-save sawtooth -> armed");
 
-            // Mid-sleep dips from the trace: 37 is fast, 52/60 are not — no run,
+            // Mid-sleep dips from the trace: 37 is fast, 52/60 are not, no run,
             // no false wake, and the detector stays armed.
             Assert(!d.OnSample(37) && !d.OnSample(52) && !d.OnSample(60),
                 "isolated fast dip (37,52,60 from the trace) -> no false wake");
@@ -251,7 +251,7 @@ public static class SelfTest
 
             // Second real capture (2026-07-21, PIR event): the sawtooth, one
             // boundary sample, then single digits the instant the event starts.
-            // The detector must fire on the third fast sample — every further
+            // The detector must fire on the third fast sample: every further
             // second of confirmation is event footage lost (the whole event
             // measured ~27 s flat, sawtooth back the moment it ended).
             var ev = new Streaming.WakeRttDetector();
@@ -270,7 +270,7 @@ public static class SelfTest
             dark.OnSample(3); dark.OnSample(2);
             Assert(dark.OnSample(2), "radio back + fast run -> wake edge");
 
-            // ICMP-blocked network: all misses forever — arms but can never fire
+            // ICMP-blocked network: all misses forever, arms but can never fire
             // (the legacy transport probe is the fallback there).
             var blocked = new Streaming.WakeRttDetector();
             for (int i = 0; i < 50; i++)
@@ -278,8 +278,8 @@ public static class SelfTest
 
             // Adaptive skepticism (live loop 2026-07-21): after fruitless wake
             // connects the probe loop raises ArmThreshold so an idle-awake
-            // camera — whose radio power-save also pings as a sawtooth, but
-            // whose housekeeping keeps producing flat runs — never arms, and
+            // camera, whose radio power-save also pings as a sawtooth, but
+            // whose housekeeping keeps producing flat runs, never arms, and
             // therefore is never re-woken by us. A flat run RESETS the arming
             // count, so the pattern must be truly uninterrupted.
             var wary = new Streaming.WakeRttDetector { ArmThreshold = 16 };
@@ -287,13 +287,13 @@ public static class SelfTest
             Assert(!wary.Armed, "12 sawtooth samples < threshold 16 -> not armed yet");
             wary.OnSample(20); wary.OnSample(22); // idle-awake housekeeping flat
             for (int i = 0; i < 15; i++) wary.OnSample(300 + i * 40);
-            Assert(!wary.Armed, "the flat run reset the count — 15 more still short of 16");
+            Assert(!wary.Armed, "the flat run reset the count: 15 more still short of 16");
             Assert(!wary.OnSample(20) && !wary.OnSample(21) && !wary.OnSample(19),
-                "fast run while UNARMED never fires — the idle-awake camera is left alone");
+                "fast run while UNARMED never fires: the idle-awake camera is left alone");
 
             // FastRun exposure (live miss 2026-07-22 06:27): the probe loop bursts
             // the confirm probes while a fast run is live and logs runs that
-            // collapse before confirming — both read FastRun, so its accounting
+            // collapse before confirming, both read FastRun, so its accounting
             // is contract, not detail.
             var burst = new Streaming.WakeRttDetector();
             for (int i = 0; i < Streaming.WakeRttDetector.NonFastToArm; i++) burst.OnSample(400);
@@ -314,7 +314,7 @@ public static class SelfTest
 
             // Mirrors the probe loop exactly: probes are fed BEFORE arming is
             // recorded, so the two misses that arm the edge are not counted
-            // against it — only probes after "asleep" was declared are.
+            // against it, only probes after "asleep" was declared are.
             static Streaming.WakeDiag Park(DateTime armedAt, int missesAfterArming, double answerMs)
             {
                 var d = new Streaming.WakeDiag { ParkedAt = armedAt.AddSeconds(-90) };
@@ -342,12 +342,12 @@ public static class SelfTest
                 "wake far from arming with a detection -> a real self-wake");
 
             // Regression (live catch 2026-07-21): a REAL wake's edge probe answers
-            // SLOWLY — the SoC replies while still booting (4.9 s measured against a
+            // SLOWLY, the SoC replies while still booting (4.9 s measured against a
             // 6 s timeout). The detection must outrank the latency heuristic, or a
             // successful catch gets reported as SUSPECT FALSE ASLEEP.
             var slowReal = Park(armed, missesAfterArming: 1, answerMs: timeoutMs * 0.9);
             slowReal.SawDetection = true;
-            slowReal.SleepStatusOnArrival = false; // "already up" — it woke before we connected
+            slowReal.SleepStatusOnArrival = false; // "already up": it woke before we connected
             Assert(slowReal.Verdict(timeoutMs).StartsWith("REAL self-wake", StringComparison.Ordinal),
                 "slow edge answer + detection -> still a REAL self-wake");
 
@@ -358,7 +358,7 @@ public static class SelfTest
                 "answers near the timeout -> the unanswered probes may be slow answers, not sleep");
 
             // The camera saying "I was awake" must veto the our-probe verdict even
-            // on a first-probe answer — it cannot have been woken if it never slept.
+            // on a first-probe answer: it cannot have been woken if it never slept.
             var awake = Park(armed, missesAfterArming: 0, answerMs: 30);
             awake.SleepStatusOnArrival = false;
             Assert(!awake.Verdict(timeoutMs).StartsWith("LIKELY OUR PROBE", StringComparison.Ordinal),
@@ -366,7 +366,7 @@ public static class SelfTest
 
             // Hint-triggered wakes (router saw the camera call the push service):
             // a detection makes it REAL; none makes it a rule problem (MISFIRE),
-            // never LIKELY OUR PROBE — we sent nothing.
+            // never LIKELY OUR PROBE: we sent nothing.
             var hinted = Park(armed, missesAfterArming: 0, answerMs: 30);
             hinted.HintSource = "router saw 10.1.0.13 -> 104.18.25.250:443 (pass)";
             hinted.SawDetection = true;
@@ -427,7 +427,7 @@ public static class SelfTest
         {
             // The decoy push service (DNS-override mode): a camera whose push
             // delivery dies at the TLS handshake retries within seconds, so one
-            // PIR event is a burst of connections — one hint per source per 10 s.
+            // PIR event is a burst of connections, one hint per source per 10 s.
             var last = new Dictionary<System.Net.IPAddress, DateTime>();
             var cam = System.Net.IPAddress.Parse("10.1.0.13");
             var other = System.Net.IPAddress.Parse("10.1.0.14");
@@ -453,7 +453,7 @@ public static class SelfTest
             try { Config.ConfigEditor.ParsePortList("70000"); } catch (FormatException) { rejected = true; }
             Assert(rejected, "out-of-range port -> FormatException");
 
-            // The loader validates wake_hints now — a bad saved config fails at
+            // The loader validates wake_hints now: a bad saved config fails at
             // load (and therefore at ConfigEditor.Apply), not at listener start.
             var tmpBad = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
             File.WriteAllText(tmpBad, """
@@ -891,7 +891,7 @@ public static class SelfTest
         {
             // A new viewer must receive the buffered GOP (keyframe onward) at once so
             // it can decode immediately instead of waiting for the camera's next
-            // keyframe — the main cause of slow first-frame on a multi-tile refresh.
+            // keyframe: the main cause of slow first-frame on a multi-tile refresh.
             var hub = new Streaming.StreamHub("t");
             void Pub(bool key, int size, uint us) =>
                 hub.PublishVideo(new Media.VideoFrame(Media.VideoCodec.H264, key, us, null, new byte[size]));
@@ -911,7 +911,7 @@ public static class SelfTest
             Assert(got.Count == 3, "primed with the whole current GOP");
             Assert(got[0] is Streaming.HubVideo { Keyframe: true }, "primed GOP starts at the keyframe");
 
-            // A fresh keyframe resets the GOP — the previous frames are gone.
+            // A fresh keyframe resets the GOP: the previous frames are gone.
             Pub(true, 100, 4000);
             Pub(false, 40, 5000);
             var (id2, r2) = hub.Subscribe();
@@ -927,7 +927,7 @@ public static class SelfTest
             Assert(r3.TryRead(out var live) && live is Streaming.HubVideo, "live packet reaches an existing subscriber");
             hub.Unsubscribe(id1); hub.Unsubscribe(id2); hub.Unsubscribe(id3);
 
-            // Source gone: the cached GOP is stale — a joiner must get NOTHING
+            // Source gone: the cached GOP is stale, a joiner must get NOTHING
             // (clicking an offline camera played a second of old video and froze).
             hub.SourceStopped();
             var (id4, r4) = hub.Subscribe();
@@ -948,7 +948,7 @@ public static class SelfTest
         Test("server overload signal: sustained high CPU, ignores brief spikes", () =>
         {
             // Drives the /api/features "overload" flag the dashboard's browser alert
-            // fires on — needs several samples averaging near max, so a momentary
+            // fires on: needs several samples averaging near max, so a momentary
             // spike doesn't trip it.
             static Web.SystemSample S(double cpu) => new(0, cpu, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
             Assert(!Web.SystemMonitor.OverloadedFrom(Array.Empty<Web.SystemSample>()), "no samples -> not overloaded");
@@ -1296,7 +1296,7 @@ public static class SelfTest
                 "modify sends the one edited rule, whole");
             var del = Streaming.CameraControl.BuildSmartRuleEdit(rules, "intrusionDetectItem", "stayTime", 0, null, null, true)!;
             Assert((string?)del.Element("op") == "delete" && del.Elements("intrusionDetectItem").Single().Element("index")!.Value == "0",
-                "delete names only its rule — never the whole list");
+                "delete names only its rule, never the whole list");
             Assert(Streaming.CameraControl.BuildSmartRuleEdit(rules, "intrusionDetectItem", "stayTime", 9, 1, null, false) == null,
                 "unknown rule");
             Assert(rules.Elements("intrusionDetectItem").All(i => i.Element("op") == null), "the camera's element is not mutated");
@@ -1512,7 +1512,7 @@ public static class SelfTest
         {
             // Privacy mode is gated on remoteAbility being >0 for the channel
             // (the reolink_aio discriminator that keeps <sleep>-advertising but
-            // non-supporting cameras — e.g. RLC "Elite" — out of the privacy UI).
+            // non-supporting cameras, e.g. RLC "Elite": out of the privacy UI).
             var host = System.Xml.Linq.XElement.Parse(
                 "<Support version=\"1.1\"><remoteAbility>1</remoteAbility></Support>");
             Assert(Streaming.CameraControl.ChannelSupportFlag(host, 0, "remoteAbility"),
@@ -1618,7 +1618,7 @@ public static class SelfTest
                 AssertEq(cfg.Users.Count, 1);
                 var permitted = cfg.PermittedUsersFor(cfg.Cameras[0]);
                 Assert(permitted != null && permitted.Contains("me"), "permitted users");
-                // Battery cameras: always_on is tri-state — unset means auto.
+                // Battery cameras: always_on is tri-state, unset means auto.
                 Assert(cfg.Cameras[0].AlwaysOn == null, "always_on defaults to auto");
                 Assert(cfg.Cameras[1].AlwaysOn == true, "always_on parsed");
                 // UDP-only battery cams: uid + the opt-in discovery probe toggle.
@@ -1629,7 +1629,7 @@ public static class SelfTest
                 Assert(cfg.Cameras[1].WakeCapture && !cfg.Cameras[0].WakeCapture, "wake_capture flag parsed (opt-in, default off)");
                 Assert(cfg.Cameras[1].KeepAliveHours == 3 && cfg.Cameras[0].KeepAliveHours == 0,
                     "keep_alive_hours parsed (default 0)");
-                // Tiered-storage keys must round-trip through the parser — the
+                // Tiered-storage keys must round-trip through the parser: the
                 // archive UI only appears when archive_path survives loading.
                 AssertEq(cfg.Recording!.Path, "/recordings");
                 AssertEq(cfg.Recording.ClipsPath, "/clips");
@@ -1779,7 +1779,7 @@ public static class SelfTest
             Assert(!masked.Contains("95270000ABCDEFGH") && masked.Contains("9527**********GH"),
                 "uid is masked in probe logs");
 
-            // Directed-broadcast math: host bits set. The /23 case is the point —
+            // Directed-broadcast math: host bits set. The /23 case is the point:
             // a naive /24 guess would send to the wrong broadcast and miss the camera.
             static string Bcast(string ip, string mask) =>
                 UdpDiscovery.DirectedBroadcast(System.Net.IPAddress.Parse(ip), System.Net.IPAddress.Parse(mask)).ToString();
@@ -2024,7 +2024,7 @@ public static class SelfTest
 
         Test("config with zero cameras loads (first-run web UI boots empty)", () =>
         {
-            // A fresh install must NOT crash on an empty camera list — the web UI
+            // A fresh install must NOT crash on an empty camera list: the web UI
             // boots so the user can add cameras. Regression guard for the
             // frictionless first-run (auto-created starter config).
             var tmp = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}.json");
@@ -2154,7 +2154,7 @@ public static class SelfTest
 
             // THE regression guard for this whole option: every camera that works
             // today logs in with this message, so it must stay byte-for-byte what it
-            // was before the override existed — 20-byte header, class 0x6514,
+            // was before the override existed, 20-byte header, class 0x6514,
             // response 0xdc12, no body.
             var def = Wire(BcLoginMode.Default);
             AssertEq(def.Length, 20);
@@ -2222,7 +2222,7 @@ public static class SelfTest
                     "a camera with no override logs in exactly as before");
 
                 // A typo is refused when saved and skipped at boot, like any other
-                // unusable entry — never silently ignored, which would leave the
+                // unusable entry, never silently ignored, which would leave the
                 // camera on the framing the user is trying to move it off.
                 File.WriteAllText(tmp, """
                     { "cameras": [ { "name": "typo", "username": "u", "password": "p", "address": "1.2.3.4",
@@ -2253,7 +2253,7 @@ public static class SelfTest
             var pnals = H26x.SplitNals(padded);
             AssertEq(pnals.Count, 2);
             AssertEq(H26x.H264NalType(pnals[0].Span), H26x.H264Sps);
-            AssertEq(pnals[0].Length, 2); // 67 AA — the padding zero is trimmed
+            AssertEq(pnals[0].Length, 2); // 67 AA: the padding zero is trimmed
             AssertEq(H26x.H264NalType(pnals[1].Span), H26x.H264Pps);
             AssertEq(pnals[1].Length, 2); // 68 BB
             AssertEq(H26x.SplitNals(new byte[] { 0, 0 }).Count, 0); // too short to hold a start code
@@ -2282,7 +2282,7 @@ public static class SelfTest
             var p = Nal(0x41, 7);
 
             // The encoder's own shape (aud=1, repeat-headers=1): AUD-delimited, the
-            // keyframe already carries its parameter sets — and zerolatency x264
+            // keyframe already carries its parameter sets, and zerolatency x264
             // slices every frame across its threads, so AUs hold SEVERAL slice
             // NALs. Only the AUD may split them (splitting on slices shipped
             // frames in eleven pieces: 34 corrupt frames per 450 decoded).
@@ -2301,7 +2301,7 @@ public static class SelfTest
             Assert(noAud[0].Keyframe, "first AU (SPS+PPS+IDR) is the keyframe");
 
             // A later bare keyframe (encoder that wrote headers once): the parser
-            // must prepend the stashed SPS/PPS — the hub's GOP cache and every
+            // must prepend the stashed SPS/PPS, the hub's GOP cache and every
             // late-joining viewer depend on parameter sets riding each keyframe.
             var bare = DemoRig.ParseAccessUnits(Cat(sps, pps, idr, aud, p, aud, idr));
             var lastNals = H26x.SplitNals(bare[^1].Data);
@@ -2320,7 +2320,7 @@ public static class SelfTest
             bigNal[0] = 0x65;
             // Deterministic non-zero fill: random bytes can (1-in-thousands) contain
             // a spurious 00 00 01 start code, which the packetizer rightly treats as
-            // a NAL boundary — real encoders emulation-prevent those inside a NAL.
+            // a NAL boundary, real encoders emulation-prevent those inside a NAL.
             for (int i = 1; i < bigNal.Length; i++) bigNal[i] = (byte)(i % 251 + 1);
             var au = new byte[4 + bigNal.Length];
             au[3] = 1;
@@ -2354,7 +2354,7 @@ public static class SelfTest
             }
 
             var reader = new OggOpusReader();
-            // OpusHead/OpusTags describe the stream, they are not audio — swallowed.
+            // OpusHead/OpusTags describe the stream, they are not audio: swallowed.
             var head = Encoding.ASCII.GetBytes("OpusHead").Concat(new byte[] { 1, 1 }).ToArray();
             AssertEq(reader.Feed(Page(0x02, new[] { head.Length }, head)).Count, 0);
             // Two packets on one page, arriving split mid-page across two feeds.
@@ -2364,7 +2364,7 @@ public static class SelfTest
             AssertEq(got.Count, 2);
             AssertSeq(got[0], new byte[] { 10, 11, 12 });
             AssertSeq(got[1], new byte[] { 20, 21, 22, 23 });
-            // A 255 lacing value continues the packet — across a page boundary too.
+            // A 255 lacing value continues the packet: across a page boundary too.
             var part1 = new byte[255];
             for (int i = 0; i < part1.Length; i++) part1[i] = (byte)i;
             AssertEq(reader.Feed(Page(0, new[] { 255 }, part1)).Count, 0);
@@ -2383,7 +2383,7 @@ public static class SelfTest
             AssertSeq(rtp.Skip(12).ToArray(), new byte[] { 0xF8, 1, 2 });
 
             // SDP: an Opus session advertises opus/48000/2 in PLACE of the
-            // original audio; an original session keeps the camera's AAC line —
+            // original audio; an original session keeps the camera's AAC line:
             // the same hub serves both, chosen per URL.
             var hub = new OpusSdpHub { Audio = new Streaming.AudioTrackInfo(true, 16000, 1, new byte[] { 0x14, 0x08 }) };
             var sdp = Rtsp.Sdp.Build(hub, "cam", opus: true);
@@ -2396,7 +2396,7 @@ public static class SelfTest
             // relative ("trackID=N"), and clients resolve it against Content-Base
             // in BOTH of these shapes once a query is present. Reading the trackID
             // out of only one position turns the audio SETUP into a second video
-            // track — the stream then plays with no sound at all.
+            // track: the stream then plays with no sound at all.
             var (p1, t1, a1) = Rtsp.RtspConnection.ParseUri("rtsp://h:8654/cam/subStream");
             AssertEq(p1, "/cam/subStream");
             AssertEq(t1, -1);
@@ -2431,7 +2431,7 @@ public static class SelfTest
             static System.Text.Json.Nodes.JsonObject Enc(string json) =>
                 (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(json)!;
             // The flag's documented home is the TOP of the Enc object (one switch
-            // for the camera, matching the app — confirmed against reolink_aio,
+            // for the camera, matching the app, confirmed against reolink_aio,
             // 2026-07-27); a per-stream nesting is the fallback. No audio field
             // anywhere reads as "this firmware has no such switch" and hides the row.
             Assert(Streaming.CameraControl.EncRecordAudio(
@@ -2455,7 +2455,7 @@ public static class SelfTest
                 "motion");
             // Reolink's non-AI bucket: battery cameras (Argus Solar, 2026-07-22)
             // report PIR wake detections as AI type "other". It must land on the
-            // "motion" label — the raw token is not a selectable event type, so
+            // "motion" label: the raw token is not a selectable event type, so
             // left unmapped it silently discarded every wake-capture recording.
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(new MotionPush("MD", new[] { "other" }))),
                 "motion");
@@ -2496,7 +2496,7 @@ public static class SelfTest
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(cross)), "line-crossing");
 
             // Crying-sound detection ("cry" captured from an E1 Pro, 2026-07-15):
-            // maps to its own label and records by default — it is audio-only, so
+            // maps to its own label and records by default, it is audio-only, so
             // no other detection would catch the moment.
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(
                 new MotionPush("MD", new[] { "cry" }))), "crying");
@@ -2505,7 +2505,7 @@ public static class SelfTest
                 "crying is a default and offered detection type");
 
             // Captured from a real Reolink Elite WiFi (Driveway, 2026-07-09): newer
-            // firmware nests perimeter verdicts in smartAiTypeList — rule type +
+            // firmware nests perimeter verdicts in smartAiTypeList, rule type +
             // zone index + the object class that tripped it.
             var intrusion = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
                 "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>MD</status>" +
@@ -2517,7 +2517,7 @@ public static class SelfTest
             AssertEq(string.Join(",", Recording.EventRecorder.LabelsOf(intrusion).OrderBy(x => x)),
                 "intrusion,person");
 
-            // Smart pushes can arrive with status/AItype both "none" — the nested
+            // Smart pushes can arrive with status/AItype both "none": the nested
             // verdict alone must keep them active (a loitering alert is not an
             // all-clear).
             var loiter = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
@@ -2531,7 +2531,7 @@ public static class SelfTest
                 "loitering,person");
 
             // The firmware's other two rule types (Elite smart_ai): "legacy" = object
-            // left behind, "loss" = object taken — their own opt-in labels.
+            // left behind, "loss" = object taken: their own opt-in labels.
             var left = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
                 "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>none</status>" +
                 "<AItype>none</AItype><smartAiTypeList><smartAiType><type>legacy</type><index>0</index>" +
@@ -2545,21 +2545,21 @@ public static class SelfTest
                 && !Recording.CameraRecordingSettings.DefaultLabels.Contains("object-taken"),
                 "object labels are offered but opt-in, like the other perimeter labels");
 
-            // An empty <smartAiTypeList /> rides along on many pushes — no effect.
+            // An empty <smartAiTypeList /> rides along on many pushes, no effect.
             var emptySmart = BcCamera.ParseAlarmEvent(System.Xml.Linq.XElement.Parse(
                 "<AlarmEvent version=\"1.1\"><channelId>0</channelId><status>none</status>" +
                 "<AItype>none</AItype><smartAiTypeList /></AlarmEvent>"));
             Assert(!emptySmart.Active, "empty smart list is not a detection");
 
             // Content-free msg-600 pushes (<yoloWorldEventList />) must not reach
-            // the Info log — the capture aid only surfaces payloads with substance.
+            // the Info log: the capture aid only surfaces payloads with substance.
             var emptyYolo = Bc.Xml.BcXmlBody.TryParse(Encoding.UTF8.GetBytes(
                 "<?xml version=\"1.0\" encoding=\"utf-8\"?><body><yoloWorldEventList version=\"1.1\" /></body>"));
             Assert(emptyYolo != null && emptyYolo.Raw.Count > 0 && !emptyYolo.Raw.Any(e => e.HasElements),
                 "empty yoloWorldEventList counts as content-free");
 
             // Perimeter labels are OPT-IN: an untouched filter (null) records the
-            // classic detections but not the new labels — nobody's recordings
+            // classic detections but not the new labels, nobody's recordings
             // change until they tick the chips.
             var untouched = new Recording.CameraRecordingSettings(Events: true, Continuous: false, EventTypes: null);
             Assert(untouched.AllowsLabel("person") && untouched.AllowsLabel("motion"),
@@ -2572,16 +2572,16 @@ public static class SelfTest
                 "explicit filter is exact");
 
             // The synthetic self-wake push (wake-capture): starts a PROVISIONAL
-            // recording only — the footage is kept solely when a detection the
+            // recording only, the footage is kept solely when a detection the
             // camera's event-type selection allows confirms it, and discarded
             // otherwise. The Status "wake" marker is what the recorder keys the
             // provisional path on; the label itself is never a recordable type.
             var wake = new Protocol.MotionPush("wake", new[] { "wake" }, External: true);
             Assert(wake.Active, "synthetic wake push is an active detection");
-            Assert(wake.Status == "wake", "the wake marker rides Status — the recorder's provisional key");
+            Assert(wake.Status == "wake", "the wake marker rides Status: the recorder's provisional key");
             Assert(Recording.EventRecorder.LabelsOf(wake) is ["wake"], "wake label passes through unmapped");
             Assert(!untouched.AllowsLabel("wake"),
-                "no filter ever allows 'wake' itself — only a confirming detection keeps the footage");
+                "no filter ever allows 'wake' itself, only a confirming detection keeps the footage");
             var wakeClear = new Protocol.MotionPush("none", Array.Empty<string>(), External: true);
             Assert(!wakeClear.Active, "synthetic all-clear ends the wake window via the post-roll");
 
@@ -2677,7 +2677,7 @@ public static class SelfTest
             Assert(p.Cameras is ["FrontDoor"], "camera parsed");
             Assert(p.FromLocal == new DateTime(2026, 8, 24) && p.ToLocal == new DateTime(2026, 8, 25),
                 "yesterday resolves to the full prior day");
-            Assert(p.Structured, "fully structured — no AI involved");
+            Assert(p.Structured, "fully structured, no AI involved");
 
             p = Recording.EventSearch.Parse("cars in back yard between 2 and 4pm today", cams, now);
             Assert(p.Labels is ["vehicle"], "synonym maps to the canonical label");
@@ -3002,7 +3002,7 @@ public static class SelfTest
             try
             {
                 var store = new Recording.EventStore(dir);
-                // Anchored inside the local calendar day, not "minutes ago" — a
+                // Anchored inside the local calendar day, not "minutes ago": a
                 // run just after midnight must not push them into yesterday.
                 var a = store.Create("FrontDoor", DateTime.Today.AddHours(1).ToUniversalTime(), new[] { "person" });
                 a.AiDescription = "A person in a blue jacket walks to the door.";
@@ -3068,7 +3068,7 @@ public static class SelfTest
                     Recording.EventSearch.Parse("green shirt", cams, DateTime.Now), store,
                     out km, out kp);
                 Assert(km && kp && hits.Count == 2,
-                    "only partial matches left — returned but flagged as closest");
+                    "only partial matches left: returned but flagged as closest");
 
                 var old = store.Create("TestCam", DateTime.UtcNow.AddDays(-30), new[] { "person" });
                 old.Ongoing = false;
@@ -3127,7 +3127,7 @@ public static class SelfTest
             Assert(Recording.EventSearch.ParseTranslated("no json here", cams, now) == null, "garbage in, null out");
 
             // Dumb-model tolerance: echoed schema, trailing comma, capitalized
-            // keys, scalar fields, word dates, camera variants — one answer.
+            // keys, scalar fields, word dates, camera variants, one answer.
             var echo = Recording.EventSearch.ParseTranslated(
                 "{\"labels\":[],\"cameras\":[],\"from\":null,\"to\":null,\"keywords\":[]}\n" +
                 "{\"Labels\":\"car\",\"Cameras\":\"test cam\",\"From\":\"yesterday\",\"To\":\"today\",\"Keywords\":\"blue truck\",}",
@@ -3173,7 +3173,7 @@ public static class SelfTest
             Assert(Recording.EventSearch.Score(gry, new[] { "grey", "shirt" }) == 4,
                 "British spelling matches the model's American one");
 
-            // AI refinements fill gaps only — the deterministic dates always win.
+            // AI refinements fill gaps only: the deterministic dates always win.
             var det = Recording.EventSearch.Parse("cars last week", cams, now);
             var sloppy = new Recording.EventQuery { FromLocal = now.AddDays(-7), ToLocal = now };
             sloppy.Keywords.Add("grey");
@@ -3244,7 +3244,7 @@ public static class SelfTest
                 "untouched schedule captures any day, any hour");
 
             // The schedule is opt-in: while switched off, a configured window is
-            // dormant and everything captures — turning it off must never mean
+            // dormant and everything captures, turning it off must never mean
             // "capture nothing" or silently keep filtering.
             var dormant = new Recording.CameraRecordingSettings(true, false, null,
                 ScheduleDays: new List<string> { "mon" }, ScheduleStart: "08:00", ScheduleEnd: "09:00",
@@ -3291,7 +3291,7 @@ public static class SelfTest
 
         Test("status push parsing (unsolicited camera broadcasts)", () =>
         {
-            // msg 464 NetInfo — the inner fields are from a real Wi-Fi camera
+            // msg 464 NetInfo: the inner fields are from a real Wi-Fi camera
             // capture: signal is the RSSI in dBm.
             var net = Bc.Xml.BcXmlBody.TryParse(Encoding.UTF8.GetBytes(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\" ?><body><NetInfo version=\"1.1\">" +
@@ -3301,7 +3301,7 @@ public static class SelfTest
             AssertEq(wifi!.NetType!, "wifi");
             AssertEq(wifi.SignalDbm, -45);
             // A wired camera pushes NetInfo without a numeric signal. That is still
-            // worth reporting — "on a cable" is why it has no reading — but it must
+            // worth reporting: "on a cable" is why it has no reading, but it must
             // carry a null signal so nothing publishes a bogus dBm for it.
             var wired = BcCamera.ParseNetInfo(System.Xml.Linq.XElement.Parse(
                 "<NetInfo version=\"1.1\"><net_type>ethernet</net_type></NetInfo>"));
@@ -3309,7 +3309,7 @@ public static class SelfTest
             Assert(BcCamera.ParseNetInfo(System.Xml.Linq.XElement.Parse(
                 "<NetInfo version=\"1.1\"/>")) == null, "an empty push says nothing at all");
 
-            // msg 623 sleepStatus — battery cameras announce power-save transitions;
+            // msg 623 sleepStatus: battery cameras announce power-save transitions;
             // firmware uses both token and numeric status forms.
             Assert(BcCamera.ParseSleepStatus(System.Xml.Linq.XElement.Parse(
                 "<sleepStatus version=\"1.1\"><channelId>0</channelId><status>sleep</status></sleepStatus>"))
@@ -3334,7 +3334,7 @@ public static class SelfTest
                 "<SirenStatusList version=\"1.1\"><SirenStatus><status>1</status></SirenStatus></SirenStatusList>"), 0),
                 (bool?)true);
 
-            // msg 253 BatteryInfo reply / msg 252 BatteryList push — battery cameras
+            // msg 253 BatteryInfo reply / msg 252 BatteryList push: battery cameras
             // report percent + chargeStatus (none / charging / chargeComplete).
             var bat = BcCamera.ParseBatteryInfo(System.Xml.Linq.XElement.Parse(
                 "<BatteryInfo version=\"1.1\"><channelId>0</channelId><adapterStatus>solarPanel</adapterStatus>" +
@@ -3554,7 +3554,7 @@ public static class SelfTest
             var serverTask = Task.Run(() => server.RunAsync("127.0.0.1", port, serverCts.Token));
 
             // Explicit IPv4 (the parameterless TcpClient dials through a dual-mode
-            // IPv6 socket — ::ffff:127.0.0.1 — which containers without IPv6
+            // IPv6 socket::ffff:127.0.0.1, which containers without IPv6
             // refuse), and connect with retries: the server task binds on its own
             // schedule, and on a container's cold thread pool a plain Connect
             // reliably beat the Listen and reported "connection refused".
@@ -3856,7 +3856,7 @@ public static class SelfTest
                 Assert(recDir.Contains(Path.Combine("cam1", rec.Id.Split('~')[1], "detections")),
                     "events live under {camera}/{date}/detections");
 
-                // Folders older than the retention window get deleted — detections and
+                // Folders older than the retention window get deleted: detections and
                 // continuous footage each against their own window; an empty date
                 // folder disappears once both halves are gone.
                 var oldDay = Path.Combine(dir, "cam1", "2000-01-01");
@@ -3893,7 +3893,7 @@ public static class SelfTest
                 AssertEq((long)listedSeg.Seconds, 600L);
 
                 // A finalized segment carries its length in the mvhd, and that wins
-                // over the mtime estimate — which goes negative in the hour that
+                // over the mtime estimate, which goes negative in the hour that
                 // repeats when clocks go back.
                 static byte[] SegBox(string type, params byte[][] parts)
                 {
@@ -4007,7 +4007,7 @@ public static class SelfTest
                 Directory.Delete(Path.Combine(dir, "cam1", closedDayName), recursive: true);
 
                 // The exact boundary: a day EXACTLY retention-days old is kept
-                // (deletion needs strictly older) — "keep 7 days" never eats day 7.
+                // (deletion needs strictly older), "keep 7 days" never eats day 7.
                 static string DayDir(string root, string cam, DateTime day, string half) =>
                     Path.Combine(root, cam, $"{day:yyyy-MM-dd}", half);
                 var boundary = DayDir(dir, "cam1", DateTime.Now.Date.AddDays(-7), "detections");
@@ -4031,7 +4031,7 @@ public static class SelfTest
 
                 // The field scenario (reported on 0.9.9): a camera runs for 60 days
                 // at 30-day retention, then the owner shrinks the window to 5. The
-                // whole 25-day backlog must go on the very NEXT pass — retention
+                // whole 25-day backlog must go on the very NEXT pass: retention
                 // judges what is on disk now, it does not grandfather footage
                 // recorded under the old number. Driven through the per-camera
                 // policy overload, which is the path the UI's per-camera field uses.
@@ -4172,7 +4172,7 @@ public static class SelfTest
             var archiveP = Path.Combine(baseDir, "archive");
             try
             {
-                // Unconfigured tiers collapse to main — a plain install has one location.
+                // Unconfigured tiers collapse to main: a plain install has one location.
                 var plain = new Recording.StorageLocations(
                     new Config.RecordingConfig { Path = mainP });
                 Assert(!plain.HasClipsTier, "no clips tier by default");
@@ -4431,7 +4431,7 @@ public static class SelfTest
                 var fc = new Recording.StorageForecast(locs, dir, () => now);
                 var mainPath = locs.MainRoot;
 
-                // Minutes of history extrapolate noise — the verdict stays "measuring".
+                // Minutes of history extrapolate noise: the verdict stays "measuring".
                 fc.SampleNow();
                 now = now.AddMinutes(15); free -= GB;
                 fc.SampleNow();
@@ -4922,13 +4922,13 @@ public static class SelfTest
             AssertEq(payloads["cameras_online"], "5");
             AssertEq(payloads["cameras_recording"], "2");
 
-            // Every published key has a matching discovery config — the contract
+            // Every published key has a matching discovery config: the contract
             // between the state loop and what HA is told to expect.
             Assert(payloads.Keys.All(k => Mqtt.HomeAssistantMqtt.ServerSensors.Any(s => s.Key == k)),
                 "every payload key has a discovery sensor");
 
             // Sources that don't exist simply don't publish: no probed volume,
-            // recording disabled — absent beats a misleading zero.
+            // recording disabled, absent beats a misleading zero.
             var headless = sample with { DiskTotalBytes = 0, RecordingsBytes = -1 };
             var keys = Mqtt.HomeAssistantMqtt.ServerStatePayloads(headless, 0).Select(p => p.Key).ToList();
             Assert(!keys.Contains("disk_free") && !keys.Contains("disk_used_pct")
@@ -4936,7 +4936,7 @@ public static class SelfTest
 
             // Discovery JSON must OMIT unset fields: HA validates every key it
             // sees, rejects explicit nulls ("icon": null) and silently drops the
-            // entity — the reason a config built with optional members must go
+            // entity, the reason a config built with optional members must go
             // through the null-stripping serializer.
             var json = System.Text.Json.JsonSerializer.Serialize(
                 new { name = "X", icon = (string?)null, unit_of_measurement = (string?)null },
@@ -5022,7 +5022,7 @@ public static class SelfTest
             Assert(!Mqtt.CameraBridge.AliveByPolicy(live: false, asleep: false, suspended: false), "unreachable = not alive");
 
             // A parked camera that has NEVER connected (server booted while it
-            // slept) is still available — it is healthy, just dozing.
+            // slept) is still available: it is healthy, just dozing.
             DateTime? off4 = null;
             Assert(Mqtt.CameraBridge.AvailabilityOnline(
                     Mqtt.CameraBridge.AliveByPolicy(live: false, asleep: true, suspended: false),
@@ -5042,7 +5042,7 @@ public static class SelfTest
             Assert(Neolink.WebClient.UiIcon.RenderBattery(150).Value.Contains("width=\"13\""),
                 "overshoot clamps to full");
 
-            // Wi-Fi readings carry their UNIT — the level is derived from that, never
+            // Wi-Fi readings carry their UNIT: the level is derived from that, never
             // guessed from the number's range (guessing drew full signal as empty).
             static Streaming.WifiReading Dbm(int v) => Streaming.WifiReading.FromDbm(v);
             Assert(Dbm(-45).Level == 4, "strong dBm -> 4 bars");
@@ -5052,7 +5052,7 @@ public static class SelfTest
             Assert(Dbm(-95).Level == 0, "very weak dBm -> 0 bars");
             Assert(Dbm(-60).Label == "-60 dBm", "dBm label");
 
-            // The same integer means different things per unit — the bug this fixes.
+            // The same integer means different things per unit: the bug this fixes.
             Assert(new Streaming.WifiReading(3, Streaming.WifiUnit.Bars).Level == 3, "3 bars -> 3");
             Assert(new Streaming.WifiReading(3, Streaming.WifiUnit.Percent).Level == 0, "3 percent -> 0, not 3 bars");
             Assert(new Streaming.WifiReading(5, Streaming.WifiUnit.Bars).Level == 4,
@@ -5072,7 +5072,7 @@ public static class SelfTest
             Assert(Streaming.CameraControl.LinkKindOf("ethernet") == 1, "ethernet -> wired");
             Assert(Streaming.CameraControl.LinkKindOf("Wifi") == 2, "Wifi -> wireless");
             Assert(Streaming.CameraControl.LinkKindOf("WIFI") == 2, "case-insensitive");
-            // "wlan" CONTAINS "lan" — the Wi-Fi test has to win, or a wireless
+            // "wlan" CONTAINS "lan": the Wi-Fi test has to win, or a wireless
             // camera would be drawn with a network jack.
             Assert(Streaming.CameraControl.LinkKindOf("wlan0") == 2, "wlan -> wireless, not wired");
             Assert(Streaming.CameraControl.LinkKindOf("eth0") == 1, "eth0 -> wired");
@@ -5096,7 +5096,7 @@ public static class SelfTest
                 Neolink.WebClient.UiIcon.RenderWifi(9).Value, "opacity=\"1\"").Count == 4,
                 "out-of-range level clamps to full");
 
-            // GetWifiSignal reply dialects — firmwares disagree on the shape, and
+            // GetWifiSignal reply dialects: firmwares disagree on the shape, and
             // the Video Doorbell WiFi quotes numbers as strings (a bare cast threw,
             // which read as "camera reports no Wi-Fi" and hid the icon).
             static System.Text.Json.Nodes.JsonNode? W(string json) =>
@@ -5216,7 +5216,7 @@ public static class SelfTest
             Assert(Streaming.CameraControl.ParseAutoReply(Obj("""{"channel":0}""")) == null,
                 "no fileId -> feature absent");
 
-            // The auto-track ABILITY gate: only GetAbility's supportAITrack decides —
+            // The auto-track ABILITY gate: only GetAbility's supportAITrack decides,
             // a config that merely carries an aiTrack field must not enable the feature.
             Assert(Streaming.CameraControl.SupportsAiTrack(Obj(
                 """{"abilityChn":[{"supportAITrack":{"permit":6,"ver":1}}]}"""), 0),
@@ -5250,7 +5250,7 @@ public static class SelfTest
                 "missing ISP half -> null extras");
 
             // Capability gate: when the range table was read, flip/mirror must
-            // appear IN it — firmwares echo rotation/mirroring values in the
+            // appear IN it, firmwares echo rotation/mirroring values in the
             // config on models that can't actually flip (Elite WiFi), and a
             // toggle that silently no-ops is worse than none.
             var rangeWithout = Obj("""{"hdr":{"min":0,"max":1}}""");
@@ -5437,7 +5437,7 @@ public static class SelfTest
             var bare = Protocol.OnvifClient.BuildCandidates("10.1.1.29");
             Assert(bare.Length == 2 && bare[0] == "http://10.1.1.29:8000/onvif/device_service"
                    && bare[1] == "http://10.1.1.29/onvif/device_service", "bare host → :8000 then :80");
-            // A non-Reolink camera passes its own order — 80 first, and 8899 too.
+            // A non-Reolink camera passes its own order: 80 first, and 8899 too.
             var generic = Protocol.OnvifClient.BuildCandidates("10.1.1.29", new[] { 80, 8000, 8899 });
             Assert(generic.Length == 3 && generic[0] == "http://10.1.1.29/onvif/device_service"
                    && generic[1] == "http://10.1.1.29:8000/onvif/device_service"
@@ -5659,7 +5659,7 @@ public static class SelfTest
             Assert(osdTime is { Token: "OSD_2", Position: "LowerRight" },
                 "the date/time overlay is the timestamp");
 
-            // A login inside the ONVIF address wins over the streaming one — the only
+            // A login inside the ONVIF address wins over the streaming one: the only
             // way to reach a camera that keeps separate accounts. Escapes are decoded,
             // so a password with an @ in it survives the URL it had to be written into.
             var (addr, user, pass) = Protocol.OnvifClient.SplitCredentials(
@@ -5933,11 +5933,11 @@ public static class SelfTest
                 "person");
             Assert(!N("tns1:RuleEngine/CellMotionDetector/Tamper", "IsTamper", "true").IsDetection,
                 "a Tapo tamper alarm is not a detection");
-            // Axis: VMD topics, and states written as 1/0 — valid xs:boolean both.
+            // Axis: VMD topics, and states written as 1/0, valid xs:boolean both.
             Assert(N("tnsaxis:CameraApplicationPlatform/VMD/Camera1ProfileANY", "active", "1")
                 is { Active: true, Label: "motion" }, "Axis VMD is motion, and '1' is true");
             Assert(N("tns1:VideoSource/MotionAlarm", "State", "0") is { Active: false, Label: "motion" },
-                "'0' is false — an END, not a fresh start");
+                "'0' is false: an END, not a fresh start");
             // A word is matched at a word boundary: an interface is not a face, a
             // smart card is not a car, and a people counter reports a number.
             Assert(!N("tns1:Device/Network/InterfaceDown", "Value", "1").IsDetection, "InterfaceDown is not a face");
@@ -6564,7 +6564,7 @@ public static class SelfTest
         Test("ONVIF detections: stateful ones last until the camera ends them", () =>
         {
             // ONVIF reports a detection's state only when it CHANGES. A camera watching
-            // a long event sends "true" once and then nothing until "false" — so any
+            // a long event sends "true" once and then nothing until "false", so any
             // timer on silence tears one real event into two. Only a one-shot (a
             // notification with no state at all) may lapse on its own.
             static Protocol.OnvifNotification N(string topic, bool? active, params string[] kv)
@@ -6582,7 +6582,7 @@ public static class SelfTest
             svc.AgeForTest(TimeSpan.FromMinutes(10)); // a long, quiet, ongoing event
             svc.ExpireOneShots();
             Assert(svc.ActiveLabels.Contains("motion"),
-                "a stateful detection survives ten quiet minutes — silence is not an end");
+                "a stateful detection survives ten quiet minutes: silence is not an end");
             AssertEq(pushes.Count, 1); // and nothing claimed it had ended
 
             // A person reported alongside: BOTH labels go out. Dropping "motion" here
@@ -6665,7 +6665,7 @@ public static class SelfTest
             AssertEq(pushes.Count, 0);
             svc.Handle(N(bell, false));
 
-            // A one-shot never gets an end, so it lapses — on ITS OWN clock, not the
+            // A one-shot never gets an end, so it lapses, on ITS OWN clock, not the
             // camera's: a stateful label kept busy alongside must not hold it open.
             pushes.Clear();
             svc.Handle(N("tns1:RuleEngine/CellMotionDetector/Motion", true));
@@ -7790,7 +7790,7 @@ public static class SelfTest
 
         Test("a stored zone's shape cannot overflow into a valid-looking grid", () =>
         {
-            // 65536 x 65537 wraps to 65536 in 32 bits — exactly a legal table length.
+            // 65536 x 65537 wraps to 65536 in 32 bits: exactly a legal table length.
             var z = new Web.CameraStateStore.StoredZone { Cols = 65536, Rows = 65537, Table = new string('1', 65536) };
             Assert(!z.IsWellFormed, "a wrapped product must not pass as a real grid");
             var ok = new Web.CameraStateStore.StoredZone { Cols = 32, Rows = 18, Table = new string('0', 576) };
@@ -8062,7 +8062,7 @@ public static class SelfTest
             AssertEq(Protocol.OnvifClient.DecodeActiveCells("0P8A8A==", 22, 18),
                 new string('1', 22 * 18).Substring(0, 396));
             // Strict about the size: a grid read wrongly would be shown as the
-            // camera's and written back over it. Too short and too long both fail —
+            // camera's and written back over it. Too short and too long both fail:
             // an uncompressed bitmask sent by mistake decodes to the wrong length.
             Assert(Protocol.OnvifClient.DecodeActiveCells("/v/+8A==", 22, 18) == null, "too short for the layout");
             Assert(Protocol.OnvifClient.DecodeActiveCells("0P8A8A==", 5, 3) == null, "too long for the layout");
@@ -8112,8 +8112,8 @@ public static class SelfTest
                 </tan:GetAnalyticsModulesResponse>
                 """)) == null, "no cell motion module -> no grid of its own");
 
-            // The rule is written back WHOLE: only ActiveCells changes, and its Type —
-            // a QName whose prefix was declared on the reply's envelope — still
+            // The rule is written back WHOLE: only ActiveCells changes, and its Type,
+            // a QName whose prefix was declared on the reply's envelope, still
             // resolves once the element travels on its own.
             var rules = Xml("""
                 <env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope"
@@ -8186,7 +8186,7 @@ public static class SelfTest
                 Assert(store.Zone("Gate", "md")?.Table == "11001111", "and the stored zone is untouched");
 
                 // It survives a restart, and the type key is matched like a camera
-                // name is — a hand-edited file must still find its grid.
+                // name is: a hand-edited file must still find its grid.
                 var reopened = new Web.CameraStateStore(dir);
                 Assert(reopened.Zone("Gate", "md")?.Table == "11001111", "zone survives a restart");
                 Assert(reopened.Zone("gate", "MD")?.Table == "11001111", "camera and type match case-insensitively");
@@ -8224,7 +8224,7 @@ public static class SelfTest
         Test("generic cameras' Detection events switch is migrated once, then left alone", () =>
         {
             // A stored events=off on a generic camera predates ONVIF detections and was never
-            // chosen, so the first start that can detect turns it on — exactly once.
+            // chosen, so the first start that can detect turns it on: exactly once.
             var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-migrate-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             try
@@ -8272,8 +8272,8 @@ public static class SelfTest
                     {"beginHour":0,"endHour":23,"sensitivity":34}]}}
                 """);
             AssertEq(Streaming.CameraControl.MdSensitivityValue(mdNew, isMdAlarm: true), 34);
-            // Old dialect (GetAlarm sens tables): the WIRE value is inverted —
-            // 1 = most sensitive — so user 30 is wire 21 and back.
+            // Old dialect (GetAlarm sens tables): the WIRE value is inverted,
+            // 1 = most sensitive, so user 30 is wire 21 and back.
             var mdOld = Obj("""{"channel":0,"type":"md","sens":[{"id":0,"sensitivity":21}]}""");
             AssertEq(Streaming.CameraControl.MdSensitivityValue(mdOld, isMdAlarm: false), 30);
             Assert(Streaming.CameraControl.MdSensitivityValue(Obj("""{"channel":0}"""), false) == null,
@@ -8289,7 +8289,7 @@ public static class SelfTest
                 "no table -> write refused");
 
             // The app-style minimal write: channel + named sections only, absent
-            // sections skipped — the shape for firmwares that reject their own
+            // sections skipped, the shape for firmwares that reject their own
             // config round-tripped whole.
             var minimal = Streaming.CameraControl.MinimalMdWrite(Obj(
                 """{"channel":2,"useNewSens":1,"newSens":{"sensDef":30},"scope":{"cols":4,"rows":2,"table":"11111111"},"extra":9}"""),
@@ -8355,7 +8355,7 @@ public static class SelfTest
             Assert(Streaming.CameraControl.ParseOsd(Obj("""{"channel":0,"osdTime":{"enable":1}}"""), null)
                 is { ShowName: false, Watermark: null }, "partial OSD tolerated");
 
-            // CheckFirmware: 0/1, version string, or an info object — all firmware-real.
+            // CheckFirmware: 0/1, version string, or an info object, all firmware-real.
             Assert(Streaming.CameraControl.ParseFirmware(null) == null, "no field -> unknown");
             AssertEq(Streaming.CameraControl.ParseFirmware(Val("0")), new Streaming.FirmwareStatus(false, null));
             AssertEq(Streaming.CameraControl.ParseFirmware(Val("1")), new Streaming.FirmwareStatus(true, null));
@@ -8392,7 +8392,7 @@ public static class SelfTest
                 "file entry parsed");
             AssertEq(recs[1].End - recs[1].Start, TimeSpan.FromSeconds(90));
 
-            // The Video Doorbell WiFi quotes "size" as a STRING — a bare (long) cast
+            // The Video Doorbell WiFi quotes "size" as a STRING: a bare (long) cast
             // threw and failed the WHOLE day's parse ("N entries but none usable").
             var quoted = Streaming.CameraControl.ParseSdRecordings(Obj("""
                 {"channel":0,"File":[
@@ -8455,7 +8455,7 @@ public static class SelfTest
                 AssertEq(cfg.Cameras[1].Port, 9000);
 
                 // Edit "Old" without sending a password (write-only semantics: the
-                // key is simply not touched) — it must still be there afterwards.
+                // key is simply not touched), it must still be there afterwards.
                 Config.ConfigEditor.Apply(cfgPath, root =>
                 {
                     var cams = Config.ConfigEditor.Cameras(root);
@@ -8502,7 +8502,7 @@ public static class SelfTest
 
         Test("HA suspend switch: resumable while the camera is offline", () =>
         {
-            // The whole point of suspend is that the camera reads OFFLINE — so the
+            // The whole point of suspend is that the camera reads OFFLINE, so the
             // HA switch must (1) act without ever touching the camera connection
             // and (2) stay Available in HA, i.e. its availability must be gated on
             // the BRIDGE topic only, never the per-camera topic.
@@ -8516,7 +8516,7 @@ public static class SelfTest
                 new List<Web.WebCameraInfo> { cam }, "test");
             var bridge = new Mqtt.CameraBridge(cam, hub);
 
-            // Resume command (payload OFF) flips the flag — camera offline throughout,
+            // Resume command (payload OFF) flips the flag: camera offline throughout,
             // and the state publish failing (no broker) must not break the command.
             bridge.HandleCommandAsync("suspend", "OFF").GetAwaiter().GetResult();
             AssertEq(lastSet, false);
@@ -8542,13 +8542,13 @@ public static class SelfTest
         Test("mqtt: last-event-time is RFC3339 UTC with Z and no fractional seconds", () =>
         {
             // HA's timestamp device class rejects a value without timezone info or
-            // with an unexpected shape — a rejected value leaves the sensor at
+            // with an unexpected shape: a rejected value leaves the sensor at
             // "unknown", which is exactly the bug this format guards against.
             var utc = Mqtt.CameraBridge.FormatEventTime(
                 new DateTime(2026, 7, 23, 12, 5, 9, DateTimeKind.Utc));
             AssertEq(utc, "2026-07-23T12:05:09Z");
             // A StartUtc that deserialized as Unspecified must STILL get a Z, not be
-            // treated as local — SpecifyKind(Utc) is what forces that.
+            // treated as local: SpecifyKind(Utc) is what forces that.
             var unspecified = Mqtt.CameraBridge.FormatEventTime(
                 new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Unspecified));
             AssertEq(unspecified, "2026-01-02T03:04:05Z");
@@ -8559,7 +8559,7 @@ public static class SelfTest
         Test("battery tiles: only the user starts a stream, never the camera waking", () =>
         {
             // Attaching a tile's stream is what makes the server connect, and connecting
-            // is what WAKES a battery camera — or holds an already-awake one up. So the
+            // is what WAKES a battery camera, or holds an already-awake one up. So the
             // wall streams ONLY on a deliberate request. Field logs (a camera facing a
             // blank wall, woken twice in five minutes by false wake-capture edges) showed
             // the earlier "stream whenever it is awake" rule turning every wake, real or
@@ -8583,7 +8583,7 @@ public static class SelfTest
 
         Test("UID-only cameras: allowed with udp, rejected without", () =>
         {
-            // A UID can replace the address — but only over UDP, where broadcast
+            // A UID can replace the address, but only over UDP, where broadcast
             // discovery finds the camera by UID. TCP has no such lookup.
             string Cfg(string body) => $$"""
                 { "cameras": [ { "name": "argus", "username": "admin", "password": "p", {{body}} } ] }
@@ -8622,7 +8622,7 @@ public static class SelfTest
         {
             // The add-camera screen offers these as a dropdown and the web API
             // validates against the same array. If the two ever drift, the editor
-            // happily saves a config the loader then rejects on restart — so every
+            // happily saves a config the loader then rejects on restart, so every
             // advertised value must actually load, and anything else must not.
             string Cfg(string stream) => $$"""
                 {
@@ -8656,7 +8656,7 @@ public static class SelfTest
         Test("HA status LED switch: ON/OFF writes the lightState toggle", () =>
         {
             // The feature this exists for: turning the little status LED off (and
-            // back on) from Home Assistant — e.g. alongside Privacy Mode. It rides
+            // back on) from Home Assistant, e.g. alongside Privacy Mode. It rides
             // LedState's lightState, the same field the floodlight/spotlight use,
             // which is why only one of the three is ever announced per camera.
             var led = new LedRecordingControl("ledcam");
@@ -8670,7 +8670,7 @@ public static class SelfTest
             AssertEq(led.LastLightState, "close");
             bridge.HandleCommandAsync("status_led", "ON").GetAwaiter().GetResult();
             AssertEq(led.LastLightState, "open");
-            // It must drive ONLY lightState — never the IR "state" field, which is
+            // It must drive ONLY lightState, never the IR "state" field, which is
             // night vision and would go dark with it.
             Assert(led.LastState == null && led.LastDoorbell == null && led.LastIrBrightness == null,
                 "status LED write must touch lightState alone");
@@ -8746,8 +8746,8 @@ public static class SelfTest
             Directory.CreateDirectory(dir);
             try
             {
-                // Wire the switch exactly as Program.cs does — to the shared settings
-                // store — so the HA switch and the web UI's 24/7 toggle are one setting.
+                // Wire the switch exactly as Program.cs does, to the shared settings
+                // store, so the HA switch and the web UI's 24/7 toggle are one setting.
                 var settings = new Recording.RecordingSettings(dir);
                 var cam = new Web.WebCameraInfo("reccam",
                     new List<Web.WebStreamInfo>(), new StubCameraControl("reccam"), null,
@@ -8790,7 +8790,7 @@ public static class SelfTest
             {
                 // Bridge wired like Program.cs: the switches read the shared settings
                 // store, and RepublishCameraAsync is what the web endpoints call after
-                // persisting a change — it must publish the CURRENT state immediately.
+                // persisting a change, it must publish the CURRENT state immediately.
                 var settings = new Recording.RecordingSettings(dir);
                 var recorder = new Recording.EventRecorder("nudgecam", new Streaming.StreamHub("nudgecam"),
                     new StubCameraControl("nudgecam"),
@@ -8811,7 +8811,7 @@ public static class SelfTest
                 hub.PublishObserver = (topic, payload) => published[topic] = payload;
 
                 // Simulate the web UI turning 24/7 recording ON (persist), then the
-                // endpoint nudging the bridge — HA must see ON right away.
+                // endpoint nudging the bridge: HA must see ON right away.
                 settings.Update("nudgecam", events: null, continuous: true,
                     eventTypes: null, setEventTypes: false);
                 hub.RepublishCameraAsync("nudgecam").GetAwaiter().GetResult();
@@ -8821,7 +8821,7 @@ public static class SelfTest
                 Assert(published.ContainsKey("neolink/nudgecam/detect"),
                     "nudge must also refresh the detection-events switch state");
 
-                // Flip back off and nudge again — the new state must land, not the old.
+                // Flip back off and nudge again: the new state must land, not the old.
                 settings.Update("nudgecam", events: null, continuous: false,
                     eventTypes: null, setEventTypes: false);
                 hub.RepublishCameraAsync("nudgecam").GetAwaiter().GetResult();
@@ -8863,7 +8863,7 @@ public static class SelfTest
             }
             lock (published)
                 Assert(published.TryGetValue("neolink/wakecam/motion", out var on) && on == "ON",
-                    "a hint push is a confirmed event — motion must go ON");
+                    "a hint push is a confirmed event: motion must go ON");
         });
 
         Test("HA doorbell event reports ring while the topic keeps press", () =>
@@ -8911,7 +8911,7 @@ public static class SelfTest
                 Assert(!new Web.CameraStateStore(dir).Suspended("Driveway"),
                     "resume persists (safe default is un-suspended)");
 
-                // A corrupt file must not take the server down — cameras start
+                // A corrupt file must not take the server down: cameras start
                 // un-suspended (they stream and record).
                 File.WriteAllText(Path.Combine(dir, "camera-state.json"), "{ not json");
                 Assert(!new Web.CameraStateStore(dir).Suspended("Driveway"),
@@ -9081,7 +9081,7 @@ public static class SelfTest
             AssertEq(Notifications.EventEmailer.PickEvenly(Frames(120), 50).Count, 50);
             // Fewer frames than asked: attach them all rather than nothing.
             AssertEq(Ids(Notifications.EventEmailer.PickEvenly(Frames(2), 3)), "0,1");
-            // One snapshot is the MIDDLE of the event, not its first frame —
+            // One snapshot is the MIDDLE of the event, not its first frame:
             // the first frame is pre-roll, i.e. the scene before anything happened.
             AssertEq(Ids(Notifications.EventEmailer.PickEvenly(Frames(11), 1)), "5");
             AssertEq(Notifications.EventEmailer.PickEvenly(Frames(0), 3).Count, 0);
@@ -9149,7 +9149,7 @@ public static class SelfTest
                 Assert(err != null, "an unreachable mail server REPORTS instead of throwing");
 
                 // A malformed address is refused by the sender's own validation
-                // (header injection guard) — also as a message, not an exception.
+                // (header injection guard), also as a message, not an exception.
                 var inject = new Notifications.NotificationSettings
                 {
                     Enabled = true, Recipient = "a@b.com\r\nBcc: c@d.com",
@@ -9210,7 +9210,7 @@ public static class SelfTest
                     "an email-only alert with only the webhook ready is refused");
 
                 // No reader is running, so the 100-slot queue must fill and then
-                // report full — TryWrite returning true for a DROPPED alert is
+                // report full: TryWrite returning true for a DROPPED alert is
                 // the regression this pins (DropWrite mode ate the queue-full
                 // signal AND the cooldown rollback that rides on it).
                 int accepted = 0;
@@ -9311,7 +9311,7 @@ public static class SelfTest
             var ev = new Notifications.EventInfo("Driveway", new[] { "person" },
                 DateTime.UtcNow.AddSeconds(-30), 30, Ongoing: true);
             var jpeg = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 9, 9, 0xFF, 0xD9 };
-            var alert = new Notifications.Alert("event:1", false, "subj", "Person — Driveway", "body text",
+            var alert = new Notifications.Alert("event:1", false, "subj", "Person \u2014 Driveway", "body text",
                 Attachments: new[] { new Notifications.EmailAttachment("Driveway-1.jpg", "image/jpeg", jpeg) },
                 Channels: Notifications.AlertChannels.Webhook, Event: ev);
 
@@ -9329,8 +9329,8 @@ public static class SelfTest
             using (var r = Notifications.WebhookSender.BuildRequest(s, "", alert, "selftest"))
             {
                 // JSON braces survive rendering; only the documented placeholders
-                // substitute — and with a JSON Content-Type the VALUES are
-                // JSON-escaped (the em-dash becomes —, quotes cannot break out).
+                // substitute, and with a JSON Content-Type the VALUES are
+                // JSON-escaped (the em dash becomes \u2014, quotes cannot break out).
                 AssertEq(Body(r), "{\"text\":\"Person \\u2014 Driveway: body text [Driveway|person|ongoing|30]\"}");
                 AssertEq(r.Content!.Headers.ContentType!.MediaType, "application/json");
                 Assert(r.Headers.TryGetValues("X-Title", out var xt) && xt.First() == "Person - Driveway",
@@ -9415,7 +9415,7 @@ public static class SelfTest
 
             AssertEq(Notifications.WebhookSender.ParseHeaderLines(
                 new[] { "A: b", "bad", " : x", "C:d" }).Count, 2);
-            // A saved typo in a header NAME is dropped at parse time — it must
+            // A saved typo in a header NAME is dropped at parse time: it must
             // never reach HttpHeaders, where it threw on every delivery.
             AssertEq(Notifications.WebhookSender.ParseHeaderLines(
                 new[] { "X Title: x", "Ünicode: x", "Ok: y" }).Single().Name, "Ok");
@@ -9455,7 +9455,7 @@ public static class SelfTest
                     "json mode carries the event link");
             }
             // Snapshot mode is the ntfy shape: the link rides the native Click
-            // header — automatically, and an explicit line wins over it.
+            // header, automatically, and an explicit line wins over it.
             ls.WebhookBodyMode = "snapshot";
             using (var r = Notifications.WebhookSender.BuildRequest(ls, "", evAlert, "selftest"))
                 Assert(r.Headers.TryGetValues("X-Click", out var c)
@@ -9466,7 +9466,7 @@ public static class SelfTest
                 Assert(r.Headers.TryGetValues("X-Click", out var c)
                        && c.Single() == "https://other.example.com/",
                     "an explicit Click line wins over the auto link");
-            // No PublicUrl: no link anywhere — no Click header, {link} renders "",
+            // No PublicUrl: no link anywhere, no Click header, {link} renders "",
             // the json field is omitted entirely.
             ls.PublicUrl = "";
             ls.WebhookHeaders = new();
@@ -9789,7 +9789,7 @@ public static class SelfTest
                     AssertEq(raw.Count, expected.Count);
                     AssertEq(copying.Count, expected.Count);
                     // Every unit of the buffer streams into ONE writer, so all but the
-                    // first start at a non-zero offset — data_offset must stay relative.
+                    // first start at a non-zero offset: data_offset must stay relative.
                     var batch = new Mp4Writer(1024);
                     using var wanted = new MemoryStream();
                     for (int i = 0; i < raw.Count; i++)
@@ -9918,7 +9918,7 @@ public static class SelfTest
             {
                 // Compose a file exactly as the OLD writer left them: live init,
                 // one moof+mdat per frame, mfra trailer. This is what upgraded
-                // installs have on disk, terabytes of it — it must serve fast
+                // installs have on disk, terabytes of it: it must serve fast
                 // without any migration touching it.
                 var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
                 var pps = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
@@ -9990,7 +9990,7 @@ public static class SelfTest
                     }
                 }
 
-                // Serving synthesized the index in memory only — the archive
+                // Serving synthesized the index in memory only: the archive
                 // file is bit-identical afterwards.
                 Assert(File.ReadAllBytes(path).AsSpan().SequenceEqual(original),
                     "the on-disk file is untouched");
@@ -10015,7 +10015,7 @@ public static class SelfTest
             {
                 // A growing clip between write-buffer flushes (and a crash-cut file
                 // forever) ends with a complete moof but a truncated mdat. Indexing
-                // that sample pointed past the fragment region — every browser then
+                // that sample pointed past the fragment region: every browser then
                 // read the synthesized moov's own bytes ("trak") as a 1.9 GB NAL
                 // length and killed the video track mid-clip.
                 var sps = new byte[] { 0x67, 0x42, 0xE0, 0x1F, 0xA0 };
@@ -10050,7 +10050,7 @@ public static class SelfTest
                 AssertEq(After("stsz", 12), 9u); // the torn tenth is not indexed
                 AssertEq(After("stco", 8), 9u);
 
-                // Every indexed payload must lie inside the mapped file region —
+                // Every indexed payload must lie inside the mapped file region,
                 // never in the synthesized moov that follows it.
                 int moovStart = served.Length;
                 for (int p = 0; p + 8 <= served.Length;)
@@ -10141,7 +10141,7 @@ public static class SelfTest
 
                 // A growing file's tail slot mid-reseal reads torn. The reader
                 // must pin its length to the sealed prefix at open instead of
-                // promising bytes it cannot serve — a short body against the
+                // promising bytes it cannot serve: a short body against the
                 // Content-Length aborted every mid-write playback of an
                 // encrypted clip (and the email sampler with it).
                 var tornPath = Path.Combine(dir, "torn-tail.bin");
@@ -10161,7 +10161,7 @@ public static class SelfTest
                     AssertEq(r.Read(new byte[16], 0, 16), 0); // and ends exactly there
                 }
 
-                // A FUTURE format version must be rejected loudly — never sniffed
+                // A FUTURE format version must be rejected loudly, never sniffed
                 // as "not encrypted" and served as plaintext video.
                 var vNext = File.ReadAllBytes(path);
                 vNext[7] = 2; // bump the version byte in "NLNKENC\x01"
@@ -10214,7 +10214,7 @@ public static class SelfTest
                 Assert(threw, "wrong key fails authentication");
 
                 // Plaintext compatibility: with encryption OFF the vault writes and
-                // serves plain files — and still decrypts old encrypted ones.
+                // serves plain files, and still decrypts old encrypted ones.
                 Recording.FootageVault.Configure(key, encryptNew: false);
                 var plainPath = Path.Combine(dir, "plain.bin");
                 using (var w = Recording.FootageVault.Create(plainPath))
@@ -10319,8 +10319,8 @@ public static class SelfTest
                     Assert(got.AsSpan().SequenceEqual(jpeg), "thumb decrypts");
                 }
 
-                // An OLD-LAYOUT (fragmented) encrypted file — what a crash leaves
-                // behind — must serve through the virtual index AND survive the
+                // An OLD-LAYOUT (fragmented) encrypted file, what a crash leaves
+                // behind, must serve through the virtual index AND survive the
                 // in-place upgrade, both through the decrypting layer.
                 var init = FMp4.BuildInit(VideoCodec.H264, sps, pps, null, 640, 360);
                 var fragPath = Path.Combine(dir, "frag.mp4");
@@ -10424,7 +10424,7 @@ public static class SelfTest
                 AssertEq(IndicesOf(text, "trex").Count, 2);
 
                 // The classic moov's media headers (the LAST two mdhd) carry real
-                // durations — video in 90 kHz ticks, audio in sample-rate ticks
+                // durations: video in 90 kHz ticks, audio in sample-rate ticks
                 // (2 AUs = 2048).
                 var mdhds = IndicesOf(text, "mdhd");
                 AssertEq(mdhds.Count, 4);
@@ -10443,7 +10443,7 @@ public static class SelfTest
         {
             // A suspended (or offline) camera stops publishing but the hub stays
             // open. The recorder must finalize the open segment instead of gluing
-            // resumed footage into it — ClipWriter clamps big timestamp jumps, so
+            // resumed footage into it: ClipWriter clamps big timestamp jumps, so
             // gluing would time-compress the gap and misplace everything after it.
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
             Directory.CreateDirectory(dir);
@@ -10512,7 +10512,7 @@ public static class SelfTest
                 AssertEq(Segments().Length, 1);
                 var first = Segments()[0];
 
-                // While writing, the recorder itself names the open segment — the
+                // While writing, the recorder itself names the open segment: the
                 // day listing overlays this (an open file's mtime is stale on
                 // NTFS/FUSE/network mounts, which made lanes trail behind "now").
                 Assert(recorder.ActiveSegment is { } act0
@@ -10521,7 +10521,7 @@ public static class SelfTest
                     "active segment reports the open file and its day");
 
                 // Silence (the suspension): after SilenceRoll the segment must be
-                // CLOSED — bounded at the true end time, gap left on the timeline.
+                // CLOSED, bounded at the true end time, gap left on the timeline.
                 Assert(Poll(() => !recorder.IsWriting), "silence closes the segment");
                 Assert(recorder.ActiveSegment == null, "no active segment once closed");
                 // Finalization happens on the writer's own thread: a classic MP4 is
@@ -10542,7 +10542,7 @@ public static class SelfTest
                 Assert(Poll(() =>
                 {
                     // IsWriting drops at Dispose, but the writer's thread may
-                    // still hold the handle — "file busy" means "not yet".
+                    // still hold the handle: "file busy" means "not yet".
                     byte[] bytes;
                     try { bytes = File.ReadAllBytes(first); }
                     catch (IOException) { return false; }
@@ -10669,7 +10669,7 @@ public static class SelfTest
                 Assert(boxes.SequenceEqual(new[] { "ftyp", "moov", "mdat" }), $"classic fast-start layout ({string.Join('·', boxes)})");
 
                 // The combined file parses with the same scanner: every sample
-                // indexed, duration preserved — proof the tables are coherent.
+                // indexed, duration preserved, proof the tables are coherent.
                 var re = Recording.Mp4Export.TryPlan(new[] { (outPath, 0.0) }, 0, 86400, out var reReason);
                 Assert(re != null, $"combined file parses ({reReason})");
                 AssertEq(re!.DurationMs, plan.DurationMs);
@@ -10745,7 +10745,7 @@ public static class SelfTest
 
         Test("loopback base for blazor circuits (reverse-proxy fix)", () =>
         {
-            // Wildcard binds are not dialable — the circuit's own-server calls
+            // Wildcard binds are not dialable: the circuit's own-server calls
             // must go to plain loopback; a concrete bind address is used as-is.
             AssertEq(Web.WebApi.LoopbackBase("0.0.0.0", 8655), "http://127.0.0.1:8655");
             AssertEq(Web.WebApi.LoopbackBase("::", 8655), "http://127.0.0.1:8655");
@@ -10764,7 +10764,7 @@ public static class SelfTest
             Assert(!chk.IsNewer("not-a-version"), "junk tag ignored");
 
             // Suffixed builds (test tars, prereleases) compare by their numeric
-            // prefix — a 0.8.5-events-test box must NOT be offered 0.8.4 as an
+            // prefix: a 0.8.5-events-test box must NOT be offered 0.8.4 as an
             // "update" (the regression: the suffix failed to parse, the running
             // version fell back to 0.0, and every release looked newer).
             var test = new Web.UpdateChecker("0.8.5-events-test");
@@ -10852,11 +10852,11 @@ public static class SelfTest
             static string? Url(string e) =>
                 new Neolink.Ai.AiSettings { Endpoint = e }.CompletionsUrl()?.ToString();
             // The user pastes an API base (LM Studio shows ".../v1"), a bare host
-            // or the full path — all must land on one /chat/completions URL.
+            // or the full path: all must land on one /chat/completions URL.
             AssertEq(Url("http://127.0.0.1:1234/v1") ?? "", "http://127.0.0.1:1234/v1/chat/completions");
             AssertEq(Url("http://127.0.0.1:1234/v1/") ?? "", "http://127.0.0.1:1234/v1/chat/completions");
             AssertEq(Url("http://127.0.0.1:1234/v1/chat/completions") ?? "", "http://127.0.0.1:1234/v1/chat/completions");
-            // A bare host gets the OpenAI-convention /v1 — LM Studio answers the
+            // A bare host gets the OpenAI-convention /v1: LM Studio answers the
             // unprefixed path with a 200 that isn't a completion (seen live).
             AssertEq(Url("http://127.0.0.1:1234") ?? "", "http://127.0.0.1:1234/v1/chat/completions");
             AssertEq(Url("https://api.example.com") ?? "", "https://api.example.com/v1/chat/completions");
@@ -10866,7 +10866,7 @@ public static class SelfTest
             Assert(Url("ftp://x") == null, "non-http scheme rejected");
             Assert(Url("not a url") == null, "junk rejected");
 
-            // Reasoning models leak <think> blocks; answers must come out clean —
+            // Reasoning models leak <think> blocks; answers must come out clean,
             // including an unterminated block from a truncated response.
             AssertEq(Neolink.Ai.AiDescriber.CleanAnswer(
                 "<think>hmm, a person\nmaybe two</think>A person walks to the door.") ?? "",
@@ -10882,8 +10882,8 @@ public static class SelfTest
             static string TextOf(string s) => Neolink.Ai.AiDescriber.SplitLevel(s).Text ?? "-";
             AssertEq(LevelOf("GREEN\nA cat walks by."), "green");
             AssertEq(TextOf("GREEN\nA cat walks by."), "A cat walks by.");
-            AssertEq(LevelOf("**RED** — a person is carrying a weapon."), "red");
-            AssertEq(TextOf("**RED** — a person is carrying a weapon."), "a person is carrying a weapon.");
+            AssertEq(LevelOf("**RED**: a person is carrying a weapon."), "red");
+            AssertEq(TextOf("**RED**: a person is carrying a weapon."), "a person is carrying a weapon.");
             AssertEq(LevelOf("Yellow: someone loiters by the car"), "yellow");
             AssertEq(LevelOf("A person walks to the door."), "-"); // no level line: text stays whole
             AssertEq(TextOf("A person walks to the door."), "A person walks to the door.");
@@ -10891,7 +10891,7 @@ public static class SelfTest
             AssertEq(TextOf("RED"), "-");
             // "Greenhouse" must not read as a GREEN verdict (word boundary).
             AssertEq(LevelOf("Greenhouse door left open."), "-");
-            // The "Threat level: X" spelling some models insist on — prefix only.
+            // The "Threat level: X" spelling some models insist on: prefix only.
             AssertEq(LevelOf("Threat level: YELLOW\nSomeone is loitering."), "yellow");
             AssertEq(TextOf("Threat level: YELLOW\nSomeone is loitering."), "Someone is loitering.");
             AssertEq(LevelOf("A man in a red jacket walks by."), "-"); // mid-sentence color ≠ verdict
@@ -10944,15 +10944,15 @@ public static class SelfTest
             // OpenAI/Anthropic paths, a numbered list on Ollama's flat array),
             // and the grounding rules pin the two clauses that matter: never
             // invent a return, trust a burned-in camera timestamp.
-            AssertEq(Neolink.Ai.AiDescriber.FrameLabel(2, 12, 4), "Frame 3 of 12 — +4s into the event:");
-            // Negative offsets are pre-roll and must say so in words — a bare
+            AssertEq(Neolink.Ai.AiDescriber.FrameLabel(2, 12, 4), "Frame 3 of 12: +4s into the event:");
+            // Negative offsets are pre-roll and must say so in words: a bare
             // "-3s" reads like a typo to the model.
             AssertEq(Neolink.Ai.AiDescriber.FrameLabel(0, 12, -3),
-                "Frame 1 of 12 — 3s BEFORE the trigger (pre-roll):");
+                "Frame 1 of 12: 3s BEFORE the trigger (pre-roll):");
             Assert(Neolink.Ai.AiSettings.GroundingProtocol.Contains("left the view")
                 && Neolink.Ai.AiSettings.GroundingProtocol.Contains("timestamp"),
                 "grounding rules cover the no-invented-return and camera-timestamp clauses");
-            // The default prompt turns the trigger labels into an assignment —
+            // The default prompt turns the trigger labels into an assignment:
             // find the subject, and honest absence beats an invented sighting.
             Assert(Neolink.Ai.AiSettings.DefaultPrompt.Contains("find it first")
                 && Neolink.Ai.AiSettings.DefaultPrompt.Contains("do not invent it"),
@@ -10979,7 +10979,7 @@ public static class SelfTest
             // The event's ENDING keeps its frames (live complaint 2026-07-27: the
             // car driving away at the close of an event never reached the model).
             // The closing-window merge appends the unpaced final keyframes, paying
-            // for the budget out of the MIDDLE — opening and ending both keep
+            // for the budget out of the MIDDLE: opening and ending both keep
             // full density.
             var kept = Enumerable.Range(0, 28)
                 .Select(i => (Utc: ct0.AddSeconds(i * 3), Data: new[] { (byte)i })).ToList();
@@ -11056,7 +11056,7 @@ public static class SelfTest
                 "historic captureSeconds JSON name loads as the frame cap; dead sampleMode is ignored");
 
             // Decimation never touches the protected opening window (the event's
-            // first seconds at 1 fps) — only the tail halves — and it starts at
+            // first seconds at 1 fps), only the tail halves, and it starts at
             // the SECOND-newest frame, so the freshest look always survives a
             // pass (deleting the newest was part of the missing-ending bug).
             var thin = Enumerable.Range(0, 12)
@@ -11072,7 +11072,7 @@ public static class SelfTest
             Neolink.Ai.AiCapture.ThinTail(classic, 0);
             AssertEq(string.Join(",", classic.Select(f => f.Jpeg[0])), "0,1,3,5,7");
 
-            // The embedded vision-test image must stay a decodable JPEG (SOI…EOI) —
+            // The embedded vision-test image must stay a decodable JPEG (SOI…EOI):
             // a corrupted constant would make every connection test fail confusingly.
             var testJpeg = Neolink.Ai.AiDescriber.TestJpeg();
             Assert(testJpeg.Length > 100 && testJpeg[0] == 0xFF && testJpeg[1] == 0xD8
@@ -11173,7 +11173,7 @@ public static class SelfTest
 
         Test("camera control: zoom/siren/floodlight wire formats", () =>
         {
-            // These bodies must match the reference Rust neolink structurally —
+            // These bodies must match the reference Rust neolink structurally:
             // element names, nesting and field values are the contract.
             var zf = Protocol.BcCameraCommands.BuildStartZoomFocus(0, "zoomPos", 27);
             AssertEq(zf.Name.LocalName, "StartZoomFocus");
@@ -11204,7 +11204,7 @@ public static class SelfTest
             AssertEq((long?)Protocol.BcCameraCommands.BuildAudioAlarmManual(0, on: false).Element("onOff") ?? -1, 0L);
 
             // Service-port table (msg 37): each element carries its number in a
-            // camelCase child of its own name, plus an optional enable flag —
+            // camelCase child of its own name, plus an optional enable flag,
             // missing enable means the firmware exposes no toggle (null).
             var svc = Streaming.CameraControl.MapServicePorts(new[]
             {
@@ -11231,8 +11231,8 @@ public static class SelfTest
             AssertEq(Protocol.BcCameraCommands.ParseSleepValue(nested), (bool?)true);
             AssertEq(Protocol.BcCameraCommands.ParseSleepValue(null), (bool?)null);
 
-            // Privacy support is gated on the login DeviceInfo advertising <sleep>
-            // — models without the feature still answer the state query.
+            // Privacy support is gated on the login DeviceInfo advertising <sleep>:
+            // models without the feature still answer the state query.
             var withSleep = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
                 "<DeviceInfo><resolution><width>1</width><height>1</height></resolution><sleep>0</sleep></DeviceInfo>"));
             var withoutSleep = Bc.Xml.DeviceInfoXml.Parse(System.Xml.Linq.XElement.Parse(
@@ -11312,7 +11312,7 @@ public static class SelfTest
             Assert(!byUid.SameDevice(new CameraConfig { Name = "c", Username = "admin" }), "entries without address or UID are not one device");
 
             // Capability gating: only a usable zoom range (maxPos > 0) advertises
-            // zoom — fixed-lens cameras answer with 0 (or not at all).
+            // zoom, fixed-lens cameras answer with 0 (or not at all).
             var range = System.Xml.Linq.XElement.Parse(
                 "<PtzZoomFocus version=\"1.1\"><channelId>0</channelId>" +
                 "<zoom><maxPos>32</maxPos><minPos>1</minPos><curPos>7</curPos></zoom>" +
@@ -11340,12 +11340,12 @@ public static class SelfTest
             // credentials (like snapshots), and that contract needs a file to serve.
             // Deliberately SHORTER than the vault's 8-byte magic sniff: a short read
             // at EOF used to leave the handle's pointer at the end, and the served
-            // stream wrote 0 of Length bytes — Kestrel answered 500 for a file that
+            // stream wrote 0 of Length bytes, Kestrel answered 500 for a file that
             // opens fine. FootageVault pins Position back to 0; this file keeps it so.
             File.WriteAllBytes(Path.Combine(evDir, "thumb.jpg"), new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
             // A real config file: /api/admin/config reads and describes it. The
             // stored camera lets the connection test be exercised the way the list
-            // row uses it — by name alone, resolving every field from config.json.
+            // row uses it, by name alone, resolving every field from config.json.
             // Port 9 is closed, so the dial fails fast instead of timing out.
             File.WriteAllText(Path.Combine(dir, "config.json"),
                 """{ "cameras": [ { "name": "storedcam", "username": "stored-admin", "password": "p", "address": "127.0.0.1:9" } ] }""");
@@ -11386,7 +11386,7 @@ public static class SelfTest
                     Notifier = new Neolink.Notifications.Notifier(
                         new Neolink.Notifications.NotificationStore(
                             dir, new Neolink.Notifications.SecretProtector(dir)), "selftest"),
-                    // The admin config endpoint reads the file — give it one.
+                    // The admin config endpoint reads the file: give it one.
                     Version = "0.0.0-selftest",
                     ConfigPath = Path.Combine(dir, "config.json"),
                     RestartRequested = () => { },
@@ -11411,7 +11411,7 @@ public static class SelfTest
                     catch when (DateTime.UtcNow < deadline) { Thread.Sleep(100); }
                 }
 
-                // Feature discovery — what ApiFeaturesInfo binds to.
+                // Feature discovery: what ApiFeaturesInfo binds to.
                 Assert(features.GetProperty("events").GetBoolean(), "events feature on (store wired)");
                 AssertEq(features.GetProperty("version").GetString()!, "0.0.0-selftest");
                 Assert(features.TryGetProperty("trickleSpeed", out _), "trickleSpeed exposed");
@@ -11422,7 +11422,7 @@ public static class SelfTest
                 Assert(!features.GetProperty("talk").GetBoolean(), "talk beta defaults off");
                 AssertEq((int)http.GetAsync("/api/talk?camera=apicam").Result.StatusCode, 403);
 
-                // Camera list — what ApiCamera/ApiStream bind to; open while no accounts exist.
+                // Camera list: what ApiCamera/ApiStream bind to; open while no accounts exist.
                 var cams = GetJson(http, "/api/cameras");
                 AssertEq(cams.GetArrayLength(), 2);
                 AssertEq(cams[0].GetProperty("name").GetString()!, "apicam");
@@ -11457,13 +11457,13 @@ public static class SelfTest
                 AssertEq(snapControl.Calls, 2); // maxAge=0 forces a fresh frame
 
                 // Staleness bound. With the camera no longer answering, the handler
-                // falls back to the cached frame — but only within maxStale. That
+                // falls back to the cached frame, but only within maxStale. That
                 // bound used to be absent, which is how a dashboard tile could paint
                 // an hours-old scene and then jump when the live feed arrived.
                 snapControl.Offline = true;
                 using (var snap = http.GetAsync("/api/cameras/snapcam/snapshot.jpg?maxAge=0&maxStale=60").Result)
                 {
-                    AssertEq((int)snap.StatusCode, 200); // seconds old — still useful
+                    AssertEq((int)snap.StatusCode, 200); // seconds old, still useful
                     Assert(snap.Headers.Contains("X-Snapshot-Stale"), "fallback frame is labelled stale");
                 }
                 // maxStale=0 makes even a one-second-old frame too old: better a
@@ -11475,7 +11475,7 @@ public static class SelfTest
                 // and so is a camera that does not exist.
                 AssertEq((int)http.GetAsync("/api/cameras/apicam/snapshot.jpg").Result.StatusCode, 404);
 
-                // SD download contract: the UI sends ?dl=1 — that must reach the
+                // SD download contract: the UI sends ?dl=1, that must reach the
                 // handler (the stub camera answers 404 "not supported"), never die
                 // in ASP.NET's bool binding as an empty 400 (field report: every
                 // SD download failed 400 with nothing in the logs).
@@ -11538,7 +11538,7 @@ public static class SelfTest
                     Assert(res.Headers.WwwAuthenticate.Any(h => h.Scheme == "Basic"),
                         "snapshot 401 challenges for Basic (HA generic camera flow)");
                 }
-                // RTSP Basic credentials open the snapshot even with accounts on —
+                // RTSP Basic credentials open the snapshot even with accounts on:
                 // the still-image twin of the rtsp:// stream URLs. Wrong password
                 // stays out.
                 string BasicHdr(string u, string p) =>
@@ -11657,8 +11657,8 @@ public static class SelfTest
                     "file-based key reports its path");
 
                 // Recording on/off from the UI. Disabling STASHES the section under
-                // recording_disabled instead of deleting it — retention and friends
-                // survive the off period — and the stash's path is reported so the
+                // recording_disabled instead of deleting it, retention and friends
+                // survive the off period, and the stash's path is reported so the
                 // enable form prefills. Enabling restores the stash, then applies
                 // the request on top. The storage path is write-probed on enable.
                 System.Text.Json.JsonElement AdminPut(string body, int expect)
@@ -11709,7 +11709,7 @@ public static class SelfTest
                     "a TCP test still complains about the address: "
                     + tcpNoAddr.GetProperty("message").GetString());
 
-                // Testing by NAME alone — what the camera-list row sends, so a camera
+                // Testing by NAME alone: what the camera-list row sends, so a camera
                 // can be checked without opening its editor or touching a field. Every
                 // field must come from config.json: reaching the dial at all proves
                 // the address and credentials resolved (the port is closed, so it
@@ -11978,7 +11978,7 @@ public static class SelfTest
                     "stored opt-in survives the channel going away");
                 using (var res = RecPost("""{"webhookEvents":false}""")) AssertEq((int)res.StatusCode, 200);
 
-                // The webhook test endpoint reports failure as a body, 502 — the
+                // The webhook test endpoint reports failure as a body, 502: the
                 // UI shows the reason, nothing throws.
                 using (var req = new HttpRequestMessage(HttpMethod.Post,
                     $"/api/admin/notifications/webhook-test{tokenQ}")
@@ -12125,7 +12125,7 @@ public static class SelfTest
             var clip = Environment.GetEnvironmentVariable("NEOLINK_FACE_CLIP");
             if (string.IsNullOrEmpty(clip) || !File.Exists(clip) || Ffmpeg.ExePath is not { } ffmpeg)
             {
-                Console.WriteLine("    (NEOLINK_FACE_CLIP unset or no ffmpeg — skipped)");
+                Console.WriteLine("    (NEOLINK_FACE_CLIP unset or no ffmpeg, skipped)");
                 return;
             }
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -12226,7 +12226,7 @@ public static class SelfTest
             Directory.CreateDirectory(dir);
             try
             {
-                // allowDownload: false — a test suite must never reach the network,
+                // allowDownload: false, a test suite must never reach the network,
                 // and without it this would pull 35 MB.
                 var assets = new Detect.DetectAssets(dir, allowDownload: false);
                 AssertEq(assets.Current().State, "missing");
@@ -12254,7 +12254,7 @@ public static class SelfTest
                 Assert(!fresh.DetailedReady, "the bigger model is absent until fetched");
                 AssertEq(fresh.DetailedStatus().State, "missing");
 
-                // Switched off, the files go back to the disk they came from — but
+                // Switched off, the files go back to the disk they came from, but
                 // only the ones this server downloaded.
                 var state = Path.Combine(dir, "detect-assets");
                 Directory.CreateDirectory(state);
@@ -12341,7 +12341,7 @@ public static class SelfTest
             try
             {
                 var sleepy = new DeterrentControl("Sleepy") { Offline = true };
-                // Advertises a siren but rejects the command — a refusal, not an outage.
+                // Advertises a siren but rejects the command: a refusal, not an outage.
                 var refuser = new DeterrentControl("Refuser", light: false) { RefusesSiren = true };
                 var bare = new DeterrentControl("Bare", siren: false, light: false);
                 var cams = new List<Notifications.EmergencyCamera>
@@ -12590,7 +12590,7 @@ public static class SelfTest
                 AssertEq(mode.Issues.Count, 0);
 
                 // Disarm while it is away again: the restore must be owed, retried,
-                // and completed — not forgotten because nothing else was pending.
+                // and completed, not forgotten because nothing else was pending.
                 dark.Offline = true;
                 mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
                 Assert(!dark.Privacy, "still unreachable, so not yet restored");
@@ -12690,7 +12690,7 @@ public static class SelfTest
                 // now would cut the only route back to a siren that is still going.
                 cam.Offline = true;
                 mode.SetEnabledAsync(false, default).GetAwaiter().GetResult();
-                Assert(cam.SirenState == true, "still sounding — it could not be reached");
+                Assert(cam.SirenState == true, "still sounding: it could not be reached");
                 Assert(!suspended, "so it is deliberately left connected for the retry");
 
                 cam.Offline = false;
@@ -12731,7 +12731,7 @@ public static class SelfTest
                     "armed sends even though the camera never opted in");
                 Assert(ch.HasFlag(Notifications.AlertChannels.Email), "the configured channel is forced on");
                 Assert(!ch.HasFlag(Notifications.AlertChannels.Webhook),
-                    "an unconfigured channel stays off — armed cannot invent a destination");
+                    "an unconfigured channel stays off: armed cannot invent a destination");
                 Assert(emailer.Claim(rec, s, out _, out _, out _),
                     "the cooldown does not apply while armed: every detection sends");
 
@@ -12772,7 +12772,7 @@ public static class SelfTest
                 var offline = DateTime.UtcNow;
                 events.Create("Cam", offline.AddMinutes(-5), new[] { "person" });
 
-                // The decision itself, both ways — a test that only ever expects
+                // The decision itself, both ways: a test that only ever expects
                 // "no images" would still pass with the whole feature deleted.
                 var off = new Notifications.NotificationSettings();
                 var on = new Notifications.NotificationSettings
@@ -13058,7 +13058,7 @@ public static class SelfTest
             res.Content.ReadAsStringAsync().GetAwaiter().GetResult());
     }
 
-    /// <summary>An always-online camera that supports nothing — the API test only
+    /// <summary>An always-online camera that supports nothing: the API test only
     /// needs a control surface to exist, not to do anything.</summary>
     /// <summary>A stub that records what the last LedState write asked for, so the
     /// HA status-LED switch can be checked against the exact field it must drive.</summary>
@@ -13529,7 +13529,7 @@ public static class SelfTest
     {
         public int Calls;
         /// <summary>Set to make the camera stop answering, so the handler falls back
-        /// to its cached frame — the path the maxStale bound governs.</summary>
+        /// to its cached frame: the path the maxStale bound governs.</summary>
         public bool Offline;
 
         public override Task<byte[]?> SnapshotAsync(CancellationToken ct)
@@ -13537,7 +13537,7 @@ public static class SelfTest
             Interlocked.Increment(ref Calls);
             if (Offline) throw new Streaming.CameraOfflineException(CameraName);
             var jpeg = new byte[200];
-            jpeg[0] = 0xFF; jpeg[1] = 0xD8; // SOI — enough to pass the sanity check
+            jpeg[0] = 0xFF; jpeg[1] = 0xD8; // SOI: enough to pass the sanity check
             return Task.FromResult<byte[]?>(jpeg);
         }
     }
@@ -13600,7 +13600,7 @@ public static class SelfTest
     }
 
     /// <summary>Wraps the client's connection stream so the test can stall a write:
-    /// while <see cref="Stall"/> is set, WriteAsync parks on the token it was given —
+    /// while <see cref="Stall"/> is set, WriteAsync parks on the token it was given:
     /// exactly what a backpressured socket write looks like. Real kernels buffer
     /// too much to reproduce this with sockets alone (a 1 GB loopback send
     /// "completes" unread).</summary>
@@ -13665,7 +13665,7 @@ public static class SelfTest
     /// continuing to write (pings, later publishes) desyncs the broker's parser
     /// until it kicks the client with "oversize packet" (observed in the field
     /// against the HA Mosquitto add-on, as a clockwork ~2-minute disconnect loop).
-    /// The proof of closure is the stub broker seeing EOF — the buggy behavior
+    /// The proof of closure is the stub broker seeing EOF: the buggy behavior
     /// left the socket open and kept writing into it.</summary>
     private static async Task RunMqttSilentBroker()
     {
@@ -13736,7 +13736,7 @@ public static class SelfTest
             for (int i = 0; i < 250 && !client.IsConnected; i++) await Task.Delay(20);
             Assert(client.IsConnected, "client connected to the stub broker");
 
-            // A packet over the broker's size limit must be DROPPED, not sent —
+            // A packet over the broker's size limit must be DROPPED, not sent:
             // Mosquitto 2.1+ answers an oversized publish by disconnecting the
             // client (a 4K snapshot would cycle the shared connection every 2 min).
             bool sent = await client.PublishAsync("t/big", new byte[32 * 1024], retain: false, CancellationToken.None);
@@ -13765,7 +13765,7 @@ public static class SelfTest
             Assert(!ok, "stalled publish reports failure");
             for (int i = 0; i < 250 && client.IsConnected; i++) await Task.Delay(20);
             Assert(!client.IsConnected, "connection reads as down after a mid-frame stall");
-            // The socket must actually close (broker sees EOF) — not linger half-open
+            // The socket must actually close (broker sees EOF), not linger half-open
             // collecting desynced pings until the broker kicks it as "oversize packet".
             int n = await ns.ReadAsync(buf).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
             AssertEq(n, 0);
@@ -13834,8 +13834,8 @@ public static class SelfTest
 
     /// <summary>End-to-end transport test: a loopback "camera" performs the UDP
     /// discovery handshake, then sends a real BC message split across two data
-    /// packets delivered OUT OF ORDER. Proves the whole path — handshake, inbound
-    /// reorder + reassembly, pipe → BcCodec framing, subscription dispatch — plus
+    /// packets delivered OUT OF ORDER. Proves the whole path, handshake, inbound
+    /// reorder + reassembly, pipe → BcCodec framing, subscription dispatch, plus
     /// that the client's own send is received and acked (no retransmit storm).</summary>
     private static async Task RunBcUdpTransport()
     {
@@ -13849,7 +13849,7 @@ public static class SelfTest
         int clientHbSameTid = 0, clientHbOtherTid = 0;
         int releasedOrphan = 0; // C2D_DISC for the duplicate session (did 8)
         int kaReplies = 0;      // answers to the camera's BC keepalive (msg 234)
-        uint hsTid = 0; // the tid of the C2D_C the mock accepted — the session's tid
+        uint hsTid = 0; // the tid of the C2D_C the mock accepted: the session's tid
         // Phase gates so the mock injects the duplicate-session traffic only after
         // the main body has finished its first round of asserts.
         var phase2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -13867,14 +13867,14 @@ public static class SelfTest
 
         // LongRunning = a dedicated thread NOW. Task.Run queues to the thread
         // pool, and under load (a busy dev box, a saturated CI runner) the mock
-        // started SECONDS late — after the client's handshake window had already
+        // started SECONDS late, after the client's handshake window had already
         // expired. The dedicated thread posts the first receive immediately; the
         // async body migrates to the pool only after that, which is harmless.
         var mock = Task.Factory.StartNew(async () =>
         {
             System.Net.IPEndPoint? client = null;
             int cid = 0;
-            // 1. Handshake: accept the C2D_C, reply D2C_C_R rsp 0 — echoing the
+            // 1. Handshake: accept the C2D_C, reply D2C_C_R rsp 0, echoing the
             //    request's tid, as the real firmware does (the camera keys the
             //    session to it).
             while (!cts.IsCancellationRequested && client == null)
@@ -13885,7 +13885,7 @@ public static class SelfTest
                 {
                     // Windows surfaces a bounced SEND (ICMP port-unreachable) as a
                     // SocketException on the next RECEIVE. For UDP that is noise,
-                    // not death — a mock that dies of it fails the handshake with
+                    // not death: a mock that dies of it fails the handshake with
                     // a message blaming the network.
                     Log.Debug($"udptest: mock receive reset ({ex.SocketErrorCode}); continuing");
                     continue;
@@ -13901,7 +13901,7 @@ public static class SelfTest
             }
             if (client == null) return;
 
-            // 2. Send D2C_T — the camera's session-confirm request; the client must
+            // 2. Send D2C_T: the camera's session-confirm request; the client must
             //    reply C2D_A or the camera would recycle the session.
             var d2ct = "<P2P><D2C_T><sid>42</sid><conn>local</conn><cid>" +
                        $"{cid}</cid><did>7</did></D2C_T></P2P>";
@@ -13919,7 +13919,7 @@ public static class SelfTest
             // 3b. Duplicate-session scenario (phase-gated): real battery cameras run
             //     one session per hello they answer, and a duplicate's paperwork
             //     arrives on the same socket. The client must release the duplicate,
-            //     ignore ITS disconnect, keep our stream alive — and still honor a
+            //     ignore ITS disconnect, keep our stream alive, and still honor a
             //     disconnect addressed to OUR did.
             _ = Task.Run(async () =>
             {
@@ -13988,7 +13988,7 @@ public static class SelfTest
                 }
                 else if (BcUdp.TryParseAck(r.Buffer, out _, out _, out _, out _, out _))
                 {
-                    clientAckPackets++; // the continuous ack timer — the keepalive the camera needs
+                    clientAckPackets++; // the continuous ack timer: the keepalive the camera needs
                 }
             }
         }, cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
@@ -14013,11 +14013,11 @@ public static class SelfTest
         Assert(clientDataPackets > 0, "camera received the client's UDP data packet");
 
         // The continuous ack timer must fire on its own (the keepalive/flow-control
-        // the camera needs to keep the session open) — not just when data arrives.
+        // the camera needs to keep the session open), not just when data arrives.
         for (int i = 0; i < 40 && clientAckPackets < 3; i++) await Task.Delay(50, cts.Token);
         Assert(clientAckPackets >= 3, "client sends acks continuously (keepalive), not only on receipt");
 
-        // The client must reply C2D_A to the camera's D2C_T (session confirm) —
+        // The client must reply C2D_A to the camera's D2C_T (session confirm),
         // without it the real camera recycles the session every ~8 s.
         for (int i = 0; i < 40 && clientC2dA == 0; i++) await Task.Delay(50, cts.Token);
         Assert(clientC2dA > 0, "client replies C2D_A to D2C_T (confirms the session)");
@@ -14033,7 +14033,7 @@ public static class SelfTest
         // Duplicate-session handling: the camera answers a D2C_C_R for a session
         // that is not ours (did 8) and a D2C_DISC for another session (did 9). The
         // client must release the duplicate, ignore the foreign disconnect, and the
-        // stream must keep working — a duplicate's death notice killing a healthy
+        // stream must keep working: a duplicate's death notice killing a healthy
         // stream was the ~8 s reconnect loop on real battery cameras.
         using (var sub = conn.Subscribe(Neolink.Bc.BcConstants.MsgIdPing))
         {
@@ -14044,8 +14044,8 @@ public static class SelfTest
         for (int i = 0; i < 40 && releasedOrphan == 0; i++) await Task.Delay(50, cts.Token);
         Assert(releasedOrphan > 0, "client releases the duplicate session with C2D_DISC (did 8)");
 
-        // The camera's BC keepalive (msg 234) must be ANSWERED — echoed msgNum,
-        // response 200 — or real battery firmware declares the client dead and
+        // The camera's BC keepalive (msg 234) must be ANSWERED, echoed msgNum,
+        // response 200, or real battery firmware declares the client dead and
         // recycles the session with a clean D2C_DISC after ~8 s.
         for (int i = 0; i < 60 && kaReplies == 0; i++) await Task.Delay(50, cts.Token);
         Assert(kaReplies > 0, "client answers the camera's UDP keepalive (msg 234, resp 200, echoed msgNum)");
@@ -14095,7 +14095,7 @@ public static class SelfTest
                 {
                     // A dead mock is indistinguishable from a dead network; say why.
                     // (Windows delivers ICMP port-unreachable as a receive-side
-                    // SocketException on UDP — a straggler sent to a closed peer
+                    // SocketException on UDP, a straggler sent to a closed peer
                     // must not end the mock.)
                     Log.Debug($"udptest: mock camera receive error: {ex.Message}");
                     if (ex is System.Net.Sockets.SocketException) continue;
@@ -14113,7 +14113,7 @@ public static class SelfTest
             }
         }, cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
 
-        // logTag: every discovery reply logs at Debug — run the selftest with
+        // logTag: every discovery reply logs at Debug, run the selftest with
         // NEOLINK_LOG=debug when this assertion ever flakes to see the wire.
         // 8 s, not 3: the reply itself is instant, but the responder's async
         // continuations still ride the thread pool, and this assertion exists to
@@ -14121,7 +14121,7 @@ public static class SelfTest
         Assert(await UdpDiscovery.IsReachableAsync("127.0.0.1", uid, TimeSpan.FromSeconds(8), cts.Token,
                 logTag: "udptest", camPort: camPort),
             "liveness probe is true the moment the camera answers");
-        // The probe must release the session it just created — a C2D_DISC — or the
+        // The probe must release the session it just created, a C2D_DISC, or the
         // camera would keep retrying D2C_C_R for ~9 s after every 5 s poll.
         for (int i = 0; i < 40 && gotDisc == 0; i++) await Task.Delay(50);
         Assert(gotDisc > 0, "wake probe releases its session with a polite C2D_DISC");
@@ -14136,7 +14136,7 @@ public static class SelfTest
 
     /// <summary>Bind a loopback UDP socket on an EPHEMERAL port (read it back from
     /// LocalEndPoint). The mock cameras used to take the real Baichuan port 2015
-    /// with ReuseAddress — and on a dev box where a live Neolink server's own UDP
+    /// with ReuseAddress, and on a dev box where a live Neolink server's own UDP
     /// machinery touches 2015, both binds "succeeded" and the OS delivered the
     /// test's packets to the other socket: intermittent handshake failures in
     /// waves matching the live server's wake scans. An ephemeral port cannot

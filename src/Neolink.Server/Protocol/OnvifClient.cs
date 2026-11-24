@@ -24,7 +24,7 @@ public sealed record OnvifImagingRanges(
 /// A small ONVIF client covering just the Imaging service: brightness, contrast,
 /// color saturation, sharpness, the IR-cut (day/night) filter and wide-dynamic-range.
 /// It exists as a STANDARDS-BASED FALLBACK for Reolink models with no HTTP CGI API
-/// (the Lumus line, some Argus) — the camera already streams over Baichuan, and the
+/// (the Lumus line, some Argus): the camera already streams over Baichuan, and the
 /// picture sliders that would ride the HTTP API ride ONVIF instead. Strictly
 /// additive: the caller only reaches for it when the HTTP path has nothing, so a
 /// healthy HTTP camera never touches this code.
@@ -46,7 +46,7 @@ public sealed partial class OnvifClient : IDisposable
     private const string NsImaging = "http://www.onvif.org/ver20/imaging/wsdl";
     private const string NsPtz = "http://www.onvif.org/ver20/ptz/wsdl";
     // Media2: the successor to the ver10 media service. Newer firmware serves it
-    // alongside ver10, and some serves ONLY it — so it is the fallback, never the
+    // alongside ver10, and some serves ONLY it, so it is the fallback, never the
     // first choice, and a camera that answers ver10 (every Reolink) never sees it.
     private const string NsMedia2 = "http://www.onvif.org/ver20/media/wsdl";
     private const string NsEvents = "http://www.onvif.org/ver10/events/wsdl";
@@ -85,7 +85,7 @@ public sealed partial class OnvifClient : IDisposable
     private string MediaUrl => _media2 ? _media2Url! : _mediaUrl!;
     private string MediaNs => _media2 ? NsMedia2 : NsMedia;
     /// <summary>The prefix CallAsync binds the media namespace to, for use inside
-    /// request bodies — they name their own child elements with it.</summary>
+    /// request bodies: they name their own child elements with it.</summary>
     private string Mp => _media2 ? "tr2" : "trt";
     private string? _ptzUrl;
     private string? _videoSourceToken;
@@ -109,7 +109,7 @@ public sealed partial class OnvifClient : IDisposable
 
     /// <param name="address">"host", "host:port", or a full "http(s)://host[:port]"
     /// URL. A bare host (no explicit port) is probed on Reolink's ONVIF port 8000
-    /// FIRST, then port 80 — Reolink serves ONVIF natively on 8000, and port 80
+    /// FIRST, then port 80: Reolink serves ONVIF natively on 8000, and port 80
     /// (the HTTP/CGI web port) only half-proxies it on some firmwares (the device
     /// service answers but the media service 502s or times out). An explicit port
     /// or full URL is taken at its word.</param>
@@ -128,7 +128,7 @@ public sealed partial class OnvifClient : IDisposable
         _generic = generic;
         // A login inside the address wins: it is the one place a camera whose ONVIF
         // account differs from its streaming one can be given the right credentials,
-        // and it is the field the settings UI already offers. Generic cameras only —
+        // and it is the field the settings UI already offers. Generic cameras only:
         // a Reolink signs in with its own login, as it always has.
         var (bare, user, pass) = generic ? SplitCredentials(address) : (address, null, null);
         _bare = bare;
@@ -159,13 +159,13 @@ public sealed partial class OnvifClient : IDisposable
                 RemoteCertificateValidationCallback = (_, _, _, _) => true,
             };
         // No client-wide timeout: each call sets its own, because they differ by an
-        // order of magnitude — a settings read must not hang, while an event long
+        // order of magnitude, a settings read must not hang, while an event long
         // poll asks the camera to hold the request until something happens.
         _http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
     /// <summary>Splits "user:pass@" off an address, returning it separately. Only a
-    /// full URL can carry one — a bare "host:port" has no room for it without being
+    /// full URL can carry one: a bare "host:port" has no room for it without being
     /// ambiguous. Percent-escapes are decoded, so a password with an @ or a / in it
     /// survives the URL it had to be written into.</summary>
     internal static (string Address, string? User, string? Pass) SplitCredentials(string address)
@@ -295,7 +295,7 @@ public sealed partial class OnvifClient : IDisposable
             bool awaitingEcho = _irCutWritten != null && _irCutStaleEcho == null;
             var irCut = ReconcileIrCut(imaging.IrCutFilter, ref _irCutWritten, ref _irCutStaleEcho);
             if (awaitingEcho && _irCutStaleEcho != null)
-                Log.Info($"{_tag}: ONVIF still reports IR-cut {_irCutStaleEcho} after a confirmed write of {_irCutWritten} — showing the written value");
+                Log.Info($"{_tag}: ONVIF still reports IR-cut {_irCutStaleEcho} after a confirmed write of {_irCutWritten}: showing the written value");
             return imaging with { IrCutFilter = irCut };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -332,7 +332,7 @@ public sealed partial class OnvifClient : IDisposable
     }
 
     /// <summary>Reads the camera's clock and records how far it is from ours. Asked
-    /// without authentication — ONVIF answers this one call to anyone, precisely so
+    /// without authentication: ONVIF answers this one call to anyone, precisely so
     /// a client can learn the correction before its first authenticated request.
     /// A camera that will not say leaves the correction as it was.</summary>
     private async Task LearnClockAsync(CancellationToken ct)
@@ -349,15 +349,15 @@ public sealed partial class OnvifClient : IDisposable
         var corrects = Math.Abs(skew.TotalSeconds) > 5;
         _clockSkew = corrects ? skew : TimeSpan.Zero;
         // Said once when a correction starts, and again only if it has since moved a
-        // lot — an hourly re-read of a steadily drifting clock is not news each time.
+        // lot: an hourly re-read of a steadily drifting clock is not news each time.
         if (corrects && (Math.Abs(previous.TotalSeconds) <= 5
                          || Math.Abs((skew - previous).TotalSeconds) > 30))
-            Log.Info($"{_tag}: the camera's clock is {skew.TotalSeconds:0}s from this server's — " +
+            Log.Info($"{_tag}: the camera's clock is {skew.TotalSeconds:0}s from this server's, " +
                      "ONVIF requests are stamped in the camera's time so it accepts them.");
     }
 
     /// <summary>A camera with no working time sync keeps drifting, and a correction
-    /// learned at start-up is wrong a few weeks later. Re-read this often — one
+    /// learned at start-up is wrong a few weeks later. Re-read this often: one
     /// small unauthenticated request, far cheaper than the silent auth failures a
     /// stale correction produces.</summary>
     private static readonly TimeSpan ClockRecheck = TimeSpan.FromHours(1);
@@ -367,7 +367,7 @@ public sealed partial class OnvifClient : IDisposable
     /// <summary>The video source the imaging service is keyed on, fetched now if
     /// discovery did not get it. Discovery succeeds as soon as the DEVICE service
     /// answers, so a GetVideoSources that timed out during it would otherwise leave
-    /// the token null for the rest of the run — and a Reolink Lumus, whose only
+    /// the token null for the rest of the run, and a Reolink Lumus, whose only
     /// picture settings are these, with none at all until Neolink restarts. Asking
     /// again here costs one round trip, only while it is missing. Caller holds _gate.</summary>
     private async Task<bool> EnsureVideoSourceAsync(CancellationToken ct)
@@ -383,7 +383,7 @@ public sealed partial class OnvifClient : IDisposable
             _sourceCount = Math.Max(_sourceCount, VideoSourceCount(sources));
             // GetVideoSources is a ver10 call; a camera that speaks only Media2 names
             // its source inside each profile's VideoSource configuration instead. Only
-            // consulted once the camera is KNOWN to be Media2 — a ver10 camera whose
+            // consulted once the camera is KNOWN to be Media2: a ver10 camera whose
             // GetVideoSources merely timed out must not start probing for a dialect it
             // does not speak (a Reolink never reads its profiles here at all).
             if (_videoSourceToken == null && _media2)
@@ -415,7 +415,7 @@ public sealed partial class OnvifClient : IDisposable
     private static readonly TimeSpan RangesRetry = TimeSpan.FromSeconds(60);
 
     /// <summary>The video source the imaging calls address: the preferred profile's
-    /// when known, else the device's first — which on an NVR is channel 1's.</summary>
+    /// when known, else the device's first, which on an NVR is channel 1's.</summary>
     private string ImagingSourceToken =>
         PreferredProfile?.SourceToken ?? _videoSourceToken!;
 
@@ -425,7 +425,7 @@ public sealed partial class OnvifClient : IDisposable
     {
         // Cached success is permanent for the run; a failure only pauses re-probing
         // for a cooldown (a camera rebooting during the first probe must not be
-        // written off until Neolink restarts) — but not so often it stalls callers.
+        // written off until Neolink restarts), but not so often it stalls callers.
         if (_ready)
         {
             // Re-read on a schedule, and sooner after a refusal: a camera whose clock
@@ -514,13 +514,13 @@ public sealed partial class OnvifClient : IDisposable
         if (_hasImaging) have.Add("imaging");
         if (_eventsUrl != null) have.Add("events");
         if (_videoSourceToken != null) have.Add($"video source '{_videoSourceToken}'");
-        Log.Info($"{_tag}: ONVIF ready at {Authority(candidate)} — " +
+        Log.Info($"{_tag}: ONVIF ready at {Authority(candidate)}: " +
                  (have.Count > 0 ? string.Join(", ", have) : "device service only"));
         // A device that answers its service table and then offers nothing
         // behind it is the case that used to be reported as an outright
         // failure, complete with the advice that fixes it. Discovery now
         // succeeds there (device information is still worth having), so
-        // the advice is given here — as what it is: there is no retry
+        // the advice is given here, as what it is: there is no retry
         // coming, and "unavailable, retrying in 5 min" right after "ready"
         // would be wrong twice over.
         if (_authRejected && !_emptyLogged)
@@ -530,7 +530,7 @@ public sealed partial class OnvifClient : IDisposable
             _emptyLogged = true;
             Log.Info($"{_tag}: ONVIF answered but REJECTED the login, so its settings and detections " +
                      "stay unavailable. Check the camera's ONVIF user and password (they may differ from " +
-                     "the streaming login — a full URL in 'onvif_address' can carry its own, " +
+                     "the streaming login: a full URL in 'onvif_address' can carry its own, " +
                      "\"http://user:pass@host/onvif/device_service\"), and that the user has operator rights.");
         }
         else if (have.Count == 0 && !_emptyLogged)
@@ -585,7 +585,7 @@ public sealed partial class OnvifClient : IDisposable
 
     /// <summary>One candidate endpoint's discovery: the device's service table, plus
     /// the video source the imaging service is keyed on. Succeeds as soon as the
-    /// DEVICE service answers — imaging, PTZ and the media profiles are each optional
+    /// DEVICE service answers: imaging, PTZ and the media profiles are each optional
     /// and are read LAZILY by whoever wants them, so a Reolink camera (whose only use
     /// of ONVIF is the picture-settings fallback) pays exactly the round trips it used
     /// to and not one more.</summary>
@@ -593,7 +593,7 @@ public sealed partial class OnvifClient : IDisposable
     /// port is listening; the optional calls after them run under <paramref name="ct"/>.</param>
     private async Task<bool> TryDiscoverAsync(CancellationToken deviceCt, CancellationToken ct)
     {
-        // 0. The camera's clock, FIRST and unauthenticated — every request after
+        // 0. The camera's clock, FIRST and unauthenticated: every request after
         //    this one carries a timestamp the camera checks against its own.
         //    Generic cameras only: a Reolink's picture fallback has always been
         //    stamped in this server's time and has worked that way.
@@ -617,7 +617,7 @@ public sealed partial class OnvifClient : IDisposable
         if (sources != null) _sourceCount = VideoSourceCount(sources);
         // For a Reolink the picture fallback IS the use of ONVIF, and it is keyed on
         // the video source: without one there is nothing to be ready for. Failing
-        // here keeps the cooldown and the next port's turn, exactly as before — a
+        // here keeps the cooldown and the next port's turn, exactly as before: a
         // port that half-proxies ONVIF must not be settled on for the whole run.
         if (!_generic && _videoSourceToken == null) return false;
 
@@ -732,10 +732,10 @@ public sealed partial class OnvifClient : IDisposable
             _failLogged = true;
             var tried = _candidates.Length > 1 ? $" (tried {string.Join(", ", _candidates.Select(Authority))})" : "";
             Log.Info(_reportedOff
-                ? $"{_tag}: ONVIF imaging fallback unavailable — the camera reports ONVIF as disabled. If this " +
+                ? $"{_tag}: ONVIF imaging fallback unavailable: the camera reports ONVIF as disabled. If this " +
                   "camera has no Reolink HTTP API, enable ONVIF in the PORTS tab of its settings (or Reolink app > " +
                   $"Settings > Network > Advanced > Port Settings). Retrying in {retryIn.TotalMinutes:0} min."
-                : $"{_tag}: ONVIF imaging fallback unavailable — {reason}{tried}. If this camera has no Reolink " +
+                : $"{_tag}: ONVIF imaging fallback unavailable: {reason}{tried}. If this camera has no Reolink " +
                   "HTTP API, check that ONVIF is enabled on it (the PORTS tab of its settings, or Reolink app > " +
                   "Settings > Network > Advanced > Port Settings), and if ONVIF is on another port set 'onvif_address' " +
                   $"(e.g. \"{HostOf(_deviceUrl)}:8000\"). Retrying in {retryIn.TotalMinutes:0} min.");
@@ -743,7 +743,7 @@ public sealed partial class OnvifClient : IDisposable
         else if (!_failLogged)
         {
             _failLogged = true;
-            Log.Info($"{_tag}: ONVIF unavailable — {reason}. Check that ONVIF is enabled on the camera " +
+            Log.Info($"{_tag}: ONVIF unavailable: {reason}. Check that ONVIF is enabled on the camera " +
                      "(a Reolink: app > Settings > Network > Advanced > ONVIF/Port Settings; anything else: " +
                      "its own web page), and if ONVIF is on a port other than " +
                      $"{string.Join("/", GenericProbePorts)} set 'onvif_address' " +
@@ -809,7 +809,7 @@ public sealed partial class OnvifClient : IDisposable
     /// <param name="authenticate">False sends no WS-Security header at all. Only the
     /// clock read uses it: it exists to learn the correction every OTHER request
     /// needs, so it cannot itself carry a timestamp the camera might reject.</param>
-    /// <param name="extraHeaders">Further SOAP header blocks, verbatim — the
+    /// <param name="extraHeaders">Further SOAP header blocks, verbatim: the
     /// reference parameters a subscription manager must be addressed with.</param>
     private async Task<XElement?> CallAsync(string url, string opNamespace, string op, string innerBody,
         CancellationToken ct, TimeSpan? timeout = null, string? wsaAction = null, bool authenticate = true,
@@ -856,7 +856,7 @@ public sealed partial class OnvifClient : IDisposable
             if (text.Root != null)
             {
                 _plainText = true;
-                Log.Info($"{_tag}: the camera accepts its ONVIF password only in plain text — signing in that way");
+                Log.Info($"{_tag}: the camera accepts its ONVIF password only in plain text: signing in that way");
                 return text;
             }
         }
@@ -886,7 +886,7 @@ public sealed partial class OnvifClient : IDisposable
             : TimeSpan.FromMinutes(Math.Min(60, 15 << Math.Min(2, _pauses - 2)));
         _loginPauseUntil = DateTime.UtcNow + pause;
         if (_pauses >= 2)
-            Log.Info($"{_tag}: the camera refused the ONVIF login again — waiting {pause.TotalMinutes:0} min before " +
+            Log.Info($"{_tag}: the camera refused the ONVIF login again: waiting {pause.TotalMinutes:0} min before " +
                      "signing in again, so it does not lock Neolink out. Check the camera's ONVIF user and password.");
     }
 
@@ -915,7 +915,7 @@ public sealed partial class OnvifClient : IDisposable
             : "tds";
         // Sent WITHOUT mustUnderstand. A camera that implements WS-Addressing reads
         // these either way; one that does not would be obliged by mustUnderstand to
-        // FAULT the whole request over headers it could otherwise have ignored —
+        // FAULT the whole request over headers it could otherwise have ignored:
         // turning "works, loosely" into "no events at all".
         var addressing = wsaAction == null ? "" :
             $"<wsa:To xmlns:wsa=\"{NsWsa}\">{Esc(url)}</wsa:To>" +
@@ -950,7 +950,7 @@ public sealed partial class OnvifClient : IDisposable
         catch (OperationCanceledException) { _lastError = $"{op}: no reply within {limit.TotalSeconds:0}s ({Safe(url)})"; return new Reply(null, 0); }
         catch (HttpRequestException ex) when (ex.HttpRequestError == HttpRequestError.ResponseEnded)
         {
-            // Connected, then the camera hung up without a reply — what some do to an idle event poll.
+            // Connected, then the camera hung up without a reply: what some do to an idle event poll.
             _lastError = $"{op}: the camera closed the connection ({Safe(url)})";
             return new Reply(null, 0, HungUp: true);
         }
@@ -958,7 +958,7 @@ public sealed partial class OnvifClient : IDisposable
 
         XElement? root = null;
         try { root = XDocument.Parse(text).Root; }
-        catch (System.Xml.XmlException) { /* not XML — reported below */ }
+        catch (System.Xml.XmlException) { /* not XML: reported below */ }
         if (root?.Name.LocalName == "Envelope") _onvifConfirmed = true; // a SOAP endpoint, not just a web server
         // A SOAP fault is the camera saying no, whatever HTTP status it rode in on (some
         // firmwares send every fault as 200). A Reolink's fallback keeps taking a 200 as a yes.

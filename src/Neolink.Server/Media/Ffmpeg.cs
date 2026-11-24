@@ -30,7 +30,7 @@ public static class Ffmpeg
             {
                 if (File.Exists(envOverride)) return envOverride;
                 Log.Warn($"NEOLINK_FFMPEG points at '{envOverride}', which does not " +
-                         "exist — falling back to the PATH scan");
+                         "exist: falling back to the PATH scan");
             }
             catch { /* unusable override: same fallback */ }
         }
@@ -51,7 +51,7 @@ public static class Ffmpeg
     /// <summary>Runs ffmpeg with stdin fed from <paramref name="stdinChunks"/> and
     /// stdout collected whole; the process is killed at <paramref name="deadline"/>
     /// (a wedged ffmpeg must not stall its caller). stderr rides along for
-    /// diagnostics — callers decide what a failure means.</summary>
+    /// diagnostics: callers decide what a failure means.</summary>
     internal static async Task<(byte[] Out, string Err)> RunAsync(string ffmpeg,
         IReadOnlyList<string> args, IReadOnlyList<byte[]> stdinChunks,
         TimeSpan deadline, CancellationToken ct)

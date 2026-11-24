@@ -115,7 +115,7 @@ html, body {
     box-shadow: 0 0 10px var(--accent);
 }
 
-/* Footage encryption on: the brand dot becomes a padlock — same accent, same glow. */
+/* Footage encryption on: the brand dot becomes a padlock, same accent, same glow. */
 .brand-lock {
     display: inline-flex;
     align-items: center;
@@ -134,7 +134,7 @@ html, body {
    The sidebar folds into a slim rail: the logo tile replaces the wordmark,
    each camera becomes a 3-letter pill with its status dot, and the settings
    gear pins to the bottom. The drawer breakpoint below neutralizes all of
-   this — a phone's sidebar always opens full. */
+   this: a phone's sidebar always opens full. */
 .sidebar-rail { display: none; }
 
 .sidebar.collapsed { width: 66px; padding: 14px 9px; }
@@ -171,7 +171,7 @@ html, body {
 .rail-toggle { position: relative; }
 
 /* The rail can't show banners; this amber dot on the expand button says
-   "open me — a warning is waiting" (same amber as the banners themselves). */
+   "open me: a warning is waiting" (same amber as the banners themselves). */
 .rail-alert {
     position: absolute;
     top: 2px;
@@ -184,7 +184,7 @@ html, body {
 }
 
 /* Same role as .sidebar-cams: the one scroll region, so the gear stays pinned.
-   No scrollbar — 66px is too narrow to share with one. */
+   No scrollbar: 66px is too narrow to share with one. */
 .rail-cams {
     flex: 1 1 auto;
     min-height: 0;
@@ -303,7 +303,7 @@ html, body {
     padding: 7px 10px;
 }
 
-/* Setup pointers ("no email configured yet — here's where"): guidance that
+/* Setup pointers ("no email configured yet: here's where"): guidance that
    must catch the eye without amber's alarm, so accent, not warning. */
 .notice.setup {
     color: color-mix(in srgb, var(--accent) 75%, #dfe9f5);
@@ -360,7 +360,7 @@ html, body {
     /* Badges wrap to a second line rather than squeezing the name out. A camera
        carrying the full set (UDP BETA + battery + Wi-Fi + asleep) overflows this
        narrow column, and since every badge is `flex: 0 0 auto` the name was the
-       only item that could give — it collapsed to zero width and the camera in
+       only item that could give, it collapsed to zero width and the camera in
        the sidebar had no name at all. */
     flex-wrap: wrap;
     row-gap: 4px;
@@ -390,7 +390,7 @@ html, body {
 
 .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .dot.off { background: var(--err); box-shadow: 0 0 6px var(--err); }
-/* Battery camera dozing on purpose — calm, not alarming like offline-red */
+/* Battery camera dozing on purpose: calm, not alarming like offline-red */
 .dot.doze { background: var(--muted); box-shadow: 0 0 5px color-mix(in srgb, var(--muted) 60%, transparent); }
 
 /* Offline camera: unmistakable badge + a dimmed card (streams can't start) */
@@ -423,7 +423,7 @@ html, body {
 }
 .cam-battery.battery-low { color: var(--err); }
 
-/* Wi-Fi signal chip in the sidebar card — mirrors the battery chip. Full text
+/* Wi-Fi signal chip in the sidebar card: mirrors the battery chip. Full text
    color (not muted): at a dozen pixels the arc glyph disappears when dimmed. */
 .cam-wifi {
     display: inline-flex;
@@ -513,7 +513,7 @@ html, body {
 .chip-off { opacity: 0.45; }
 
 /* A chip the server vetoes (e.g. 24/7 taping on a dozing battery camera):
-   visibly inert — no hover invite, no pointer. */
+   visibly inert, no hover invite, no pointer. */
 .chip:disabled {
     opacity: 0.35;
     cursor: not-allowed;
@@ -840,8 +840,8 @@ html, body {
 video[data-live="1"] ~ .tile-status { display: none; }
 
 /* The snapshot still shown while the stream spins up. It sits directly ON TOP of
-   the (still frameless) video and dissolves away when the first live frame paints
-   — replacing the browser's instant poster→video cut, which read as a jolt
+   the (still frameless) video and dissolves away when the first live frame paints:
+   replacing the browser's instant poster→video cut, which read as a jolt
    whenever the still didn't match the live scene.
    Stacking is deliberately left to the defaults: the video is a static element, so
    this positioned layer covers it, while every other overlay (status, privacy,
@@ -868,7 +868,7 @@ video[data-ever-live="1"] ~ .tile-poster {
    watching it holds it awake and costs charge, so the wall bounds how long its
    tile streams. The controls below are revealed and dismissed by CSS keyed on
    the player's own data-live, which keeps the whole mechanism free of timers
-   and interop — the tile reacts to real frames, not to a guess. */
+   and interop: the tile reacts to real frames, not to a guess. */
 .tile.tile-battery {
     border-color: color-mix(in srgb, var(--ok) 55%, transparent);
 }
@@ -878,7 +878,7 @@ video[data-ever-live="1"] ~ .tile-poster {
 }
 
 /* Keep-awake sits over the feed's bottom-CENTER (the corners belong to the
-   player's own controls), and ONLY while a frame is actually playing — there
+   player's own controls), and ONLY while a frame is actually playing: there
    is nothing to keep awake otherwise. Wraps on narrow tiles instead of
    overflowing them. */
 .tile-batt {
@@ -953,7 +953,7 @@ video[data-live="1"] ~ .tile-batt { display: inline-flex; }
 }
 
 /* An explicit button, not just a clickable overlay: waking a battery camera is a
-   deliberate act that costs charge, so it IS the only thing that wakes one — a
+   deliberate act that costs charge, so it IS the only thing that wakes one, a
    stray click on the tile spends nothing. */
 .tile-resume-btn {
     display: inline-flex;
@@ -979,7 +979,7 @@ video[data-live="1"] ~ .tile-batt { display: inline-flex; }
     border-color: var(--ok);
 }
 
-/* Asleep: the overlay is informational, not a button — no pointer, no hover
+/* Asleep: the overlay is informational, not a button, no pointer, no hover
    invitation. The Wake & watch button carries all the interactivity. Doubled-up
    selectors: .tile-privacy-resume declares cursor/hover later in this sheet. */
 .tile-privacy-resume.tile-asleep { cursor: default; }
@@ -1035,7 +1035,7 @@ video[data-live="1"] ~ .tile-waking { display: none; }
 
 .tile-privacy-icon { font-size: 26px; }
 
-/* Suspended: informational like the asleep overlay — it absorbs clicks (so a
+/* Suspended: informational like the asleep overlay, it absorbs clicks (so a
    stray tap neither resumes nor falls through to the tile) and only the
    explicit Resume button acts. */
 .tile-privacy.tile-suspended {
@@ -1154,7 +1154,7 @@ video[data-live="1"] ~ .tile-waking { display: none; }
 .nerd-verdict.warn { color: #e8b054; }
 .nerd-verdict.bad { color: var(--err); }
 
-/* Phones: the panel would swallow the picture — keep it readable but contained. */
+/* Phones: the panel would swallow the picture, keep it readable but contained. */
 @media (max-width: 640px) {
     .nerd-stats { font-size: 10px; max-width: calc(100% - 16px); left: 8px; top: 8px; }
 }
@@ -1223,7 +1223,7 @@ video[data-live="1"] ~ .tile-waking { display: none; }
     display: none;
     position: fixed;
     inset: 0;
-    z-index: 200; /* above every dialog — nothing works while disconnected */
+    z-index: 200; /* above every dialog, nothing works while disconnected */
     align-items: center;
     justify-content: center;
     background: color-mix(in srgb, var(--bg) 72%, transparent);
@@ -1253,7 +1253,7 @@ video[data-live="1"] ~ .tile-waking { display: none; }
     animation: perf-toast-in 0.2s ease;
 }
 
-/* Deliberate "the admin asked to restart" screen — distinct from Blazor's
+/* Deliberate "the admin asked to restart" screen: distinct from Blazor's
    generic reconnect modal, and shown ON TOP of it (the circuit drops right
    after). Pure browser-owned (see neolink.showRestarting): survives the
    disconnect and reloads when the server answers again. */
@@ -1432,7 +1432,7 @@ body.is-restarting .reconnect-modal { display: none !important; }
 .ctx-sep { height: 1px; background: var(--line); margin: 4px 6px; }
 
 /* In-place maximize: the picked tile fills the stage while the other tiles
-   stay MOUNTED but hidden — their <video> players keep running, so restoring
+   stay MOUNTED but hidden, their <video> players keep running, so restoring
    the view never shows a wall of black reconnecting cards. */
 .grid.has-max { position: relative; }
 
@@ -1445,14 +1445,14 @@ body.is-restarting .reconnect-modal { display: none !important; }
     width: auto !important;
     height: auto !important;
     /* An abspos GRID CHILD with a grid placement uses its grid AREA as the
-       containing block — a focus/mosaic hero would only fill its own cell.
+       containing block: a focus/mosaic hero would only fill its own cell.
        Clearing the placement makes inset:0 span the whole grid container. */
     grid-area: auto !important;
     z-index: 5;
 }
 
 /* Flash a tile red when its camera is picked again (already on screen).
-   The flash is an overlay ON TOP of the video — an inset shadow on the tile
+   The flash is an overlay ON TOP of the video: an inset shadow on the tile
    itself paints underneath the <video> child and was invisible while playing. */
 .tile-flash::after {
     content: "";
@@ -1476,7 +1476,7 @@ body.is-restarting .reconnect-modal { display: none !important; }
 }
 
 /* Phones: the camera name floats translucent over the feed's top-right corner
-   instead of occupying the crowded bottom bar. Ghosted on purpose — it must
+   instead of occupying the crowded bottom bar. Ghosted on purpose: it must
    label the tile without blocking the picture. Enabled in the coarse block. */
 .tile-name-float {
     display: none;
@@ -1651,7 +1651,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 .clip-btn.clip-live:hover { background: color-mix(in srgb, var(--err) 80%, #000); }
 
-/* The always-on corner chip while a clip records — visible whatever started it
+/* The always-on corner chip while a clip records: visible whatever started it
    (the tile button or HA's Record switch) and wherever the tile is shown. The
    countdown runs to the automatic stop at max_clip_seconds. */
 .clip-overlay {
@@ -1690,7 +1690,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 
 .clip-overlay-label {
-    font-variant-numeric: tabular-nums; /* steady width — no jitter as digits tick */
+    font-variant-numeric: tabular-nums; /* steady width, no jitter as digits tick */
     text-shadow: 0 1px 3px #000;
     white-space: nowrap;
 }
@@ -1704,7 +1704,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 
 /* On-video camera rail (maximized tile): PTZ and two-way talk in one quiet
-   glass pill on the RIGHT edge, directly below the zoom HUD — visually one
+   glass pill on the RIGHT edge, directly below the zoom HUD, visually one
    column of controls in the zoom HUD's own language (same glass, same radius,
    same edge offset). Ghosted until hovered / opened / talking so it never
    fights the video, and clear of every other overlay (toolbar top, clip chip
@@ -1971,7 +1971,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     .grid.mode-free { overflow: auto; }
 
     /* Phones: every tile control must stay on-screen. The camera name is the
-       only flexible item — it shrinks to an ellipsis — while the buttons and
+       only flexible item, it shrinks to an ellipsis, while the buttons and
        the stream picker compact instead of being pushed off the right edge. */
     .tile-bar { gap: 4px; padding: 4px 6px; }
 
@@ -2019,7 +2019,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* Touch devices, any width: finger-sized targets and no hover-only affordances */
 @media (pointer: coarse) {
-    /* Hover-revealed controls must be ALWAYS visible on touch — and gated on
+    /* Hover-revealed controls must be ALWAYS visible on touch, and gated on
        pointer type, not viewport width: a phone in landscape is wider than the
        phone breakpoint, and WebKit turns any content-revealing :hover into a
        "first tap hovers, second tap clicks" trap (the two-taps-to-minimize bug). */
@@ -2039,7 +2039,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
         opacity: 0.8;
     }
     .zoom-hud.hud-idle { opacity: 0; }
-    /* The camera rail tracks the zoom HUD's tighter phone edge — one column. */
+    /* The camera rail tracks the zoom HUD's tighter phone edge: one column. */
     .cam-rail { right: 6px; }
 
     /* Two fingers on the PICTURE must pinch, never scroll/browser-zoom.
@@ -2053,7 +2053,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     .tile-name-float { display: block; }
     .tile-bar .tile-name { display: none; }
 
-    /* Recording indicators shrink to a blinking dot — the labels are dead
+    /* Recording indicators shrink to a blinking dot: the labels are dead
        weight at phone tile sizes (the clip chip keeps its countdown). */
     .tile-bar .cam-rec-badge {
         border: none;
@@ -2108,7 +2108,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     padding: 6px 0;
 }
 
-/* Suspend chip in the panel header: the head is bold/spaced for its title —
+/* Suspend chip in the panel header: the head is bold/spaced for its title,
    the chip must not inherit that voice. */
 .campanel-head .head-suspend {
     font-weight: 400;
@@ -2199,7 +2199,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 /* Camera settings dialog: roomier than the base panel, with the section cards
    flowing masonry-style into two columns (cards never split across columns).
    Below the breakpoint it falls back to the familiar single column.
-   FIXED height from the moment it opens — no snap when content loads, no
+   FIXED height from the moment it opens, no snap when content loads, no
    resize when switching tabs; only the body scrolls, keeping the header,
    device strip and tabs in view. */
 .campanel-wide {
@@ -2210,7 +2210,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 .campanel-wide .campanel-head { position: static; top: auto; }
 
 /* Draggable + resizable (desktop): the header drags, the native corner grip
-   resizes — so staged OSD/picture changes can be watched applying on the
+   resizes, so staged OSD/picture changes can be watched applying on the
    video beneath the modal. JS (delegated, neolink.js) owns the geometry as
    inline styles that die with the element, so a reopened dialog is always
    back to this centered default. Phones keep the fixed sheet untouched. */
@@ -2269,12 +2269,12 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 /* The masonry columns live on an INNER wrapper, not the scroll container: CSS
    columns size themselves to their element's height, and inside a fixed-height
-   scroller that capped the columns at the visible area — fragmenting cards
+   scroller that capped the columns at the visible area, fragmenting cards
    (break-inside notwithstanding) and clipping them mid-card. The wrapper grows
    with its content, so cards stay whole and the body scrolls past them. */
 /* Controls tab: two EXPLICIT columns, not flowed ones. Sections lazy-load as
    their probes answer; with `columns: 2` every arrival re-balanced the flow and
-   cards (notably SUSPEND) wandered. Each column keeps its own fixed order —
+   cards (notably SUSPEND) wandered. Each column keeps its own fixed order:
    SUSPEND is always the right column's first card. */
 .campanel-cols {
     display: flex;
@@ -2322,7 +2322,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 .campanel-wide .campanel-cols .control-row.row-inline > .qr-select { width: auto; flex: 1 1 auto; }
 
-/* PHONES: the label-column grid needs width it doesn't have — the label track
+/* PHONES: the label-column grid needs width it doesn't have, the label track
    resolves toward its 230px max and squeezes the control into overflow (labels
    were clipping off the left edge). Fall back to the original label-left /
    control-right row, which reads well at this width. */
@@ -2348,7 +2348,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 }
 
 @media (max-width: 860px) {
-    /* Narrow: the two explicit columns stack — left group first, then the
+    /* Narrow: the two explicit columns stack, left group first, then the
        right group (Suspend, Siren, PIR, Maintenance) as one block. */
     .campanel-cols { flex-direction: column; align-items: stretch; }
 }
@@ -2375,7 +2375,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     flex-wrap: wrap;
 }
 
-/* Server settings: head and foot pinned, only the sections scroll — the
+/* Server settings: head and foot pinned, only the sections scroll, the
    unsaved state and the Save/Restart buttons can never leave the screen. */
 .settings-panel { overflow: hidden; }
 
@@ -2417,9 +2417,9 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 /* Server settings: roomier and organised into top tabs so each section is short.
    Two-class selector so it beats the reused .auth-panel width (defined later).
    The HEIGHT is fixed (not content-driven): switching tabs must not resize the
-   dialog — the body scrolls inside instead. */
+   dialog, the body scrolls inside instead. */
 .settings-panel.settings-wide {
-    /* Wide enough for all NINE tabs on one line on a desktop screen — 880px fit
+    /* Wide enough for all NINE tabs on one line on a desktop screen: 880px fit
        seven, then Notifications and AI arrived and wrapped to a second row.
        980px fits them with only ~9px to spare, which another system's font
        metrics would eat, so leave a real margin. Tabs still wrap gracefully
@@ -2452,7 +2452,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
    The old space-between rows flung every control to the far edge of the (now
    880px) dialog and scattered multi-button rows. A fixed label column keeps
    each control right next to its label, and action clusters line up between
-   rows. Scoped to the settings panel — the camera panel's narrow masonry
+   rows. Scoped to the settings panel: the camera panel's narrow masonry
    columns read fine with space-between. */
 .settings-panel .settings-body .control-row,
 .settings-panel .settings-body .admin-field {
@@ -2492,7 +2492,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     font-size: 13px;
 }
 
-/* PHONES: same fallback as the camera panel — the fixed label track starves
+/* PHONES: same fallback as the camera panel, the fixed label track starves
    the control column at this width, so revert to label-left / control-right. */
 @media (max-width: 640px) {
     .settings-panel .settings-body .control-row,
@@ -2608,7 +2608,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 /* The lifecycle strip's footer line must wrap too. */
 .lifecycle .event-sub { white-space: normal; }
 
-/* Footage-lifecycle strip: the RECORDING card's living summary — colored pills
+/* Footage-lifecycle strip: the RECORDING card's living summary, colored pills
    trace each recording type from live disk to archive to deletion, built from
    the settings as currently toggled (so flipping a switch explains itself). */
 .lifecycle {
@@ -2966,7 +2966,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     /* Width follows the (resizable) bar height so previews scale with it */
     height: 100%;
     /* The card takes the camera's exact shape (inline aspect-ratio per event;
-       this is the fallback) and the media fills it edge to edge — the title
+       this is the fallback) and the media fills it edge to edge: the title
        overlays the bottom of the clip, so no meta row distorts the geometry. */
     aspect-ratio: 16 / 9;
     min-width: 150px;
@@ -3024,7 +3024,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 @keyframes event-pulse { 50% { opacity: 0.45; } }
 
 /* Title/time float over the clip's bottom edge (NVR style) so the card can be
-   exactly the camera's shape — a meta row below would pad the media with bars. */
+   exactly the camera's shape: a meta row below would pad the media with bars. */
 .event-meta {
     position: absolute;
     left: 0;
@@ -3081,7 +3081,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 /* The description banner in the event players (Events page + quick view):
    a quiet card with the verdict chip leading the sentence. */
 /* What the model listed as visible, above its prose: a row of small words, each
-   one a search for itself. Deliberately quieter than the description — an
+   one a search for itself. Deliberately quieter than the description: an
    inventory is for scanning and for clicking, not for reading. */
 .event-objects {
     display: flex;
@@ -3177,7 +3177,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 /* Event history panel (reuses the campanel chrome).
    Fixed height: content changes (polling, expanding days, switching tabs) must
    scroll inside the panel, never resize the popup itself. */
-/* Events history panel: wider than the settings dialog — the rows carry thumbnails */
+/* Events history panel: wider than the settings dialog, the rows carry thumbnails */
 .events-panel {
     height: min(92vh, 1020px);
     width: min(780px, 96vw);
@@ -3353,12 +3353,12 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
 
 .event-player-title .event-title { font-size: 15px; }
 
-/* The player's sub-line can carry the "recording…" chip — wrap on narrow
+/* The player's sub-line can carry the "recording…" chip: wrap on narrow
    widths rather than ellipsize it away. */
 .event-player-title .event-sub { white-space: normal; }
 
 /* The player sub-line's "recording…": solid amber, not the translucent warn
-   style — it must register before the user judges the clip incomplete. */
+   style, it must register before the user judges the clip incomplete. */
 .ev-rec-inline {
     display: inline-flex;
     align-items: center;
@@ -3710,7 +3710,7 @@ body.is-fullscreen .fs-exit { display: inline-flex; }
     cursor: pointer;
 }
 
-/* The options render as <span>/<a> (page links) or <button> (mode switch) —
+/* The options render as <span>/<a> (page links) or <button> (mode switch):
    the button form sheds the UA chrome. `.ev-switch-opt.active` outranks this,
    so the accent fill still applies. */
 button.ev-switch-opt {
@@ -3822,7 +3822,7 @@ button.ev-switch-opt {
     .ev-detail #ev-video { max-height: calc(100dvh - 200px); }
 }
 
-/* Quick view: temporary pop-up live player (sidebar ⛶) — the layout underneath
+/* Quick view: temporary pop-up live player (sidebar ⛶), the layout underneath
    is untouched; closing it simply returns to whatever was on screen. */
 .quick-view {
     position: fixed;
@@ -3863,7 +3863,7 @@ button.ev-switch-opt {
 
 /* Vertical glass pill hugging the right edge; appears while hovering a
    zoomable surface and stays pinned while zoomed. JS (zoomInit) owns all
-   state — wheel zooms at the cursor, drag pans, double-click restores 1:1. */
+   state: wheel zooms at the cursor, drag pans, double-click restores 1:1. */
 .zoom-hud {
     position: absolute;
     right: 10px;
@@ -3882,7 +3882,7 @@ button.ev-switch-opt {
     transition: opacity 0.35s ease;
 }
 
-/* Desktop: while the pill is shown it sits GHOSTED on the video — full
+/* Desktop: while the pill is shown it sits GHOSTED on the video, full
    strength only when the mouse is actually on it. One rule for every zoom
    surface (live tiles, quick view, event pop-up, Events page, timeline
    monitors). Scoped to hover-capable devices: touch keeps its own opacity
@@ -3893,7 +3893,7 @@ button.ev-switch-opt {
 }
 
 /* Touch: JS fades the on-video pills after a moment of stillness so they stop
-   covering the picture — any tap on the video (or a pinch) brings them back.
+   covering the picture, any tap on the video (or a pinch) brings them back.
    The camera rail joins the zoom HUD here; a rail in use (.open: pad out or
    talking) is exempted by the JS sweep. */
 .cam-rail.hud-idle {
@@ -3915,7 +3915,7 @@ button.ev-switch-opt {
 }
 
 /* Video-player chrome: on the maximized/fullscreen tile a STILL cursor means
-   "watching, not operating" — JS marks the tile ui-idle after a moment of no
+   "watching, not operating": JS marks the tile ui-idle after a moment of no
    mouse movement, and every on-video control fades until the mouse moves
    (hover alone can't do this: a cursor parked on the video keeps :hover true
    forever). The extra :hover/.open/.zoomed variants out-rank the rules that
@@ -3945,7 +3945,7 @@ button.ev-switch-opt {
 
 /* The camera rail (PTZ + mic) is hover-revealed on desktop like the rest of
    the on-video chrome (it used to sit ghosted on the video permanently).
-   Touch keeps it always visible — there is no hover to reveal it with. */
+   Touch keeps it always visible: there is no hover to reveal it with. */
 @media (hover: hover) {
     .tile:not(:hover):not(:fullscreen) .cam-rail {
         opacity: 0;
@@ -3955,7 +3955,7 @@ button.ev-switch-opt {
 
 /* Zoomable surfaces keep their video on its own compositor layer from the
    start: promoting it only when the first zoom transform lands can leave a
-   PAUSED video's stale frame unpainted — black until a mouse drag forces a
+   PAUSED video's stale frame unpainted, black until a mouse drag forces a
    repaint. Cheap: zoom-on only ever marks the active surface (maximized tile,
    quick view, event player), never the whole wall. */
 .zoom-on video,
@@ -3965,7 +3965,7 @@ button.ev-switch-opt {
 
 /* A player handed fullscreen (see detect.js: the native button fullscreens the
    bare <video>, which would leave the boxes behind on the page) has to fill the
-   screen — its normal height cap is sized for sitting inside a dialog. */
+   screen, its normal height cap is sized for sitting inside a dialog. */
 .event-player-media:fullscreen {
     max-height: none;
     height: 100%;
@@ -4103,7 +4103,7 @@ button.ev-switch-opt {
 .tl-cal-day.empty { cursor: default; }
 .tl-cal-day:disabled { color: color-mix(in srgb, var(--muted) 45%, transparent); cursor: default; }
 .tl-cal-day:not(:disabled):hover { background: var(--accent-soft); }
-/* A dot under the number marks days that hold footage — visible at a glance */
+/* A dot under the number marks days that hold footage: visible at a glance */
 .tl-cal-day.has::after {
     content: "";
     position: absolute;
@@ -4131,7 +4131,7 @@ button.ev-switch-opt {
 .tl-cal-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
 .tl-cal-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 
-/* The play/pause transport: a solid accent pill with a filled glyph — nothing
+/* The play/pause transport: a solid accent pill with a filled glyph, nothing
    like the thin date chevrons, so the two can't be confused again. */
 .tl-play {
     display: inline-flex;
@@ -4291,7 +4291,7 @@ button.ev-switch-opt {
 
 .tl-export-arrow { color: var(--muted); }
 
-/* Live length of the chosen range — instant feedback while typing times */
+/* Live length of the chosen range: instant feedback while typing times */
 .tl-export-window {
     font-size: 11px;
     font-variant-numeric: tabular-nums;
@@ -4352,7 +4352,7 @@ button.ev-switch-opt {
     color: color-mix(in srgb, var(--text) 82%, transparent);
 }
 
-/* Phones: the cards stack — side by side their captions get too cramped */
+/* Phones: the cards stack, side by side their captions get too cramped */
 @media (max-width: 480px) {
     .tl-export-format { grid-template-columns: 1fr; }
 }
@@ -4435,7 +4435,7 @@ button.ev-switch-opt {
 }
 
 /* The scrubbing area. Its height is the user's to set (the divider below/above
-   it drags): natural size until then, and whatever was dragged after — the
+   it drags): natural size until then, and whatever was dragged after, the
    tracks inside share it, so a taller board means thicker, easier-to-hit lanes. */
 .tl-board {
     display: flex;
@@ -4443,7 +4443,7 @@ button.ev-switch-opt {
     padding: 10px 12px;
     gap: 0;
     flex: 0 0 auto;
-    /* Scroll when the tracks outgrow a dragged-short (or studio-capped) board —
+    /* Scroll when the tracks outgrow a dragged-short (or studio-capped) board,
        and never sideways: ruler and cursor labels poke a few px past the right
        edge at some zoom positions, and overflow-y:auto alone silently turns
        overflow-x into auto as well (CSS computed-value rule), so a horizontal
@@ -4462,8 +4462,8 @@ button.ev-switch-opt {
 
 .tl-names { display: flex; flex-direction: column; width: 110px; flex: 0 0 auto; }
 
-/* Name rows mirror the lanes exactly — same 26px floor, same growth, same 2px
-   gap — so every camera's label stays level with its track at any board height. */
+/* Name rows mirror the lanes exactly, same 26px floor, same growth, same 2px
+   gap, so every camera's label stays level with its track at any board height. */
 .tl-name {
     flex: 1 0 26px;
     margin-bottom: 2px;
@@ -4620,7 +4620,7 @@ button.ev-switch-opt {
     .tl-lane-loading::after { animation-duration: 4s; }
 }
 
-/* Footage blocks and event marks are inset by proportion, not pixels — they
+/* Footage blocks and event marks are inset by proportion, not pixels: they
    grow with the lane (at the 26px floor these land on the original 7/12 and
    4/18 pixel geometry). */
 .tl-cov {
@@ -4698,8 +4698,8 @@ button.ev-switch-opt {
 }
 
 /* ---- Board divider: drag to trade height between the monitors and the tracks.
-   It rides the boundary in both layouts — under the board in the classic view
-   (monitors below), above the docked desk in studio (monitors above) — and the
+   It rides the boundary in both layouts, under the board in the classic view
+   (monitors below), above the docked desk in studio (monitors above), and the
    drag itself is JS-owned so the tracks track the pointer without a round-trip
    per pixel. Blazor gets the final height, persists it, and renders it back. */
 .tl-resizer {
@@ -4824,7 +4824,7 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 
 /* Buffering veil: JS (tlSync) toggles .tl-loading while the player has no
    decodable picture under the cursor. The fade-in delay keeps ordinary quick
-   seeks spinner-free — only genuinely slow loads surface it. */
+   seeks spinner-free, only genuinely slow loads surface it. */
 .tl-tile.tl-loading::after {
     content: "";
     position: absolute;
@@ -4847,11 +4847,11 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 }
 
 /* ---- Studio layout (opt-in): monitors on top, editing desk at the bottom ----
-   Pure flex re-ordering of the same DOM — the scrub/zoom/hover JS hooks and the
+   Pure flex re-ordering of the same DOM, the scrub/zoom/hover JS hooks and the
    render path are identical in both layouts, only the visual order changes. */
 .tl-page.studio .tl-grid { order: 1; padding: 8px 12px; }
 /* The divider leads the docked desk here, so it lands on the toolbar's existing
-   top border — the visible seam between the monitors and everything below it. */
+   top border: the visible seam between the monitors and everything below it. */
 .tl-page.studio .tl-resizer { order: 2; }
 .tl-page.studio .tl-toolbar { order: 3; border-top: 1px solid var(--line); }
 .tl-page.studio .tl-cams { order: 4; padding-top: 4px; }
@@ -4861,7 +4861,7 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 }
 /* Empty-state and error notices sit centered on the (otherwise black) stage. */
 .tl-page.studio .notice { order: 1; margin: auto; }
-/* The calendar can't drop below a bottom-docked toolbar — center it instead.
+/* The calendar can't drop below a bottom-docked toolbar: center it instead.
    inset/margin centering, and an opacity-only entrance: the default popover
    animation drives transform, which would fight (and visibly jump) a
    transform-based centering. */
@@ -4918,8 +4918,8 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 
 /* Object boxes get the live view's on-video pill rather than a fourth flat
    button: it is the same control in the same clothes, and it is lit on the one
-   monitor carrying them — only one can, so it doubles as the answer to "which".
-   It hangs just under the zoom pill exactly as it does on a camera's own view —
+   monitor carrying them, only one can, so it doubles as the answer to "which".
+   It hangs just under the zoom pill exactly as it does on a camera's own view,
    until the monitor is too short for that, when it stops at the foot instead of
    sliding off the bottom (a board can show eight cameras at once). */
 .tl-tile .cam-rail { top: min(calc(50% + 88px), calc(100% - 54px)); }
@@ -5084,8 +5084,8 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 
 .storage-banner-full .sec-banner-text { color: #ff8a80; }
 
-/* Background-process strip (admins): server work in flight — archiving and
-   whatever reports next — with a live progress bar. Same footprint as the
+/* Background-process strip (admins): server work in flight, archiving and
+   whatever reports next, with a live progress bar. Same footprint as the
    banners above it; disappears entirely when nothing runs. */
 .bg-tasks {
     display: flex;
@@ -5214,7 +5214,7 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 
 .admin-field input:focus { border-color: var(--accent); }
 
-/* Dropdown variant (constrained config values, e.g. record stream) — matches the
+/* Dropdown variant (constrained config values, e.g. record stream): matches the
    text inputs so the row reads consistently. */
 .admin-select {
     background: var(--bg);
@@ -5802,7 +5802,7 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
     margin: 4px 0 2px;
 }
 
-/* Marks a language whose catalogue is empty — it would render as English. */
+/* Marks a language whose catalogue is empty: it would render as English. */
 .lang-empty {
     margin-left: 5px;
     font-weight: 700;
@@ -5870,7 +5870,7 @@ body.tl-colresizing, body.tl-colresizing * { cursor: col-resize !important; user
 }
 
 /* Recording settings wrap in a fieldset so a non-admin gets them read-only
-   (disabled) in one stroke — the API enforces the same rule server-side. */
+   (disabled) in one stroke: the API enforces the same rule server-side. */
 .rec-lock {
     border: 0;
     padding: 0;
@@ -5959,7 +5959,7 @@ select.input-pending {
 .zone-body {
     flex: 1 1 auto;
     min-height: 0;
-    overflow: hidden; /* the canvas fits itself to this box — nothing to scroll */
+    overflow: hidden; /* the canvas fits itself to this box, nothing to scroll */
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -5990,7 +5990,7 @@ select.input-pending {
     flex: 0 0 auto;
 }
 
-/* touch-action: none — a touch drag must paint cells, not scroll the dialog */
+/* touch-action: none, a touch drag must paint cells, not scroll the dialog */
 /* Width and height are set by the script, which fits the whole frame into the
    space available; this is only the pre-init state and the centring. */
 .zone-canvas {
@@ -6089,7 +6089,7 @@ select.input-pending {
 .webhook-select { width: 260px; max-width: 58%; }
 
 /* The AI system-prompt editor: full-width block (the label sits on its own row
-   above), user-resizable downward only — sideways would break the panel. */
+   above), user-resizable downward only, sideways would break the panel. */
 textarea.ai-prompt {
     width: 100%;
     max-width: 100%;
@@ -6147,7 +6147,7 @@ textarea.ai-prompt {
 }
 
 /* Full-width in its column so the pills line up under the headings. .chip is a
-   flex container, which packs its label left — centre it, or the text sits off
+   flex container, which packs its label left: centre it, or the text sits off
    to one side of a pill that is wider than the word. */
 .emg-cam-chip {
     padding: 2px 0;
@@ -6164,7 +6164,7 @@ textarea.ai-prompt {
 .notif-input.input-error:focus { border-color: var(--err); }
 
 /* Inline field problem. The block hugs the control column (margin-left auto)
-   but the TEXT inside reads left-aligned — long messages used to be laid out
+   but the TEXT inside reads left-aligned: long messages used to be laid out
    ragged-left across the whole row width, which read as a jumble. Width is
    capped at the widest input so the message visually belongs to its field. */
 /* The change-password-on-the-camera form: outlined, so it reads as its own step inside the editor. */
@@ -6187,7 +6187,7 @@ textarea.ai-prompt {
 }
 
 /* In the server-settings panel the inputs sit in a label/control grid, left
-   justified in the control column — mirror that grid (same fixed tracks, so
+   justified in the control column: mirror that grid (same fixed tracks, so
    they resolve identically) and let ::before occupy the label track, putting
    the message exactly under its input's left edge. */
 .settings-panel .settings-body .field-error {
@@ -6200,7 +6200,7 @@ textarea.ai-prompt {
 }
 .settings-panel .settings-body .field-error::before { content: ""; }
 @media (max-width: 640px) {
-    /* Phones drop the label track (fields are flex rows) — full-width text. */
+    /* Phones drop the label track (fields are flex rows): full-width text. */
     .settings-panel .settings-body .field-error { display: block; }
 }
 
@@ -6275,7 +6275,7 @@ textarea.ai-prompt {
 
 .sched-time input[type="time"]:focus { border-color: var(--accent); outline: none; }
 
-/* The schedule summary is a full sentence — let it wrap instead of ellipsizing
+/* The schedule summary is a full sentence: let it wrap instead of ellipsizing
    (the base .event-sub is single-line) so it reads on narrow/mobile widths. */
 .sched .event-sub {
     text-align: right;
@@ -6284,7 +6284,7 @@ textarea.ai-prompt {
     text-overflow: clip;
 }
 
-/* The AI-description and event-email notes are explanatory prose too — wrap,
+/* The AI-description and event-email notes are explanatory prose too: wrap,
    don't ellipsize (.event-sub is nowrap for the single-line event rows). */
 .event-sub.ai-sub,
 .event-sub.email-sub {
@@ -6460,7 +6460,7 @@ textarea.ai-prompt {
 }
 
 /* Phones scroll the toolbar sideways, which would park the off switch past the
-   right edge. Pin it so it is always on screen — the one control that must
+   right edge. Pin it so it is always on screen: the one control that must
    never need hunting for. */
 @media (max-width: 700px) {
     .emg-toolbar-btn {

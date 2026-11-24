@@ -7,8 +7,8 @@ namespace Neolink;
 
 /// <summary>
 /// Makes the server a real Windows service (--service) without taking a
-/// dependency: the Service Control Manager speaks a small C API —
-/// StartServiceCtrlDispatcher, a handler callback, SetServiceStatus — and the
+/// dependency: the Service Control Manager speaks a small C API,
+/// StartServiceCtrlDispatcher, a handler callback, SetServiceStatus, and the
 /// packages that wrap it (ServiceBase, Microsoft.Extensions.Hosting.WindowsServices)
 /// exist to hide these ~10 P/Invokes. The project's no-third-party rule says:
 /// write the 10 P/Invokes.
@@ -22,7 +22,7 @@ namespace Neolink;
 ///
 /// Launched from a console anyway (testing, or someone runs the installed
 /// command by hand), the dispatcher fails with ERROR_FAILED_SERVICE_CONTROLLER_CONNECT
-/// and <see cref="TryStart"/> says so and reports false — the caller keeps
+/// and <see cref="TryStart"/> says so and reports false: the caller keeps
 /// running as a plain console app, which is exactly what a person at a prompt
 /// wanted.
 /// </summary>
@@ -92,7 +92,7 @@ internal static class WindowsService
     }
 
     /// <summary>Connects to the SCM. True: this process was launched as a service
-    /// and now reports RUNNING — the caller must call <see cref="NotifyStopped"/>
+    /// and now reports RUNNING, the caller must call <see cref="NotifyStopped"/>
     /// (or just exit; a ProcessExit hook covers every early-return path) when done.
     /// False: no SCM on the other end, keep behaving like a console app.</summary>
     public static bool TryStart()
@@ -119,7 +119,7 @@ internal static class WindowsService
         Decided.Wait(TimeSpan.FromSeconds(30));
         if (_connected)
         {
-            // Every exit path — including Fail() before the server is built —
+            // Every exit path, including Fail() before the server is built,
             // must end at SERVICE_STOPPED, or the SCM logs the death as a crash.
             AppDomain.CurrentDomain.ProcessExit += (_, _) =>
                 NotifyStopped(Environment.ExitCode);
@@ -128,14 +128,14 @@ internal static class WindowsService
         if (dispatcherError != 0 && dispatcherError != ErrorNotConnected)
             Log.Warn($"--service: the service dispatcher failed (win32 error {dispatcherError}); running as a console app");
         else
-            Log.Info("--service: not launched by the service control manager — running as a console app");
+            Log.Info("--service: not launched by the service control manager, running as a console app");
         return false;
     }
 
     private static volatile bool _exitForRestart;
 
     /// <summary>A UI-requested restart while running as a service. The SCM has no
-    /// "restart me" call and never revives a CLEAN stop — its recovery actions
+    /// "restart me" call and never revives a CLEAN stop: its recovery actions
     /// (which the installer configures to restart the service) fire when the
     /// process dies WITHOUT reporting SERVICE_STOPPED. So a restart-intent exit
     /// deliberately skips that report and lets the process death be the signal:
@@ -149,7 +149,7 @@ internal static class WindowsService
     public static void NotifyStopped(int exitCode)
     {
         if (!_connected || Exited.IsSet) return;
-        // Restart path: no SERVICE_STOPPED and ServiceMain stays parked — the
+        // Restart path: no SERVICE_STOPPED and ServiceMain stays parked, the
         // process death itself must be what the SCM sees. See ExitForRestart.
         if (_exitForRestart) return;
         Exited.Set();

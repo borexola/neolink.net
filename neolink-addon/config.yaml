@@ -1,6 +1,6 @@
 # Home Assistant add-on manifest for Neolink.NET.
 #
-# RELEASING: bump `version` to match the vX.Y.Z tag being cut — the Supervisor
+# RELEASING: bump `version` to match the vX.Y.Z tag being cut, the Supervisor
 # pulls ghcr.io/borexola/neolink.net-addon-{arch}:<version>, which the docker
 # workflow publishes on every tag. Version here ≠ tag ⇒ users see no update.
 # neolink-host/config.yaml carries the same version (tests/check.sh enforces it).
@@ -22,7 +22,7 @@ hassio_api: true
 services:
   - mqtt:want
 map:
-  # /config inside the container — where config.json and the UI state live.
+  # /config inside the container, where config.json and the UI state live.
   - addon_config:rw
   # Recordings land in /media/neolink, so clips show up in HA's media browser.
   # NAS shares added under Settings → System → Storage appear in here too

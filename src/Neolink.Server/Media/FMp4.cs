@@ -9,8 +9,8 @@ namespace Neolink.Media;
 /// <summary>
 /// Minimal fragmented-MP4 (fMP4/CMAF-style) muxer for live H.264/H.265 video
 /// plus optional AAC audio, suitable for browser Media Source Extensions.
-/// Track 1 is video (timescale = the RTP video clock, 90 kHz), track 2 — when
-/// the camera has AAC audio — runs on the audio sample rate. One sample per
+/// Track 1 is video (timescale = the RTP video clock, 90 kHz), track 2, when
+/// the camera has AAC audio, runs on the audio sample rate. One sample per
 /// fragment (lowest latency). ADPCM cameras get no MP4 audio track: browsers
 /// can't play raw PCM via MSE, so their audio is RTSP-only.
 /// </summary>
@@ -170,7 +170,7 @@ public static class FMp4
         return w.ToArray();
     }
 
-    /// <summary>The moof + mdat-header bytes around a single-sample fragment —
+    /// <summary>The moof + mdat-header bytes around a single-sample fragment:
     /// fixed because the box layout below is; lets the writer be sized exactly
     /// so no resize or trailing copy happens per fragment.</summary>
     private const int FragmentOverhead = 108;
@@ -255,7 +255,7 @@ public static class FMp4
     /// the size they take length-prefixed.</summary>
     public readonly record struct AccessUnit(int FirstNal, int NalCount, int SampleBytes, bool Keyframe);
 
-    /// <summary>A buffer's access units, referencing the source bytes — the sample
+    /// <summary>A buffer's access units, referencing the source bytes: the sample
     /// data is copied only when a fragment is written.</summary>
     public sealed class AccessUnits
     {
@@ -456,7 +456,7 @@ public static class FMp4
             w.U32((uint)rate << 16);               // sample rate, 16.16 fixed point
 
             // esds: the MPEG-4 descriptor chain that carries the
-            // AudioSpecificConfig — decoders refuse mp4a without it.
+            // AudioSpecificConfig, decoders refuse mp4a without it.
             using (w.FullBox("esds", 0, 0))
             {
                 int dsiLen = asc.Length;
@@ -589,7 +589,7 @@ public sealed class Mp4Writer
     public int Position => _len;
     public byte[] ToArray() => _buf.AsSpan(0, _len).ToArray();
 
-    /// <summary>The written bytes, in place — valid until the next write.</summary>
+    /// <summary>The written bytes, in place: valid until the next write.</summary>
     public ArraySegment<byte> Written => new(_buf, 0, _len);
 
     /// <summary>Rewinds for reuse; the buffer keeps its grown capacity.</summary>

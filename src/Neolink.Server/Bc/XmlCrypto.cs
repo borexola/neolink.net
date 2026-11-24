@@ -40,7 +40,7 @@ public static class XmlCrypto
     }
 
     /// <summary>Like <see cref="Decrypt(uint, ReadOnlySpan{byte}, EncryptionState)"/>
-    /// but returns only the first <paramref name="outputLength"/> plaintext bytes —
+    /// but returns only the first <paramref name="outputLength"/> plaintext bytes:
     /// FullAes media is padded, and slicing the padding off AFTER a full decrypt
     /// copied every video frame once more.</summary>
     public static byte[] Decrypt(uint offset, ReadOnlySpan<byte> buf, EncryptionState enc, int outputLength)
@@ -70,7 +70,7 @@ public static class XmlCrypto
     /// Fast CFB decrypt. Under FullAes this runs on EVERY video byte, so it is the
     /// protocol layer's hot path. CFB decryption has no serial dependency: the
     /// keystream for block i is AES-ECB(previous CIPHERTEXT block), and all the
-    /// ciphertext is already in hand — so the whole keystream is produced with one
+    /// ciphertext is already in hand, so the whole keystream is produced with one
     /// ECB pass over (IV ++ ciphertext) using the connection's cached, keyed AES,
     /// then XORed out word-wide. The per-16-byte TransformBlock loop this replaces
     /// cost 15-20% of a core per camera on FullAes firmwares.
@@ -82,7 +82,7 @@ public static class XmlCrypto
         int blocks = (outLen + 15) / 16;
 
         // Keystream input is IV, then every ciphertext block that feeds a
-        // successor — both already contiguous, so they encrypt straight into
+        // successor, both already contiguous, so they encrypt straight into
         // place instead of being staged in a frame-sized scratch copy.
         var keystream = new byte[blocks * 16];
         enc.EcbEncrypt(Iv, keystream.AsSpan(0, 16));
@@ -97,7 +97,7 @@ public static class XmlCrypto
     /// <summary>
     /// CFB encrypt via the connection's cached AES. Encryption IS serial (each
     /// block's keystream needs the previous ciphertext block), but the client only
-    /// ever encrypts small outgoing XML commands, so block-at-a-time is fine —
+    /// ever encrypts small outgoing XML commands, so block-at-a-time is fine:
     /// the win here is just not rebuilding the AES key schedule per message.
     /// </summary>
     internal static byte[] AesCfbEncrypt(ReadOnlySpan<byte> input, EncryptionState enc)

@@ -12,7 +12,7 @@ namespace Neolink.WebClient.Localization;
 /// Using the English sentence as the key (rather than an invented id like
 /// "settings.general.title") is deliberate: the components stay readable, English
 /// needs no catalogue at all, and a key with no translation yet renders as
-/// English instead of as a missing-resource placeholder — so a half-finished
+/// English instead of as a missing-resource placeholder, so a half-finished
 /// language is still a usable UI rather than a broken one.
 ///
 /// Catalogues are embedded JSON (Localization/{code}.json), read once on first
@@ -33,7 +33,7 @@ public static class Translations
         return Catalogue(language).GetValueOrDefault(text) ?? text;
     }
 
-    /// <summary>How many of a language's entries are filled in — surfaced by the
+    /// <summary>How many of a language's entries are filled in: surfaced by the
     /// picker so an incomplete language is visible before it is chosen.</summary>
     public static int Count(string language) =>
         language.Equals(Lang.Default, StringComparison.OrdinalIgnoreCase) ? 0 : Catalogue(language).Count;

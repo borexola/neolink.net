@@ -14,7 +14,7 @@ public interface IMediaSink
     void PublishAac(AacFrame frame);
     void PublishAdpcm(AdpcmFrame frame);
     /// <summary>The publishing session ended (camera disconnected, parked to sleep,
-    /// or the pull dropped). Discards session-scoped state — the GOP cache — so a
+    /// or the pull dropped). Discards session-scoped state, the GOP cache, so a
     /// viewer joining while the source is down isn't primed with stale frames that
     /// play for a second and freeze.</summary>
     void SourceStopped();
@@ -29,13 +29,13 @@ public interface IStreamHub
     string Name { get; }
     /// <summary>Every attached consumer, including the server's own recorders.</summary>
     int SubscriberCount { get; }
-    /// <summary>External watchers only (RTSP sessions + web players) — what "viewers" means to a human.</summary>
+    /// <summary>External watchers only (RTSP sessions + web players): what "viewers" means to a human.</summary>
     int ViewerCount { get; }
 
     /// <summary>True once codec parameters have been learned (DESCRIBE/init can be answered).</summary>
     bool VideoReady { get; }
 
-    /// <summary>Whether a decodable group of pictures is buffered RIGHT NOW — i.e. a
+    /// <summary>Whether a decodable group of pictures is buffered RIGHT NOW: i.e. a
     /// publisher is live and a keyframe has been seen since it started. Unlike
     /// <see cref="VideoReady"/>, which stays true for the rest of the run once codec
     /// parameters are known, this goes false the moment the source stops. Anything
@@ -55,7 +55,7 @@ public interface IStreamHub
 
     /// <summary>An Opus-consuming session arrived/left. The hub transcodes the
     /// camera's audio to Opus (<see cref="HubAudioOpus"/> packets, alongside the
-    /// originals) only while at least one such session is playing — ffmpeg runs
+    /// originals) only while at least one such session is playing: ffmpeg runs
     /// on demand and stops with the last Opus listener. Defaults are no-ops so
     /// hubs without a transcode path need nothing.</summary>
     void AcquireOpus() { }
@@ -70,7 +70,7 @@ public interface IStreamHub
     /// <summary>
     /// When a would-be viewer last asked for this stream (DESCRIBE/init wait).
     /// Viewers only subscribe once video is ready, so a sleeping battery camera
-    /// uses this — not <see cref="ViewerCount"/> — as its wake-up signal.
+    /// uses this, not <see cref="ViewerCount"/>, as its wake-up signal.
     /// </summary>
     DateTime LastViewerAskUtc { get; }
 

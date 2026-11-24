@@ -15,8 +15,8 @@ public sealed record OnvifNotification(string Topic, bool? Active,
     string? Subject = null)
 {
     /// <summary>Whether this is a DETECTION rather than housekeeping. ONVIF cameras
-    /// publish a great deal that is not motion — recording state, storage, network
-    /// changes, clock sync — and a subscription without a filter receives all of it.</summary>
+    /// publish a great deal that is not motion, recording state, storage, network
+    /// changes, clock sync, and a subscription without a filter receives all of it.</summary>
     public bool IsDetection => Labels.Count > 0;
 
     /// <summary>The camera withdrew this property (a rule was deleted or
@@ -85,7 +85,7 @@ public sealed record OnvifNotification(string Topic, bool? Active,
     internal static IReadOnlyList<string> Classify(string topic, IReadOnlyDictionary<string, string> items)
     {
         if (!IsAnalyticsTopic(topic)) return Array.Empty<string>();
-        // Tamper is an alarm, not a detection — as "motion" it would open a recording
+        // Tamper is an alarm, not a detection, as "motion" it would open a recording
         // that lasts until the lens is uncovered. A counter reports a number, not a sighting.
         if (Segment(topic, "Tamper") || (items.TryGetValue("IsTamper", out var tamper) && IsTrue(tamper)))
             return Array.Empty<string>();
@@ -180,7 +180,7 @@ public sealed record OnvifNotification(string Topic, bool? Active,
 
     private static bool IsTrue(string value) => ParseBool(value) == true;
 
-    /// <summary>xs:boolean, which is "true"/"false" OR "1"/"0" — cameras use both.</summary>
+    /// <summary>xs:boolean, which is "true"/"false" OR "1"/"0": cameras use both.</summary>
     internal static bool? ParseBool(string? value)
     {
         var v = value?.Trim();
@@ -229,18 +229,18 @@ public sealed partial class OnvifClient
     /// Opens a pull-point subscription and returns the address of the subscription
     /// manager the camera created for it, or null when the camera has no event
     /// service (or refused). The address is where PullMessages, Renew and
-    /// Unsubscribe are then sent — it is NOT the event service's own URL, and some
+    /// Unsubscribe are then sent: it is NOT the event service's own URL, and some
     /// cameras hand back a completely different host and port for it.
     ///
     /// No topic filter is sent. A filter would cut the traffic down, but the dialect
     /// for expressing one is where implementations differ most, and a camera that
-    /// dislikes the filter refuses the whole subscription — so everything is
+    /// dislikes the filter refuses the whole subscription, so everything is
     /// received and the uninteresting majority is dropped here instead.
     /// </summary>
     public async Task<PullPointResult> CreatePullPointAsync(TimeSpan termination, CancellationToken ct)
     {
         // Discovery touches shared state (the service URLs, the clock skew), and the
-        // settings calls run it under the gate — so this does too, rather than racing
+        // settings calls run it under the gate, so this does too, rather than racing
         // them. Only the create itself is inside it: the long poll that follows runs
         // without the gate, or it would hold every settings call up for 20 seconds.
         string? eventsUrl;
@@ -250,8 +250,8 @@ public sealed partial class OnvifClient
             // Not reachable RIGHT NOW is not the same as "has no event service": it
             // covers a camera mid-reboot and discovery's own cooldown, both of which
             // pass. Reported as a transient refusal, so the caller retries on its
-            // ordinary backoff — cheap, since discovery answers instantly while it is
-            // cooling down — rather than parking detections for five minutes.
+            // ordinary backoff, cheap, since discovery answers instantly while it is
+            // cooling down, rather than parking detections for five minutes.
             if (!await EnsureDiscoveredAsync(ct).ConfigureAwait(false))
                 return new PullPointResult(null, NoEventService: false, "ONVIF is not reachable just now");
             // Discovery is otherwise permanent for the run; see ServiceRecheck.
@@ -287,7 +287,7 @@ public sealed partial class OnvifClient
             if (renewed is { } r && r > g)
             {
                 Log.Debug($"{_tag}: the camera granted an event subscription {g.TotalSeconds:0}s of " +
-                          $"{termination.TotalSeconds:0}s, and {r.TotalSeconds:0}s asked in absolute time — using that");
+                          $"{termination.TotalSeconds:0}s, and {r.TotalSeconds:0}s asked in absolute time, using that");
                 granted = r;
             }
             else _absoluteTermination = false;
@@ -404,7 +404,7 @@ public sealed partial class OnvifClient
     }
 
     /// <summary>The notifications in a PullMessages reply. Every SimpleItem in the
-    /// message — from Source, Key and Data alike — is flattened into one bag, because
+    /// message, from Source, Key and Data alike, is flattened into one bag, because
     /// which of the three a vendor puts the interesting value in is not something
     /// worth predicting; the Source block is also kept apart, as it identifies the speaker.</summary>
     internal static List<OnvifNotification> ParseNotifications(XElement root)

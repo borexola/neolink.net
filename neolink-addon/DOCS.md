@@ -16,7 +16,7 @@ Assistant entities over MQTT.
        password: my-camera-password
    ```
 
-   Give each camera a DHCP reservation in your router — the add-on connects
+   Give each camera a DHCP reservation in your router: the add-on connects
    by IP. `always_on: true` keeps a battery camera streaming around the clock
    (drains the battery; pair with solar/USB power).
 
@@ -26,7 +26,7 @@ Assistant entities over MQTT.
 
 3. **Home Assistant entities** (optional but recommended): install the
    **Mosquitto broker** add-on and the **MQTT** integration if you don't have
-   them yet. Neolink wires itself to the broker automatically at every start —
+   them yet. Neolink wires itself to the broker automatically at every start,
    no addresses, no credentials to copy. Each camera appears as a device with
    motion/person/vehicle/animal (and smart detection) sensors, doorbell press
    events, battery, an on-demand **Record** switch, a **Recording** status
@@ -45,12 +45,12 @@ switches, event-type filters and capture schedules are managed in the web UI
 ### Tiered storage & archiving (BETA)
 
 Two optional extra locations can be added to the `recording` section of
-`config.json` (reachable via the Samba/SSH add-ons — plain JSON edits keep
+`config.json` (reachable via the Samba/SSH add-ons, plain JSON edits keep
 the add-on's config merging working):
 
-- `"clips_path"` — a fast tier where new event clips are written (24/7
+- `"clips_path"`: a fast tier where new event clips are written (24/7
   footage stays on the main path).
-- `"archive_path"` — a cold tier that unlocks per-camera **Archive** switches
+- `"archive_path"`: a cold tier that unlocks per-camera **Archive** switches
   in the web UI (camera ⚙ → RECORDING): footage whose retention expires is
   *moved* there instead of deleted, and stays playable in Events and the
   timeline.
@@ -64,11 +64,11 @@ page shows every configured location's free space, and the web UI warns at
 
 Add the share in Home Assistant first: **Settings → System → Storage → Add
 network storage** (SMB or NFS). A share added with usage **Media** appears at
-`/media/<share-name>`, one added as **Share** at `/share/<share-name>` — both
+`/media/<share-name>`, one added as **Share** at `/share/<share-name>`, both
 are visible to this add-on. Then point the recording path at it in Neolink's
 web UI (⚙ server settings → RECORDING → storage path), e.g.
 `/media/nvr/neolink`, and restart the add-on. Retention management follows
-the path — only Neolink's own folders there are ever cleaned up. The path is
+the path, only Neolink's own folders there are ever cleaned up. The path is
 written to `config.json` on first start only, so your choice is never
 overwritten by add-on restarts or updates.
 
@@ -90,23 +90,23 @@ The rules, designed so nothing you set ever gets lost:
 - **Neolink's web UI is the camera editor** (⚙ → Server settings → Cameras):
   it holds every field, and it is where cameras are added, changed and
   deleted. The add-on's `cameras` option is a head start for a brand-new
-  install, not a mirror of that list — **cameras added in the web UI never
+  install, not a mirror of that list: **cameras added in the web UI never
   appear on the Options page**, so an empty options list beside working
   cameras is normal, not a lost configuration. The add-on log says which list
   is in play at every start.
 - Where both know a camera (matched by name, case-insensitively), the options
   **win for the fields you actually set** at every start; blanks and untouched
   toggles change nothing, so everything else the web UI holds survives. To
-  turn an option like UDP or wake capture back **off**, use the web UI —
+  turn an option like UDP or wake capture back **off**, use the web UI:
   Home Assistant stores an untouched toggle as `false`, and honouring that
   would silently revert the web UI at every boot.
 - Removing a camera from the options does **not** delete it; the web UI's
   Delete does. Delete it in both, or it returns on the next start.
 - With **Automatic MQTT setup** on, only the broker *connection* fields are
-  refreshed at start — `base_topic`, `stats_interval` and everything else you
+  refreshed at start: `base_topic`, `stats_interval` and everything else you
   set in the web UI survive. Turn it off to point at your own broker.
 - Every other setting (ports, recording, users, UI) belongs to the web UI's
-  server settings and `config.json` — the add-on never touches them.
+  server settings and `config.json`: the add-on never touches them.
 - If you hand-edit `config.json` with `//` comments, the add-on stops merging
   entirely and runs the file exactly as you wrote it.
 
@@ -127,7 +127,7 @@ under the add-on, the difference is which ports reach it.
      `5140/udp` or `8443/tcp`, and restart the add-on.
   2. In Neolink's web UI (Server settings → General → Wake hints), set the
      matching source: syslog port **5140**, or push ports **8443**. These
-     are the ports *inside* the add-on — keep them as they are even if you
+     are the ports *inside* the add-on: keep them as they are even if you
      picked a different host port in step 1.
   3. Point the router at the Home Assistant host's IP and the **host** port
      from step 1.
@@ -141,19 +141,19 @@ under the add-on, the difference is which ports reach it.
 
 ## Troubleshooting
 
-- **"Restart service" in the web UI stops the add-on and it stays down** —
+- **"Restart service" in the web UI stops the add-on and it stays down**:
   enable the add-on's **Watchdog** toggle (this add-on's Info page). The
   restart button works by exiting the process; the Watchdog is what starts
   it again.
-- **"no MQTT broker service found" in the log** — install the Mosquitto
+- **"no MQTT broker service found" in the log**: install the Mosquitto
   broker add-on (Settings → Add-ons), then restart this add-on.
 - **Camera shows offline**: verify the IP, and that the camera works in the
   Reolink app from the same network. Battery cameras sleep: they are
   unreachable until PIR motion or the app wakes them (see the battery cameras guide in
   the project's docs).
-- **Port conflict on 8654/8655** — change the host ports in the add-on's
+- **Port conflict on 8654/8655**: change the host ports in the add-on's
   Network section; the web UI keeps working through **OPEN WEB UI**.
-- **A UDP-only battery camera (`"udp": true`) never connects** — these need
+- **A UDP-only battery camera (`"udp": true`) never connects**: these need
   host networking, which this add-on does not use. Install the **Neolink.NET
   (host network)** add-on from the same store instead; its Documentation tab
   has the steps for moving your settings across.

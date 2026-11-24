@@ -8,7 +8,7 @@ namespace Neolink.Protocol;
 
 /// <summary>The camera's own motion grid, as its ONVIF cell motion detector keeps
 /// it: <see cref="Cols"/> x <see cref="Rows"/> cells, row by row from the top left,
-/// '1' where motion counts and '0' where it is ignored — the same reading Neolink's
+/// '1' where motion counts and '0' where it is ignored: the same reading Neolink's
 /// zone editor uses for every other camera.</summary>
 public sealed record OnvifCellZone(int Cols, int Rows, string Table);
 
@@ -21,7 +21,7 @@ public enum OnvifZoneAnswer { Unknown, Holds, None }
 /// motion detector's grid. The layout (how many cells across and down) belongs to
 /// the analytics MODULE, the cells that count belong to the RULE, and both are
 /// addressed by the video analytics configuration a media profile carries. The
-/// cells travel as base64 of a PackBits-compressed bitmask — ONVIF Analytics
+/// cells travel as base64 of a PackBits-compressed bitmask: ONVIF Analytics
 /// Service spec, "Cell Motion Detector".
 ///
 /// A camera that offers no analytics service, no cell motion module or no such
@@ -52,7 +52,7 @@ public sealed partial class OnvifClient
                 // A grid Neolink cannot read is one it must not claim to show, nor
                 // write over with a guess.
                 Log.Info($"{_tag}: the camera's ONVIF motion grid could not be read (ActiveCells '{Truncate(cells ?? "", 40)}')" +
-                         " — the zone is kept on Neolink instead");
+                         ": the zone is kept on Neolink instead");
                 return (OnvifZoneAnswer.None, null);
             }
             return (OnvifZoneAnswer.Holds, new OnvifCellZone(target.Cols, target.Rows, table));
@@ -191,7 +191,7 @@ public sealed partial class OnvifClient
 
     /// <summary>The rule as ModifyRules wants it back: the camera's own element with
     /// the new cells in place. Its Type is a QName whose prefix was declared somewhere
-    /// up the camera's reply — which does not travel with the element — so the
+    /// up the camera's reply, which does not travel with the element, so the
     /// namespace it named is declared on the rule itself.</summary>
     internal static string RuleForWrite(XElement rule, string activeCells)
     {

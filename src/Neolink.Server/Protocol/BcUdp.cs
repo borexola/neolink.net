@@ -69,7 +69,7 @@ internal static class BcUdp
     }
 
     /// <summary>The payload comes back as a position into <paramref name="dgram"/>,
-    /// not a copy — the receive path delivers most packets straight to its pipe,
+    /// not a copy: the receive path delivers most packets straight to its pipe,
     /// and materializing an array per packet here forced a copy it then threw away.</summary>
     public static bool TryParseData(ReadOnlySpan<byte> dgram, out int connId, out uint packetId,
         out int payloadOffset, out int payloadLength)

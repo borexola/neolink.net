@@ -10,7 +10,7 @@
 @implements IAsyncDisposable
 
 @* Live resource monitor: the backend (Neolink.Server process + storage disk)
-   sampled server-side every 2s, and the frontend (this very browser tab —
+   sampled server-side every 2s, and the frontend (this very browser tab,
    JS heap, frame rate, circuit round-trip) sampled locally at the same beat. *@
 
 <PageTitle>@T["Neolink.NET · Monitor"]</PageTitle>
@@ -59,24 +59,24 @@
             <div class="mon-cards">
                 <div class="mon-card">
                     <span class="mon-card-label">@T["CPU"]</span>
-                    <span class="mon-card-value" style="color:@CpuColor()">@(Last is { } s1 ? $"{s1.Cpu:0.#}%" : "—")</span>
+                    <span class="mon-card-value" style="color:@CpuColor()">@(Last is { } s1 ? $"{s1.Cpu:0.#}%" : "-")</span>
                     <span class="mon-card-sub">@T["of all cores"]</span>
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">@T["MEMORY"]</span>
-                    <span class="mon-card-value">@(Last is { } s2 ? Bytes(s2.Ws) : "—")</span>
+                    <span class="mon-card-value">@(Last is { } s2 ? Bytes(s2.Ws) : "-")</span>
                     <span class="mon-card-sub">@T["working set"]@(_info is { MachineMemory: > 0 } ? " " + T.F("of {0}", Bytes(_info.MachineMemory)) : "")</span>
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">@T["DISK FREE"]</span>
-                    <span class="mon-card-value" style="color:@DiskColor()">@(Last is { DTot: > 0 } s3 ? Bytes(s3.DFree) : "—")</span>
+                    <span class="mon-card-value" style="color:@DiskColor()">@(Last is { DTot: > 0 } s3 ? Bytes(s3.DFree) : "-")</span>
                     <span class="mon-card-sub">@(_info?.Disk ?? T["volume"])@(Last is { DTot: > 0 } su ? " · " + T.F("{0}% used", $"{(su.DTot - su.DFree) * 100.0 / su.DTot:0}") : "")@ForecastText(_storage.FirstOrDefault(l => l.Role == "main"))</span>
                 </div>
                 @if (Last is { Rec: >= 0 })
                 {
                     <div class="mon-card">
                         <span class="mon-card-label">@T["RECORDINGS"]</span>
-                        <span class="mon-card-value">@(Last is { } sr ? Bytes(sr.Rec) : "—")</span>
+                        <span class="mon-card-value">@(Last is { } sr ? Bytes(sr.Rec) : "-")</span>
                         <span class="mon-card-sub">@T["footage on disk"]@(Last is { DTot: > 0 } sp ? " · " + T.F("{0}% of the volume", $"{sp.Rec * 100.0 / sp.DTot:0.#}") : "")</span>
                     </div>
                 }
@@ -88,17 +88,17 @@
                      @onclick="ToggleViewersAsync"
                      @onkeydown="@(e => e.Key == "Enter" ? ToggleViewersAsync() : Task.CompletedTask)">
                     <span class="mon-card-label">@T["VIEWERS"]@(_admin ? (_viewersOpen ? " ▾" : " ▸") : "")</span>
-                    <span class="mon-card-value">@(Last?.View.ToString() ?? "—")</span>
+                    <span class="mon-card-value">@(Last?.View.ToString() ?? "-")</span>
                     <span class="mon-card-sub">@T["watching live (RTSP + web), recorders not counted"]</span>
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">@T["RECORDING"]</span>
-                    <span class="mon-card-value" style="@(Last is { RecCams: > 0 } ? "color: var(--err)" : "")">@(Last?.RecCams.ToString() ?? "—")</span>
+                    <span class="mon-card-value" style="@(Last is { RecCams: > 0 } ? "color: var(--err)" : "")">@(Last?.RecCams.ToString() ?? "-")</span>
                     <span class="mon-card-sub">@T["cameras taping 24/7 right now"]</span>
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">@T["STORAGE WRITES"]</span>
-                    <span class="mon-card-value">@(Last is { } sw ? $"{sw.WMb:0.#} MB/s" : "—")</span>
+                    <span class="mon-card-value">@(Last is { } sw ? $"{sw.WMb:0.#} MB/s" : "-")</span>
                     <span class="mon-card-sub">@(Last is { } sf ? T.F("{0} files completed since start", sf.WFiles.ToString("n0")) : T["clips + previews + segments"])</span>
                 </div>
                 <div class="mon-card">
@@ -120,7 +120,7 @@
                 }
                 else if (_viewers == null)
                 {
-                    <div class="mon-avail-sub" style="margin: 0 2px 18px">—</div>
+                    <div class="mon-avail-sub" style="margin: 0 2px 18px">-</div>
                 }
                 else if (_viewers.Count == 0)
                 {
@@ -185,7 +185,7 @@
             </div>
 
             @* ---------------- storage tiers ---------------- *@
-            @* Only when split storage is configured — a single-volume install is
+            @* Only when split storage is configured: a single-volume install is
                already covered by the DISK FREE card above. *@
             @if (_storage.Count > 1)
             {
@@ -259,17 +259,17 @@
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">@T["FRAME RATE"]</span>
-                    <span class="mon-card-value">@(_browser.Count > 0 && _browser[^1].Fps >= 0 ? $"{_browser[^1].Fps:0}" : "—")</span>
+                    <span class="mon-card-value">@(_browser.Count > 0 && _browser[^1].Fps >= 0 ? $"{_browser[^1].Fps:0}" : "-")</span>
                     <span class="mon-card-sub">@T["rendered fps"]</span>
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">@T["CIRCUIT"]</span>
-                    <span class="mon-card-value">@(_browser.Count > 0 ? $"{_browser[^1].LatencyMs:0} ms" : "—")</span>
+                    <span class="mon-card-value">@(_browser.Count > 0 ? $"{_browser[^1].LatencyMs:0} ms" : "-")</span>
                     <span class="mon-card-sub">@T["UI round-trip (SignalR)"]</span>
                 </div>
                 <div class="mon-card">
                     <span class="mon-card-label">@T["DOM"]</span>
-                    <span class="mon-card-value">@(_browser.Count > 0 ? _browser[^1].DomNodes.ToString("n0") : "—")</span>
+                    <span class="mon-card-value">@(_browser.Count > 0 ? _browser[^1].DomNodes.ToString("n0") : "-")</span>
                     <span class="mon-card-sub">@T["elements on this page"]</span>
                 </div>
             </div>
@@ -435,7 +435,7 @@
             if (stats.Avail is { Count: > 0 } av) _avail = av;
             _samples.AddRange(stats.Samples);
             // Mirror the server's tiers: 2s detail for the last hour, ~1/min
-            // beyond, nothing past 24h — a tab left open all day stays light.
+            // beyond, nothing past 24h, a tab left open all day stays light.
             Compact(_samples, s => s.T);
         }
         catch (Exception ex)
@@ -486,7 +486,7 @@
     }
 
     /// <summary>Storage-tier capacities (only rendered when split storage is
-    /// configured). Refreshed every ~10s — disks don't fill within a poll tick.</summary>
+    /// configured). Refreshed every ~10s: disks don't fill within a poll tick.</summary>
     private async Task FetchStorageAsync()
     {
         if (DateTime.UtcNow < _storageNext) return;
@@ -580,7 +580,7 @@
 
     private string WindowLabel() => Windows.FirstOrDefault(w => w.Sec == _windowSec).Label ?? "1h";
 
-    /// <summary>The camera's online/offline runs clamped to the selected window —
+    /// <summary>The camera's online/offline runs clamped to the selected window:
     /// ribbon and stats both derive from this, so the cards obey the filter.</summary>
     private List<ClampedRun> WindowRuns(ApiCamAvail a)
     {
@@ -630,7 +630,7 @@
         ? "100"
         : pct.ToString(pct >= 99 ? "0.##" : "0.#", CultureInfo.InvariantCulture);
 
-    // Report-card grade: harsh on purpose — a camera you can't reach isn't "97% fine".
+    // Report-card grade: harsh on purpose, a camera you can't reach isn't "97% fine".
     private static string Grade(double pct) =>
         pct >= 99.9 ? "A+" : pct >= 99 ? "A" : pct >= 97 ? "B" : pct >= 90 ? "C" : "D";
 
@@ -669,7 +669,7 @@
 
     private string Uptime()
     {
-        if (_info == null) return "—";
+        if (_info == null) return "-";
         var up = DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeMilliseconds(_info.StartUtcMs);
         return up.TotalDays >= 1 ? $"{(int)up.TotalDays}d {up.Hours}h"
             : up.TotalHours >= 1 ? $"{(int)up.TotalHours}h {up.Minutes}m"

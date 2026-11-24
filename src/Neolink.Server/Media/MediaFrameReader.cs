@@ -89,7 +89,7 @@ public sealed class MediaFrameReader
         }
     }
 
-    // Headers are parsed IN PLACE from the peek buffer (parse, then consume) —
+    // Headers are parsed IN PLACE from the peek buffer (parse, then consume):
     // this path runs for every frame, and allocating throwaway header arrays was
     // measurable GC noise across many streams. Only the payload gets its own
     // array, because the frame owns it beyond this call.

@@ -79,13 +79,13 @@ public sealed class ReolinkHttpApi : IDisposable
 
     /// <summary>Connection hygiene for camera HTTP. A Wi-Fi camera drops idle
     /// keep-alive connections SILENTLY (power save, AP roam, embedded-server
-    /// amnesia) — no RST, so a pooled connection can be a corpse: requests
+    /// amnesia), no RST, so a pooled connection can be a corpse: requests
     /// written into one wait out the whole command cap for a reply that never
     /// comes, reading as "did not reply" streaks against a perfectly healthy
     /// camera (field report: 10s stalls while curl from the same network
     /// namespace answered in 69ms on a fresh connection). Idle connections are
-    /// therefore retired after 30s — a sweep after a quiet period starts on
-    /// fresh TCP, which costs ~1ms on a LAN — and connects get their own 5s
+    /// therefore retired after 30s, a sweep after a quiet period starts on
+    /// fresh TCP, which costs ~1ms on a LAN, and connects get their own 5s
     /// bound so a dropped SYN fails fast instead of masquerading as a slow
     /// reply for the full cap.</summary>
     private HttpMessageHandler NewHandler()
@@ -108,12 +108,12 @@ public sealed class ReolinkHttpApi : IDisposable
 
     public void Dispose() { _http.Dispose(); _httpLong?.Dispose(); }
 
-    /// <summary>The channel this client addresses — for callers composing minimal
+    /// <summary>The channel this client addresses, for callers composing minimal
     /// write payloads ({"channel": n, "field": value}).</summary>
     public byte ChannelId => _channelId;
 
     /// <summary>Whether the next call can ride the cached session token. False
-    /// means it pays for a LOGIN round-trip first — which on a Wi-Fi camera busy
+    /// means it pays for a LOGIN round-trip first, which on a Wi-Fi camera busy
     /// pushing streams (dual-lens Duos especially) can take several seconds by
     /// itself, so callers should budget accordingly.</summary>
     public bool HasLiveToken => _token != null && DateTime.UtcNow < _tokenExpiry;
@@ -165,7 +165,7 @@ public sealed class ReolinkHttpApi : IDisposable
         await SnapAsync("sub", width, height, ct).ConfigureAwait(false);
 
     /// <summary>As above with an explicit stream tier: "main", "sub" or "ext" (the
-    /// extern stream — the smallest tier, present on dual-lens and newer models).
+    /// extern stream, the smallest tier, present on dual-lens and newer models).
     /// Firmwares without the requested tier answer with an error JSON → null.</summary>
     public async Task<byte[]?> SnapAsync(string snapType, int width, int height, CancellationToken ct)
     {
@@ -177,7 +177,7 @@ public sealed class ReolinkHttpApi : IDisposable
                 if (_token == null || DateTime.UtcNow >= _tokenExpiry)
                     await LoginAsync(ct).ConfigureAwait(false);
                 // rs = anti-cache nonce; the official clients send one on every Snap.
-                // snapType=sub asks for the SUB-stream-resolution image — honored
+                // snapType=sub asks for the SUB-stream-resolution image: honored
                 // far more widely than width/height (dual-lens Duos ignore those
                 // but do respect snapType); firmwares that know neither ignore
                 // unknown query parameters and send the full-size image.
@@ -186,9 +186,9 @@ public sealed class ReolinkHttpApi : IDisposable
                 using var res = await _http.GetAsync(url, ct).ConfigureAwait(false);
                 var bytes = await res.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
                 if (bytes.Length > 100 && bytes[0] == 0xFF && bytes[1] == 0xD8)
-                    return bytes; // JPEG magic — a real image
+                    return bytes; // JPEG magic: a real image
                 // Errors come back as a small JSON body (formatting varies per
-                // firmware, so don't pattern-match the rspCode) — most commonly a
+                // firmware, so don't pattern-match the rspCode): most commonly a
                 // stale token after a camera reboot. Relogin and retry once.
                 if (attempt == 0 && bytes.Length < 4096 && bytes.Length > 0 && bytes[0] is (byte)'[' or (byte)'{')
                 {
@@ -228,7 +228,7 @@ public sealed class ReolinkHttpApi : IDisposable
     public Task SetAudioCfgAsync(JsonObject audioCfg, CancellationToken ct) =>
         ExecAsync("SetAudioCfg", new JsonObject { ["AudioCfg"] = audioCfg.DeepClone() }, ct);
 
-    /// <summary>Which link the camera is actually USING — "LAN" or "Wifi" in Reolink's
+    /// <summary>Which link the camera is actually USING: "LAN" or "Wifi" in Reolink's
     /// wording, firmware-dependent in case. Null when the camera doesn't answer.
     /// A Wi-Fi-capable camera plugged into a cable reports LAN, which is the whole
     /// point: it has no Wi-Fi signal to report and shouldn't be asked for one.</summary>
@@ -248,8 +248,8 @@ public sealed class ReolinkHttpApi : IDisposable
     }
 
     /// <summary>Reads the signal out of a GetWifiSignal reply's value node. Firmwares
-    /// answer in several shapes — {"signal":N}, {"wifiSignal":N},
-    /// {"WifiSignal":{"signal":N}} — and some (Video Doorbell WiFi) quote numbers as
+    /// answer in several shapes: {"signal":N}, {"wifiSignal":N},
+    /// {"WifiSignal":{"signal":N}}, and some (Video Doorbell WiFi) quote numbers as
     /// STRINGS, where a bare (int?) cast throws. Null when no shape matches.</summary>
     internal static int? ParseWifiSignal(JsonNode? value)
     {
@@ -331,7 +331,7 @@ public sealed class ReolinkHttpApi : IDisposable
         return value?["DevInfo"] as JsonObject;
     }
 
-    /// <summary>Reads the camera's ability table for this account — the authoritative
+    /// <summary>Reads the camera's ability table for this account: the authoritative
     /// "does this model actually have the feature" source (config reads often carry
     /// fields for features the hardware lacks).</summary>
     public async Task<JsonObject> GetAbilityAsync(CancellationToken ct)
@@ -389,7 +389,7 @@ public sealed class ReolinkHttpApi : IDisposable
         }
         catch (ReolinkApiException ex)
         {
-            // Old firmware: "not support"/"not exist" — fall through to GetAlarm, as on any refusal.
+            // Old firmware: "not support"/"not exist": fall through to GetAlarm, as on any refusal.
             settled = ex.RejectedByCamera;
         }
         var alarm = await ExecAsync("GetAlarm",
@@ -401,8 +401,8 @@ public sealed class ReolinkHttpApi : IDisposable
 
     /// <summary>The LEGACY motion config (GetAlarm type "md") specifically, or null
     /// when the firmware rejects the command. Some newer firmwares (the Video
-    /// Doorbell line) answer GetMdAlarm for sensitivity but keep the ZONE grid —
-    /// one grid, shared by every detection type — only in this object, so the
+    /// Doorbell line) answer GetMdAlarm for sensitivity but keep the ZONE grid,
+    /// one grid, shared by every detection type, only in this object, so the
     /// zone reader needs the legacy shape even when the new dialect exists.</summary>
     public async Task<JsonObject?> TryGetLegacyMdConfigAsync(CancellationToken ct) =>
         (await ReadLegacyMdConfigAsync(ct).ConfigureAwait(false)).Alarm;
@@ -438,7 +438,7 @@ public sealed class ReolinkHttpApi : IDisposable
 
     /// <summary>Reads one AI detection type's alarm config (sensitivity 0-100,
     /// stay_time, target sizes). Types the firmware knows: "people", "vehicle",
-    /// "dog_cat", "face", "package" — unsupported ones are rejected (throws).</summary>
+    /// "dog_cat", "face", "package": unsupported ones are rejected (throws).</summary>
     public async Task<JsonObject> GetAiAlarmAsync(string aiType, CancellationToken ct)
     {
         var value = await ExecAsync("GetAiAlarm",
@@ -489,8 +489,8 @@ public sealed class ReolinkHttpApi : IDisposable
 
     /// <summary>Searches the camera's SD card. With <paramref name="onlyStatus"/> the
     /// reply is a per-month calendar (Status[].table, one digit per day); without it,
-    /// the File[] list for the window (max ~2000 entries per call — keep windows to
-    /// a day). Times are camera-local. The FILE search walks the card's file table —
+    /// the File[] list for the window (max ~2000 entries per call, keep windows to
+    /// a day). Times are camera-local. The FILE search walks the card's file table,
     /// on a busy day that alone can take longer than the 10s command cap, so it runs
     /// on the uncapped client and only the caller's token bounds it.</summary>
     public async Task<JsonObject> SearchAsync(string streamType, DateTime start, DateTime end,
@@ -546,7 +546,7 @@ public sealed class ReolinkHttpApi : IDisposable
 
     /// <summary>Streams one recording file off the SD card (cmd=Download). The name
     /// comes from <see cref="SearchAsync"/> File entries. Runs on a connection with
-    /// no overall timeout — a full clip takes minutes over Wi-Fi — so the caller's
+    /// no overall timeout, a full clip takes minutes over Wi-Fi, so the caller's
     /// token governs its lifetime; only the token handshake holds the command gate.</summary>
     public Task<SdDownload> DownloadAsync(string fileName, CancellationToken ct) =>
         FetchRecordingAsync("Download", fileName, ct);
@@ -637,7 +637,7 @@ public sealed class ReolinkHttpApi : IDisposable
         catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
         {
             // A proven-live API dropping THIS request: some firmwares' handler crashes
-            // at entry (Download on the Video Doorbell WiFi) — the caller tries another.
+            // at entry (Download on the Video Doorbell WiFi), the caller tries another.
             throw new ReolinkApiException($"the camera dropped the {cmd} request ({ex.Message})");
         }
         try
@@ -691,7 +691,7 @@ public sealed class ReolinkHttpApi : IDisposable
                     return (reply.Value, reply.Range);
 
                 // -6: token invalid/expired despite the lease (camera rebooted, session
-                // table flushed) — log in again and retry the command once.
+                // table flushed), log in again and retry the command once.
                 if (reply.RspCode == -6 && attempt == 0)
                 {
                     _token = null;
@@ -721,7 +721,7 @@ public sealed class ReolinkHttpApi : IDisposable
     private async Task LoginAsync(CancellationToken ct)
     {
         // The documented login carries User.Version "0", and most firmwares accept
-        // it — but some (observed on the dual-lens Duo line) reject that shape as
+        // it, but some (observed on the dual-lens Duo line) reject that shape as
         // "password wrong" while accepting the bare User object that reolink_aio
         // (Home Assistant's Reolink integration) sends. Try documented first so
         // known-good cameras are untouched, bare second on rejection only.
@@ -753,7 +753,7 @@ public sealed class ReolinkHttpApi : IDisposable
     private sealed record Reply(int Code, int RspCode, string? Detail, JsonNode? Value, JsonNode? Range);
 
     /// <summary>Wire serialization for the camera. The default encoder escapes
-    /// HTML-sensitive characters — dayNight "Black&amp;White" would go out with a
+    /// HTML-sensitive characters: dayNight "Black&amp;White" would go out with a
     /// & escape. Camera firmware JSON parsers don't decode those escapes and
     /// silently ignore the value, so everything must go over as literal UTF-8.</summary>
     internal static readonly JsonSerializerOptions WireJson = new()
@@ -792,7 +792,7 @@ public sealed class ReolinkHttpApi : IDisposable
             catch (HttpRequestException) when (!ct.IsCancellationRequested)
             {
                 // A pooled keep-alive connection the camera dropped SILENTLY (Wi-Fi
-                // power save, AP roam) fails the instant it is reused — the handler
+                // power save, AP roam) fails the instant it is reused: the handler
                 // has now retired that dead connection, so a single retry opens a
                 // fresh one and succeeds. These commands are idempotent (reads, or
                 // a Set of the value the caller already chose), so retrying is safe.

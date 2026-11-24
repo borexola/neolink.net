@@ -14,13 +14,13 @@ namespace Neolink.Desktop;
 ///
 /// It is separate from the WebView on purpose. The web UI raises notifications
 /// from a poll that lives on its Home page, so alerts stop the moment the user
-/// navigates to Timeline — acceptable in a browser tab, useless in a tray app
+/// navigates to Timeline: acceptable in a browser tab, useless in a tray app
 /// that starts on boot. This client keeps polling whatever the window is showing
 /// and whether or not the window exists at all.
 ///
 /// A 401 mid-session means the token expired: every call goes through
 /// <see cref="SendAsync"/>, which re-authenticates once with the saved
-/// credentials and retries. Nothing here ever throws at the caller — callers get
+/// credentials and retries. Nothing here ever throws at the caller: callers get
 /// null and decide, because a poll that throws is a poll that stops.
 /// </summary>
 internal sealed class ServerLink : IDisposable
@@ -36,7 +36,7 @@ internal sealed class ServerLink : IDisposable
     /// re-login must get the new one, not the one the app started with.</summary>
     public event Action<string>? TokenRefreshed;
 
-    /// <summary>PascalCase out, case-insensitive in — byte-for-byte what the web
+    /// <summary>PascalCase out, case-insensitive in: byte-for-byte what the web
     /// UI writes to /api/me/settings/notifications, so the two clients read each
     /// other's rules.</summary>
     private static readonly JsonSerializerOptions PrefsJson = new()
@@ -49,7 +49,7 @@ internal sealed class ServerLink : IDisposable
 
     /// <param name="persistLogin">Whether a successful sign-in writes the settings
     /// file. The app's own link persists; the connect dialog probes a CANDIDATE
-    /// settings object and must not let a mere test overwrite the real file —
+    /// settings object and must not let a mere test overwrite the real file:
     /// it commits explicitly once the user says Connect.</param>
     public ServerLink(DesktopSettings settings, bool persistLogin = true)
     {
@@ -60,7 +60,7 @@ internal sealed class ServerLink : IDisposable
         {
             // Explicitly opted in: a LAN server behind a self-signed certificate is
             // the normal case for this product, and the alternative is an app that
-            // simply cannot connect. Never the default, and never silent — the
+            // simply cannot connect. Never the default, and never silent: the
             // connect dialog states what it means.
             handler.ServerCertificateCustomValidationCallback =
                 HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
@@ -101,7 +101,7 @@ internal sealed class ServerLink : IDisposable
                 // knows is right comes back wrong.
                 if (res.StatusCode == HttpStatusCode.Unauthorized)
                     return (err ?? "wrong username or password") +
-                           " — this is the web UI account (the server's Settings > Users), " +
+                           ": this is the web UI account (the server's Settings > Users), " +
                            "not the camera or RTSP login.";
                 return err ?? $"sign-in failed ({(int)res.StatusCode} {res.ReasonPhrase})";
             }
@@ -143,7 +143,7 @@ internal sealed class ServerLink : IDisposable
         GetAsync<List<ApiCamera>>("/api/cameras", ct);
 
     /// <summary>The account's alert rules. Null means "the server has nothing to
-    /// say" — no accounts configured, or nothing saved yet — which is different
+    /// say", no accounts configured, or nothing saved yet, which is different
     /// from an empty rule set and must not overwrite the local cache.</summary>
     public async Task<AlertPrefs?> GetAlertPrefsAsync(CancellationToken ct = default)
     {
@@ -274,7 +274,7 @@ internal sealed class ServerLink : IDisposable
         catch { return null; }
     }
 
-    /// <summary>Exception to a sentence a person can act on — "connection refused"
+    /// <summary>Exception to a sentence a person can act on: "connection refused"
     /// beats a stack of nested socket errors in a tray tooltip.</summary>
     private static string Describe(Exception ex) => ex switch
     {
@@ -282,13 +282,13 @@ internal sealed class ServerLink : IDisposable
         HttpRequestException { InnerException: System.Net.Sockets.SocketException s } =>
             s.SocketErrorCode switch
             {
-                System.Net.Sockets.SocketError.ConnectionRefused => "connection refused — is the web UI enabled on that port?",
+                System.Net.Sockets.SocketError.ConnectionRefused => "connection refused: is the web UI enabled on that port?",
                 System.Net.Sockets.SocketError.HostNotFound => "that host name did not resolve",
                 System.Net.Sockets.SocketError.TimedOut => "the connection timed out",
                 _ => s.Message,
             },
         HttpRequestException { InnerException: System.Security.Authentication.AuthenticationException } =>
-            "the TLS certificate was rejected — tick \"accept an untrusted certificate\" for a self-signed server",
+            "the TLS certificate was rejected: tick \"accept an untrusted certificate\" for a self-signed server",
         HttpRequestException h => h.Message,
         _ => ex.Message,
     };

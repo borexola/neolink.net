@@ -51,7 +51,7 @@ node tools/fake_onvif.js 8010 &
 
 Two optional arguments shape the camera it pretends to be: a clock skew in
 seconds (it then refuses any request not stamped in its own, drifted time), and
-a comma-separated list of modes — `media2` (it speaks only Media2, and every
+a comma-separated list of modes, `media2` (it speaks only Media2, and every
 ver10 media call faults), `zoomonly` (a motorised lens with no pan or tilt),
 `nocells` (no analytics service, so no motion grid of its own):
 
@@ -63,7 +63,7 @@ node tools/fake_onvif.js 8010 47 media2,zoomonly &
 editor can be checked cell by cell.
 
 Then add a generic camera pointed at any RTSP source, with its ONVIF address
-aimed at the fake (the credentials in the URL are what it signs in with — the
+aimed at the fake (the credentials in the URL are what it signs in with, the
 fake accepts any):
 
 ```json
@@ -76,7 +76,7 @@ An easy way to have an RTSP source at hand is a second Neolink in `--demo`
 mode: its synthetic cameras serve on `rtsp://127.0.0.1:8654/<name>`, which also
 exercises the frame grab that gives a camera with no snapshot command its still.
 
-It is a test double, not a conformant device — it is there to catch envelope,
+It is a test double, not a conformant device: it is there to catch envelope,
 namespace and field-name mistakes that unit tests on the parsers cannot.
 
 ## Testing uncommitted changes on a real server (local Docker image)
@@ -89,7 +89,7 @@ edits are included.
 On the dev machine (repo root). The image tag and tar name are FIXED
 (`neolink.net:test` → `neolink-test.tar`), so the server-side commands never
 change between test builds; only the `VERSION` label varies. Keep that label
-`X.Y.Z-something` — the update checker compares by the numeric prefix, and a
+`X.Y.Z-something`: the update checker compares by the numeric prefix, and a
 label without one would see every release as an update:
 
 ```bash
@@ -107,7 +107,7 @@ On the server (after copying the tar over):
 ```bash
 docker load -i neolink-test.tar
 
-# replace the previous test container if one exists — a plain `docker start`
+# replace the previous test container if one exists: a plain `docker start`
 # later would silently resurrect the OLD image, so remove it outright
 docker stop neolink-test && docker rm neolink-test
 
@@ -126,7 +126,7 @@ Notes:
   (e.g. `"path": "/recordings"`), matching the volume mounts.
 - Config and recordings live in the host mounts, so stopping/removing the
   container never touches them.
-- Confirm which build is live at the top toolbar of the web UI — it shows the
+- Confirm which build is live at the top toolbar of the web UI: it shows the
   exact version string you baked in.
 - Old test images pile up; reclaim disk with `docker rmi neolink.net:<old-tag>`.
 - The image is built for the dev machine's Docker platform (typically

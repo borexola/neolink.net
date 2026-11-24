@@ -7,7 +7,7 @@ namespace Neolink.Web;
 /// Per-camera online/offline history kept as run-length transitions, fed by the
 /// SystemMonitor's sampling tick. Powers the monitor page's availability score
 /// and status ribbon. In-memory by design: observation starts at process start
-/// and the history is capped to the last 24 hours — an honest "what did this
+/// and the history is capped to the last 24 hours, an honest "what did this
 /// process actually see", not a synthetic lifetime SLA.
 /// </summary>
 public sealed class CameraAvailability

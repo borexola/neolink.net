@@ -56,7 +56,7 @@ const OFFLINE_HTML = `<!doctype html>
 <script>
   // Retry quietly in the background: probe the app root and only reload once
   // the server actually answers, so the user never sees a reload flicker-loop.
-  // GET, not HEAD — the Blazor endpoint answers 405 to HEAD, which would keep
+  // GET, not HEAD: the Blazor endpoint answers 405 to HEAD, which would keep
   // this page up forever. One small page fetch per probe, only while down.
   window.addEventListener('online', () => location.reload());
   setInterval(() => {
@@ -82,7 +82,7 @@ self.addEventListener('fetch', e => {
 
 // Browser alerts: clicking a notification lands on the exact clip. Focus an
 // existing window when one is open (and steer it to the event), otherwise open
-// a fresh one — the standard PWA notification-click dance.
+// a fresh one: the standard PWA notification-click dance.
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   const url = e.notification.data && e.notification.data.url;

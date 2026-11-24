@@ -52,7 +52,7 @@ public static class BcConstants
     public const uint MsgIdUdpKeepAlive = 234;
     public const uint MsgIdBatteryInfoList = 252;
     public const uint MsgIdBatteryInfo = 253;
-    public const uint MsgIdPlayAudio = 263;            // "audioPlayInfo" — manual siren trigger
+    public const uint MsgIdPlayAudio = 263;            // "audioPlayInfo": manual siren trigger
     public const uint MsgIdFloodlightManual = 288;
     public const uint MsgIdFloodlightTasksGet = 289;   // GET_FLOODLIGHT_TASK in every Linux IPC firmware
     public const uint MsgIdFloodlightTasksWrite = 290;
@@ -113,7 +113,7 @@ public static class BcConstants
     //  0x6614: modern, 20 byte header (reply to the legacy login)
     //  0x6414: modern, 24 byte header (has payload offset)
     //  0x0000: modern, 24 byte header (has payload offset)
-    //  0xffff: modern, 24 byte header — undocumented; observed live on an Argus
+    //  0xffff: modern, 24 byte header, undocumented; observed live on an Argus
     //          Solar as the class of its msg-124 PushInfo reply. Not in either
     //          reference neolink. Parsing it with a 20-byte header left 4 stray
     //          bytes in the stream and desynced every message after it (the
@@ -210,7 +210,7 @@ public sealed class EncryptionState
     /// <summary>
     /// One-shot AES-128-ECB over block-aligned input with the session key. The keyed
     /// AES instance (whose key schedule is the expensive part) lives for the whole
-    /// session instead of being rebuilt per message — under FullAes this runs for
+    /// session instead of being rebuilt per message: under FullAes this runs for
     /// every media message, so that rebuild used to dominate the protocol layer's
     /// CPU. Serialized by the gate: the read loop is the only heavy caller, and an
     /// occasional outgoing command holds it for microseconds.

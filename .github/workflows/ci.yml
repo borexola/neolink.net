@@ -1,7 +1,7 @@
 name: ci
 
 # Merge gate: every pull request (and every push to main or beta) must build cleanly
-# and pass the built-in self-test suite (`neolink.net selftest` — protocol
+# and pass the built-in self-test suite (`neolink.net selftest`, protocol
 # codecs, config, recording, auth, MQTT, and the live web-API contract test).
 on:
   pull_request:
@@ -48,7 +48,7 @@ jobs:
       - name: Self-tests
         run: |
           # WinExe (GUI subsystem): PowerShell does not wait for it and never
-          # sets $LASTEXITCODE — only Start-Process -Wait sees the real result.
+          # sets $LASTEXITCODE, only Start-Process -Wait sees the real result.
           $exe = "src/Neolink.Desktop/bin/Release/net10.0-windows10.0.19041.0/Neolink.Desktop.exe"
           $p = Start-Process -FilePath $exe -ArgumentList '--selftest' -NoNewWindow -Wait -PassThru
           if ($p.ExitCode -ne 0) { exit 1 }

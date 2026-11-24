@@ -8,10 +8,10 @@ using System.Text;
 namespace Neolink.Notifications;
 
 /// <summary>
-/// A minimal, dependency-free SMTP client — enough of RFC 5321 to submit one
+/// A minimal, dependency-free SMTP client: enough of RFC 5321 to submit one
 /// multipart (text + HTML) message with authentication. Hand-rolled (like the
 /// project's MQTT client) so there's no NuGet dependency and both transports are
-/// supported: implicit TLS on 465 and STARTTLS on 587 — the latter is what the
+/// supported: implicit TLS on 465 and STARTTLS on 587, the latter is what the
 /// built-in System.Net.Mail.SmtpClient can't do reliably. Every call is bounded
 /// by an overall timeout and throws on any protocol error; the caller
 /// (<see cref="Notifier"/>) swallows and logs, so a bad mail server never affects
@@ -22,7 +22,7 @@ internal static class SmtpSender
     private static readonly TimeSpan Overall = TimeSpan.FromSeconds(25);
 
     /// <summary>The session budget: a fixed window for the dialogue plus upload
-    /// time by attachment size — snapshot-heavy emails are megabytes of base64,
+    /// time by attachment size, snapshot-heavy emails are megabytes of base64,
     /// undeliverable on a slow uplink inside any fixed window. Sized for a
     /// ~256 kbit/s worst-case uplink, capped at ten minutes.</summary>
     internal static TimeSpan TimeoutFor(IReadOnlyList<EmailAttachment>? attachments)
@@ -91,7 +91,7 @@ internal static class SmtpSender
         finally
         {
             // stream is upgraded in place (implicit TLS or STARTTLS); only the TLS
-            // wrapper needs disposing — the plain socket dies with tcp.
+            // wrapper needs disposing: the plain socket dies with tcp.
             if (stream is SslStream ssl)
                 try { await ssl.DisposeAsync().ConfigureAwait(false); } catch { }
         }
@@ -120,7 +120,7 @@ internal static class SmtpSender
     /// <summary>MIME multipart/alternative: plain text first, HTML second (clients
     /// pick the richest they render). Headers are ASCII; bodies are UTF-8 base64
     /// so any character survives, avoiding line-length and encoding pitfalls.
-    /// With attachments the alternative pair nests inside multipart/mixed —
+    /// With attachments the alternative pair nests inside multipart/mixed:
     /// the one shape every client renders as "message with attached images".
     /// Internal so the selftest can pin the structure without a mail server.</summary>
     internal static string BuildMessage(NotificationSettings s, string subject, string html, string text,

@@ -9,7 +9,7 @@
     <base href="@BaseHref" />
     @* ?v= cache-buster: without it, phones especially would serve a STALE cached
        stylesheet/script long after a server update (heuristic caching skips
-       revalidation) — seen live as the settings dialog rendering with layout
+       revalidation), seen live as the settings dialog rendering with layout
        bugs fixed releases ago. The version changes every release/beta, so each
        update fetches fresh assets exactly once. *@
     <link rel="stylesheet" href="_content/Neolink.WebClient/css/app.css?v=@AssetVersion" />
@@ -20,7 +20,7 @@
     <link rel="icon" type="image/png" sizes="256x256" href="_content/Neolink.WebClient/favicon.png" />
     <link rel="apple-touch-icon" href="_content/Neolink.WebClient/favicon.png" />
     @* PWA: lets browsers install the app as its own window (Chrome/Edge "Install
-       app", Safari "Add to Dock"/home screen). The UI stays server-rendered —
+       app", Safari "Add to Dock"/home screen). The UI stays server-rendered:
        the installed app is the same live client in a standalone window. *@
     <link rel="manifest" href="_content/Neolink.WebClient/manifest.webmanifest" />
     <meta name="theme-color" content="#0b0d12" />
@@ -73,7 +73,7 @@
     private string? ClientAddress => HttpContext is { } ctx ? Local.ClientAddressOf?.Invoke(ctx) : null;
 
     // This page is rendered STATICALLY, before any circuit exists, so it cannot
-    // use the scoped Translator — it resolves the language itself and looks
+    // use the scoped Translator: it resolves the language itself and looks
     // strings up directly. It matters for the reconnect overlay above: that
     // markup is what a user sees when the circuit is gone, so it is the one part
     // of the UI that can never be re-rendered into their language later.
@@ -81,7 +81,7 @@
 
     /// <summary>The language this page paints in, and the one the circuit adopts.
     /// The cookie is the user's own choice (written the moment they pick one);
-    /// absent it, the server default applies — which is what a first visit, the
+    /// absent it, the server default applies, which is what a first visit, the
     /// sign-in screen and a fresh browser all get.</summary>
     private string InitialLang
     {
@@ -92,8 +92,8 @@
         }
     }
 
-    // The entry assembly's informational version (e.g. "0.9.8" or "0.9.8-beta.3")
-    // — the same value -p:Version stamps at release/beta build time, so asset
+    // The entry assembly's informational version (e.g. "0.9.8" or "0.9.8-beta.3"):
+    // the same value -p:Version stamps at release/beta build time, so asset
     // URLs change exactly when the shipped assets can have.
     private static readonly string AssetVersion = Uri.EscapeDataString(
         System.Reflection.Assembly.GetEntryAssembly()
@@ -114,8 +114,8 @@
         {
             var prefix = HttpContext?.Request.Headers["X-Ingress-Path"].ToString();
             // Only trust a plain absolute path (HA ingress sends /api/hassio_ingress/<token>).
-            // Reject anything that could retarget <base> to another origin — a
-            // protocol-relative //host, a scheme (contains ':'), or CR/LF — and fall
+            // Reject anything that could retarget <base> to another origin, a
+            // protocol-relative //host, a scheme (contains ':'), or CR/LF, and fall
             // back to the root, so a spoofed header on a directly-exposed instance
             // can't hijack where the browser loads assets and the API from.
             if (string.IsNullOrEmpty(prefix) || prefix[0] != '/' || prefix.StartsWith("//")

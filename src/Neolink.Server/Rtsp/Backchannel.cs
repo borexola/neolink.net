@@ -19,7 +19,7 @@ internal sealed class BackchannelReceiver
     private const int SampleRate = 8000;
 
     // Talk is real-time: if the camera side stalls, dropping the oldest audio is
-    // the right backpressure — never let the queue grow without bound.
+    // the right backpressure, never let the queue grow without bound.
     private readonly Channel<byte[]> _pcm = Channel.CreateBounded<byte[]>(
         new BoundedChannelOptions(256)
         {

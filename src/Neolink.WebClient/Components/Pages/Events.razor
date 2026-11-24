@@ -9,7 +9,7 @@
 @inject DetectZones DetectZones
 @implements IAsyncDisposable
 
-@* Dedicated events page — the landing target for "motion detected" push
+@* Dedicated events page: the landing target for "motion detected" push
    notifications (Home Assistant's clickAction can deep-link /events/{camera}).
    A recent-events list on the left, the selected clip on the right (stacked on
    phones), and a one-tap jump to that camera's live feed. *@
@@ -29,7 +29,7 @@
 
         <span class="tile-spacer"></span>
 
-        @* SOURCE: what the list shows — this server's recorded events, or footage
+        @* SOURCE: what the list shows, this server's recorded events, or footage
            on the camera's own SD card. A labelled segmented switch: the previous
            lone "SD card" chip read as an action, not as the page-wide mode it is. *@
         <span class="tool-label">@T["SOURCE"]</span>
@@ -75,7 +75,7 @@
                     @onclick="() => { _unreviewedOnly = !_unreviewedOnly; ResetPaging(); }">@T["unreviewed only"]</button>
             @if (AnyAiLevels)
             {
-                @* AI threat filter — the point of the threat level is "show me what
+                @* AI threat filter: the point of the threat level is "show me what
                    matters"; only offered once described events actually exist, so
                    setups without AI descriptions never see the extra control. *@
                 <span class="cam-filter">
@@ -202,7 +202,7 @@
     {
         @* Camera-SD browser: footage the CAMERA recorded onto its own card,
            listed and streamed straight off the camera. Works even when this
-           server records nothing — it's a window into the camera's storage. *@
+           server records nothing: it's a window into the camera's storage. *@
         <div class="ev-body">
             <div class="ev-list" role="list">
                 @if (_sdLoading)
@@ -487,7 +487,7 @@
                     }
                     @if (sel.AiDescription != null || sel.AiLevel != null)
                     {
-                        @* What the LLM saw (AI event descriptions) — only rendered for
+                        @* What the LLM saw (AI event descriptions), only rendered for
                            events that actually have one; cameras with the feature off
                            never show an empty shell. *@
                         <div class="event-ai ai-@(sel.AiLevel ?? "none")">
@@ -515,7 +515,7 @@
                     @if (sel.HasClip || sel.HasCameraClip)
                     {
                         @* zoom-on: the recorded clip gets the same digital zoom as live
-                           views — wheel/pinch to zoom, drag to pan, HUD buttons at the side. *@
+                           views, wheel/pinch to zoom, drag to pan, HUD buttons at the side. *@
                         <div class="event-player-media zoom-on" id="ev-player-media" @key="sel.Id">
                             <video id="ev-video" controls autoplay="@_autoplay" playsinline></video>
                             @ZoomHud
@@ -795,7 +795,7 @@
     private static readonly double[] Speeds = { 1, 2, 4, 8, 16 };
 
     /// <summary>Unchecked, selecting or deep-linking an event only attaches the
-    /// clip — playback waits for the user. Part of the events prefs blob.</summary>
+    /// clip: playback waits for the user. Part of the events prefs blob.</summary>
     private bool _autoplay = true;
 
     // ---- multi-select delete ----
@@ -825,7 +825,7 @@
     private string? _sdError;
 
     /// <summary>The user's HD/SD pick: false = full main-stream clip (default at
-    /// every speed — muted fast playback keeps it smooth), true = the low-res
+    /// every speed, muted fast playback keeps it smooth), true = the low-res
     /// sub-stream twin, the escape hatch when storage or decoder can't keep up.
     /// Shared with the live view's popup player ("neolink.eventSd").</summary>
     private bool _sd;
@@ -836,7 +836,7 @@
     private readonly CancellationTokenSource _pollCts = new(); // sidebar live poll, page lifetime
 
     // Digital-zoom HUD, identical to the live view's: JS (neolink.zoomInit) owns
-    // the clicks and the badge — Blazor only renders the shell once per surface.
+    // the clicks and the badge, Blazor only renders the shell once per surface.
     private RenderFragment ZoomHud => @<div class="zoom-hud" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
         <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="@T["Zoom in (or mouse-wheel up on the video)"]">＋</button>
         <span class="zoom-badge" data-zoom-badge>100%</span>
@@ -901,7 +901,7 @@
             // The push-notification flow: land straight on the newest event for
             // the deep-linked camera so the tap shows the clip immediately. A
             // quiet last-24h falls back to the camera's most recent stored event,
-            // however old — a per-camera link must always land on footage.
+            // however old: a per-camera link must always land on footage.
             if (!string.IsNullOrWhiteSpace(Camera) && _selected == null)
             {
                 var newest = Filtered.FirstOrDefault();
@@ -931,7 +931,7 @@
 
         await SyncDetectAsync();
 
-        // (Re)attach the load-more sentinel — the element moves on each page grow.
+        // (Re)attach the load-more sentinel: the element moves on each page grow.
         _selfRef ??= DotNetObjectReference.Create(this);
         try
         {
@@ -949,7 +949,7 @@
 
     /// <summary>The clip on screen and the camera that recorded it, or null. The
     /// same one-at-a-time rule as the live wall: the player is the only surface
-    /// here that gets boxes — the list's thumbnails are stills.</summary>
+    /// here that gets boxes, the list's thumbnails are stills.</summary>
     private (string VideoId, string Camera)? DetectSurface()
     {
         if (_detect is not { Enabled: true, Assets.State: "ready" }) return null;
@@ -960,7 +960,7 @@
 
     private (string VideoId, string Camera)? DetectTarget() => _boxes ? DetectSurface() : null;
 
-    /// <summary>Whether the boxes are wanted — the same per-device preference the
+    /// <summary>Whether the boxes are wanted: the same per-device preference the
     /// live wall keeps, so the switch means one thing across the app.</summary>
     private bool _boxes = true;
 
@@ -973,7 +973,7 @@
 
     /// <summary>Points the browser's detector at the clip being watched (or at
     /// nothing). Idempotent: the detector only reacts when the answer changes.
-    /// The zones go first — no box may be drawn in a part of the view the camera
+    /// The zones go first, no box may be drawn in a part of the view the camera
     /// was told to ignore, not even for the frame before they arrive.</summary>
     private async Task SyncDetectAsync()
     {
@@ -1045,7 +1045,7 @@
         return r;
     }
 
-    /// <summary>The shared client's timeout is only a cap — each call brings its
+    /// <summary>The shared client's timeout is only a cap: each call brings its
     /// own budget. Server-state reads are fast (20s is generous); the SD-card
     /// FILE search is answered by the camera walking its card and legitimately
     /// runs long, so its caller passes a budget above the server's own 90s.</summary>
@@ -1271,7 +1271,7 @@
                 _searchSummary = SummaryOf(res.Understood);
                 _selected = null;
                 // The search owns the view: lingering list filters would silently
-                // empty it. Persistent camera/level prefs stay — search results
+                // empty it. Persistent camera/level prefs stay: search results
                 // simply bypass them.
                 _cameraFilter = "";
                 _unreviewedOnly = false;
@@ -1329,7 +1329,7 @@
         catch (Exception ex) { _error = T.F("Cannot reach {0}: {1}", _server, ex.Message); }
     }
 
-    /// <summary>A new event must land in the sidebar by itself — same polling
+    /// <summary>A new event must land in the sidebar by itself: same polling
     /// cadence as the live view's strip (the page has no push channel). Paused
     /// while the SD browser or the delete dialog owns the view; search results
     /// are left alone (they are explicit intent), the backing list stays warm.</summary>
@@ -1406,13 +1406,13 @@
 
     /// <summary>10000 = the server's dated cap: a busy range whole, every camera.
     /// The list is newest-first, so a range wider than the cap shows its newest
-    /// end — which is the end being read.</summary>
+    /// end, which is the end being read.</summary>
     private string RangeQuery()
     {
         var q = "/api/events?limit=10000";
         if (_from is { } f) q += $"&date={f:yyyy-MM-dd}";
         // A start with no end means "since then", and the API reads a lone date as
-        // one single day — so the open end is spelled out as today. Nothing can be
+        // one single day, so the open end is spelled out as today. Nothing can be
         // recorded later than that.
         if ((_to ?? (_from != null ? DateTime.Today : null)) is { } t)
             q += $"&to={t:yyyy-MM-dd}";
@@ -1515,7 +1515,7 @@
             }
             else if (recs == null)
             {
-                // The calendar answered but the FILE search didn't — that is a
+                // The calendar answered but the FILE search didn't, that is a
                 // failed query (the file search is much heavier and the camera
                 // may be busy), NOT an empty day. Saying "no recordings" here
                 // hid real failures behind an innocent-looking message.
@@ -1684,7 +1684,7 @@
 
     // ------------------------------------------------------------ camera multi-select
     // _cameraFilter stays as a TRANSIENT solo view (deep links, cross-camera event
-    // opens); the persistent preference is the HIDDEN set — anything not stored
+    // opens); the persistent preference is the HIDDEN set: anything not stored
     // there shows, so a newly added camera is selected by default.
 
     private readonly HashSet<string> _hiddenCams = new(StringComparer.OrdinalIgnoreCase);
@@ -1708,7 +1708,7 @@
         {
             if (_hiddenLevels.Count == 0) return T["any threat"];
             var visible = ThreatLevels.Where(l => !_hiddenLevels.Contains(l)).ToList();
-            return visible.Count == 0 ? "—" : string.Join(" + ", visible.Select(l => (string)T[l]));
+            return visible.Count == 0 ? "-" : string.Join(" + ", visible.Select(l => (string)T[l]));
         }
     }
 
@@ -1813,7 +1813,7 @@
         {
             var p = await GetJsonAsync<EventsPrefs>("/api/me/settings/events");
             if (p == null || (p.Hidden == null && p.HiddenLevels == null && p.Autoplay == null))
-                return; // never saved yet — keep the local copy
+                return; // never saved yet: keep the local copy
             ApplyPrefs(p);
             try { await JS.InvokeVoidAsync("neolink.lsSet", CamPrefsKey, SerializeCamPrefs()); } catch { }
         }
@@ -1848,7 +1848,7 @@
 
     private IEnumerable<ApiEvent> Filtered =>
         Source()
-            // Search results are explicit intent — hidden-camera prefs never trim them.
+            // Search results are explicit intent: hidden-camera prefs never trim them.
             .Where(e => _searchResults != null || CamVisible(e.Camera))
             .Where(e => _searchResults != null || !_unreviewedOnly || !e.Reviewed)
             // Only rated events are subject to the threat filter: one with no AI
@@ -1856,7 +1856,7 @@
             .Where(e => _searchResults != null || e.AiLevel == null || !_hiddenLevels.Contains(e.AiLevel))
             .OrderByDescending(e => e.Start);
 
-    /// <summary>True once any loaded event carries an AI threat level — the gate
+    /// <summary>True once any loaded event carries an AI threat level: the gate
     /// for showing the threat filter at all.</summary>
     private bool AnyAiLevels =>
         _events.Any(e => e.AiLevel != null) || _eventsForDate.Any(e => e.AiLevel != null);
@@ -1908,7 +1908,7 @@
     /// pivot the list to its day when it's outside the 24h window, and play it.</summary>
     private async Task OpenEventAsync(ApiEvent ev)
     {
-        // A camera filter that would hide the linked event loses to the link —
+        // A camera filter that would hide the linked event loses to the link:
         // a transient solo view, never a change to the saved preference.
         if (!CamVisible(ev.Camera))
             _cameraFilter = ev.Camera;
@@ -2016,7 +2016,7 @@
     private void ClearSelection() => _selectedIds.Clear();
 
     /// <summary>Opens the confirmation and asks the server for the exact summary
-    /// (count, size, per-camera, span) — computed server-side so it matches what
+    /// (count, size, per-camera, span): computed server-side so it matches what
     /// deletion will actually remove.</summary>
     private async Task OpenDeleteAsync()
     {
@@ -2108,7 +2108,7 @@
     /// permissions problem.</summary>
     private const int DeleteBatch = 500;
 
-    /// <summary>Set when the last delete call failed, to the server's own reason —
+    /// <summary>Set when the last delete call failed, to the server's own reason:
     /// guessing "not an admin?" for every failure sent people to the wrong place.</summary>
     private string? _delServerError;
 
@@ -2140,7 +2140,7 @@
                         && msg.GetString() is { Length: > 0 } text)
                         _delServerError = text;
                 }
-                catch { /* not JSON — the status line is all we have */ }
+                catch { /* not JSON: the status line is all we have */ }
                 _delServerError ??= $"{(int)res.StatusCode} {res.ReasonPhrase}";
                 if (!estimate && deleted > 0)
                     _delServerError = T.F(

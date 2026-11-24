@@ -8,7 +8,7 @@ namespace Neolink.Web;
 /// <summary>
 /// Once a day, asks GitHub whether a newer release of Neolink.NET exists.
 /// Best-effort by design: offline/LAN-only boxes just never see the banner.
-/// Only the latest version STRING is exposed — the UI links to the repo, no
+/// Only the latest version STRING is exposed: the UI links to the repo, no
 /// code or artifacts are ever fetched.
 /// </summary>
 public sealed class UpdateChecker
@@ -41,9 +41,9 @@ public sealed class UpdateChecker
 
     /// <summary>A page load can pull the next daily check forward: /api/features
     /// calls this, so a full refresh means "check now" instead of "wait for the
-    /// 24-hour timer" — a release landing hours after the daily poll used to be
+    /// 24-hour timer": a release landing hours after the daily poll used to be
     /// invisible until the next one. Throttled hard: at most one check per six
-    /// hours and one in flight, whoever asks — GitHub's unauthenticated rate
+    /// hours and one in flight, whoever asks, GitHub's unauthenticated rate
     /// limit is per-IP and not ours to spend on every request.</summary>
     public void Nudge()
     {
@@ -100,7 +100,7 @@ public sealed class UpdateChecker
         if (IsNewer(tag))
         {
             if (_latest != tag)
-                Log.Info($"Update available: {tag} (running {_current}) — {RepoUrl}");
+                Log.Info($"Update available: {tag} (running {_current}), {RepoUrl}");
             _latest = tag;
         }
     }

@@ -7,7 +7,7 @@ using System.Xml.Linq;
 namespace Neolink;
 
 /// <summary>
-/// Baichuan-over-UDP discovery — the transport battery-only cameras (Argus
+/// Baichuan-over-UDP discovery: the transport battery-only cameras (Argus
 /// family and friends) speak INSTEAD of TCP. Those models never listen on
 /// TCP 9000; a client finds and wakes them with a UDP handshake:
 ///
@@ -24,8 +24,8 @@ namespace Neolink;
 ///
 /// What exists here today is the opt-in DIAGNOSTIC PROBE ("udp_probe" +
 /// "uid" in the camera config): it mimics the official client's first
-/// packets and logs every step — what was sent where, every datagram that
-/// comes back, decoded when possible — so a user with such a camera can
+/// packets and logs every step, what was sent where, every datagram that
+/// comes back, decoded when possible, so a user with such a camera can
 /// paste the log into an issue and tell us exactly how far the handshake
 /// gets. The full UDP transport will build on the same primitives.
 /// Logs never contain credentials, and the camera UID is masked.
@@ -38,7 +38,7 @@ public static class UdpDiscovery
     internal const uint MagicData = 0x2A87CF10;      // transport data (BC inside)
 
     /// <summary>Camera-side discovery ports (the official client targets both).</summary>
-    // NEOLINK_UDP_PORTS overrides the discovery target ports (e.g. "2015") — a
+    // NEOLINK_UDP_PORTS overrides the discovery target ports (e.g. "2015"): a
     // field-diagnosis knob: probing the ports separately is how to tell whether a
     // battery model's low-power wake chip listens on both or just one of them.
     private static readonly int[] CameraPorts = ParsePortsEnv() ?? new[] { 2015, 2018 };
@@ -46,9 +46,9 @@ public static class UdpDiscovery
     /// <summary>
     /// Binds the client-side socket for discovery and the UDP transport: two
     /// tries in the official client's 53500-53999 band, then the OS's ephemeral
-    /// allocator. The band is convention, not contract — the camera learns our
+    /// allocator. The band is convention, not contract, the camera learns our
     /// port from the hello itself (the datagram's source, plus the port field in
-    /// the C2D_C XML) — but on Windows, Hyper-V/Docker "excluded port ranges"
+    /// the C2D_C XML), but on Windows, Hyper-V/Docker "excluded port ranges"
     /// can swallow nearly the whole band (438 of the 500 ports on one dev box),
     /// and random in-band picks then fail SILENTLY: wake probes reporting a
     /// camera asleep that was awake, UDP connects dying before a single packet.
@@ -73,7 +73,7 @@ public static class UdpDiscovery
             .Select(p => int.TryParse(p, out var v) && v is > 0 and < 65536 ? v : 0)
             .Where(v => v != 0).ToArray();
         if (ports.Length == 0) return null;
-        Log.Warn($"NEOLINK_UDP_PORTS override active — UDP discovery targets port(s) {string.Join("/", ports)} only");
+        Log.Warn($"NEOLINK_UDP_PORTS override active: UDP discovery targets port(s) {string.Join("/", ports)} only");
         return ports;
     }
 
@@ -113,7 +113,7 @@ public static class UdpDiscovery
         return t;
     }
 
-    /// <summary>Discovery checksum: reflected CRC-32 with a RAW register —
+    /// <summary>Discovery checksum: reflected CRC-32 with a RAW register,
     /// initial value 0 and no final complement (not the zlib variant).</summary>
     internal static uint Crc(ReadOnlySpan<byte> data)
     {
@@ -156,7 +156,7 @@ public static class UdpDiscovery
         var payload = dgram.Slice(20, (int)size).ToArray();
         var actual = Crc(payload);
         if (actual != crc) { problem = $"CRC mismatch (header {crc:x8}, computed {actual:x8})"; return false; }
-        if (unknown != 1) problem = $"unusual header field ({unknown} where 1 is expected) — continuing";
+        if (unknown != 1) problem = $"unusual header field ({unknown} where 1 is expected): continuing";
         Crypt(tid, payload); // symmetric
         xml = Encoding.UTF8.GetString(payload).TrimEnd('\0');
         return true;
@@ -178,7 +178,7 @@ public static class UdpDiscovery
     internal static string BuildC2dHb(int cid, int did) =>
         $"<P2P><C2D_HB><cid>{cid}</cid><did>{did}</did></C2D_HB></P2P>";
 
-    /// <summary>Client→device ACCEPT — the reply the camera requires to a D2C_T, or
+    /// <summary>Client→device ACCEPT: the reply the camera requires to a D2C_T, or
     /// it recycles the (unconfirmed) session after a few seconds. Echoes the sid and
     /// conn the camera sent, plus our mtu.</summary>
     internal static string BuildC2dA(uint sid, string conn, int cid, int did, uint mtu) =>
@@ -188,9 +188,9 @@ public static class UdpDiscovery
     /// Cheap liveness check: is a UDP camera answering discovery right now? Sends a
     /// few C2D_C hellos to the known IP and returns true on the first D2C_C_R,
     /// releasing the just-created session with a polite C2D_DISC (otherwise the
-    /// camera would keep retrying D2C_C_R for ~9 s after every poll — battery cost,
+    /// camera would keep retrying D2C_C_R for ~9 s after every poll, battery cost,
     /// and a stale session sitting there right when the real connect follows).
-    /// Silent and short — it is the wake-capture poll, run every few seconds while
+    /// Silent and short: it is the wake-capture poll, run every few seconds while
     /// the camera sleeps. With <paramref name="logTag"/> set, every discovery reply
     /// is logged raw at Debug: some battery models (issue #44, the battery Video
     /// Doorbell) answer C2D_C from their low-power wake chip even while asleep,
@@ -201,11 +201,11 @@ public static class UdpDiscovery
         string? logTag = null, int? camPort = null)
     {
         // camPort: selftests only. Their mock camera must live on an EPHEMERAL
-        // loopback port — on a dev box a real Neolink instance's own UDP machinery
+        // loopback port, on a dev box a real Neolink instance's own UDP machinery
         // can hold 2015, and two sockets sharing it means one silently starves.
         var camPorts = camPort is { } cp ? new[] { cp } : CameraPorts;
         // UID-only camera (no address): the wake probe broadcasts like the connect
-        // path does — the UID keys the reply, so a hit still means OUR camera is up.
+        // path does, the UID keys the reply, so a hit still means OUR camera is up.
         IPAddress? ip = null;
         if (!string.IsNullOrWhiteSpace(host))
         {
@@ -277,7 +277,7 @@ public static class UdpDiscovery
                     // hellos is itself enough to pull a wake chip out of deep sleep
                     // back into its answering light-sleep stage (measured on an
                     // Argus Solar: three dense probe windows re-lit its chip for
-                    // minutes) — sabotaging the very silence the probe looks for.
+                    // minutes), sabotaging the very silence the probe looks for.
                     try { await Task.Delay(1000, cts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { return; }
                 }
@@ -306,7 +306,7 @@ public static class UdpDiscovery
                         cts.Cancel();
                         try { await sender.ConfigureAwait(false); } catch { }
                         // An accepted reply means the camera opened a session for us;
-                        // release it (same tid) — the probe only wanted the answer.
+                        // release it (same tid): the probe only wanted the answer.
                         if (ParseReply(reply) is { Root: "D2C_C_R", Rsp: 0 } ok)
                         {
                             var disc = BuildDiscovery(tid, BuildC2dDisc(ok.Cid, ok.Did));
@@ -324,7 +324,7 @@ public static class UdpDiscovery
 
     /// <summary>An established UDP session: the open socket, the endpoint the camera
     /// actually answered from, the two negotiated connection ids (cid = ours,
-    /// did = the camera's), and the discovery tid the handshake ran under — the
+    /// did = the camera's), and the discovery tid the handshake ran under, the
     /// camera keys its session state to that tid, so every discovery-layer packet
     /// sent for the rest of the session (heartbeats, C2D_A, C2D_DISC) must carry
     /// it. The caller owns the socket from here on.</summary>
@@ -335,7 +335,7 @@ public static class UdpDiscovery
     /// transport to run on: send C2D_C, wait for an accepted D2C_C_R, keep the
     /// socket. Null on failure. With a known camera IP the hello goes straight to
     /// it; with <paramref name="ip"/> null (UID-only config, no address) it goes to
-    /// every local subnet's directed broadcast instead — the UID in the hello keys
+    /// every local subnet's directed broadcast instead: the UID in the hello keys
     /// the reply, so only the right camera answers, and the session binds to the
     /// endpoint the reply CAME from either way. This is the connect-path twin of
     /// <see cref="ProbeAsync"/> (which is the throwaway diagnostic).
@@ -343,12 +343,12 @@ public static class UdpDiscovery
     internal static async Task<Session?> EstablishAsync(IPAddress? ip, string uid, TimeSpan timeout,
         CancellationToken ct, string tag, int? camPort = null)
     {
-        // camPort: selftests only — see IsReachableAsync. Real cameras are 2015/2018.
+        // camPort: selftests only, see IsReachableAsync. Real cameras are 2015/2018.
         var camPorts = camPort is { } cp ? new[] { cp } : CameraPorts;
         string P(string m) => $"{tag}: [udp] {MaskUid(m, uid)}";
         if (ip != null && ip.AddressFamily != AddressFamily.InterNetwork)
         {
-            Log.Warn(P($"{ip} is not IPv4 — UDP connect needs an IPv4 address"));
+            Log.Warn(P($"{ip} is not IPv4: UDP connect needs an IPv4 address"));
             return null;
         }
         var targets = ip != null ? new[] { ip } : BroadcastTargets();
@@ -358,7 +358,7 @@ public static class UdpDiscovery
             return null;
         }
         if (ip == null)
-            Log.Info(P($"no address configured — broadcasting discovery for the UID on " +
+            Log.Info(P($"no address configured: broadcasting discovery for the UID on " +
                        $"{string.Join(", ", targets.AsEnumerable())}"));
 
         var udp = BindClientSocket();
@@ -369,7 +369,7 @@ public static class UdpDiscovery
         int cid = Random.Shared.Next(1, int.MaxValue);
         // ONE tid for the whole session. The camera keys its discovery state to the
         // tid of the C2D_C it accepted and ignores discovery packets carrying any
-        // other tid — heartbeats sent under fresh random tids look like silence, so
+        // other tid: heartbeats sent under fresh random tids look like silence, so
         // the camera re-sends D2C_C_R every `def` ms and recycles the session with
         // a clean D2C_DISC after ~3 tries (the observed ~8 s disconnect). The
         // reference client uses its discovery tid for every packet that follows.
@@ -411,7 +411,7 @@ public static class UdpDiscovery
                 {
                     handshakeCts.Cancel();
                     try { await sender.ConfigureAwait(false); } catch { }
-                    Log.Info(P($"UDP session established — cid {reply.Cid}, did {reply.Did} " +
+                    Log.Info(P($"UDP session established: cid {reply.Cid}, did {reply.Did} " +
                                $"(camera at {r.RemoteEndPoint}" +
                                (reply.Timers != null ? $", timers {reply.Timers}" : "") + ")"));
                     Log.Debug(P($"D2C_C_R payload (tid {tid:x8}): {Condense(replyXml)}"));
@@ -436,7 +436,7 @@ public static class UdpDiscovery
     /// The directed broadcast address of every up, non-loopback IPv4 interface
     /// (host bits all set: ip | ~mask). Best practice for LAN discovery: the
     /// limited broadcast 255.255.255.255 only egresses one interface on most
-    /// stacks, and a guessed /24 misses any subnet that isn't a /24 — a directed
+    /// stacks, and a guessed /24 misses any subnet that isn't a /24, a directed
     /// broadcast per interface reaches a camera on any local subnet, out the
     /// right NIC (multi-homed hosts, VLANs, /23s and the like).
     /// </summary>
@@ -511,7 +511,7 @@ public static class UdpDiscovery
         return b.Length == 4 && (b[0] == 10 || (b[0] == 172 && b[1] is >= 16 and <= 31) || (b[0] == 192 && b[1] == 168));
     }
 
-    /// <summary>The 254 usable hosts of an address's /24 — the unicast sweep for a
+    /// <summary>The 254 usable hosts of an address's /24: the unicast sweep for a
     /// camera subnet this host is not on, where a broadcast would not be routed.</summary>
     internal static IEnumerable<IPAddress> SubnetHosts(IPAddress ip)
     {
@@ -522,7 +522,7 @@ public static class UdpDiscovery
     }
 
     /// <summary>Directed broadcast of a subnet: host bits all set (ip | ~mask).
-    /// Pure — a /23 like 10.0.0.5 / 255.255.254.0 yields 10.0.1.255, which a
+    /// Pure: a /23 like 10.0.0.5 / 255.255.254.0 yields 10.0.1.255, which a
     /// naive /24 guess (10.0.0.255) would miss.</summary>
     internal static IPAddress DirectedBroadcast(IPAddress ip, IPAddress mask)
     {
@@ -540,7 +540,7 @@ public static class UdpDiscovery
     }
 
     /// <summary>Delay that returns true if it completed, false if the token fired
-    /// (the window closed) — lets the send schedule read as a plain while-loop.</summary>
+    /// (the window closed): lets the send schedule read as a plain while-loop.</summary>
     private static async Task<bool> QuietDelayAsync(TimeSpan delay, CancellationToken ct)
     {
         try { await Task.Delay(delay, ct).ConfigureAwait(false); return true; }
@@ -559,7 +559,7 @@ public static class UdpDiscovery
 
     /// <summary>UID-masked text, safe to log/paste: first four and last two
     /// characters survive, the middle is starred out.</summary>
-    /// <summary>First <paramref name="max"/> chars, newlines flattened — keeps the
+    /// <summary>First <paramref name="max"/> chars, newlines flattened: keeps the
     /// wake-probe Debug lines single-line and bounded.</summary>
     private static string Snippet(string text, int max)
     {
@@ -585,7 +585,7 @@ public static class UdpDiscovery
     /// several rounds of C2D_C (two XML dialects, direct + broadcast, both
     /// camera ports) while listening ~20 s for any reply. On an accepted
     /// handshake it records the negotiated parameters and immediately sends a
-    /// polite disconnect — this is a diagnostic, not a session.
+    /// polite disconnect: this is a diagnostic, not a session.
     /// </summary>
     public static async Task<UdpOutcome> ProbeAsync(string tag, IPAddress? ip, string uid, CancellationToken ct)
     {
@@ -596,14 +596,14 @@ public static class UdpDiscovery
         // The discovery socket is IPv4 (ports 2015/2018, limited broadcast).
         if (ip != null && ip.AddressFamily != AddressFamily.InterNetwork)
         {
-            Log.Warn(P($"{ip} is not IPv4; UDP discovery is IPv4-only — skipped"));
+            Log.Warn(P($"{ip} is not IPv4; UDP discovery is IPv4-only: skipped"));
             return UdpOutcome.Aborted;
         }
 
         var udp = BindClientSocket();
         if (udp == null)
         {
-            Log.Warn(P("could not bind a local UDP port — skipped"));
+            Log.Warn(P("could not bind a local UDP port: skipped"));
             return UdpOutcome.Aborted;
         }
         int localPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
@@ -666,13 +666,13 @@ public static class UdpDiscovery
                         // clue; a flood is just a closed port answering every send, so
                         // log the first and tally the rest for the verdict.
                         if (refused++ == 0)
-                            Log.Info(P($"socket signal: {ex.SocketErrorCode} — an endpoint sent ICMP unreachable (refusing UDP)"));
+                            Log.Info(P($"socket signal: {ex.SocketErrorCode}, an endpoint sent ICMP unreachable (refusing UDP)"));
                         continue;
                     }
                     var d = r.Buffer;
                     uint magic = d.Length >= 4 ? BitConverter.ToUInt32(d, 0) : 0;
 
-                    // Some stacks loop a limited broadcast back to the sender — our
+                    // Some stacks loop a limited broadcast back to the sender: our
                     // own C2D_C hello. Drop it before counting: treating it as a
                     // reply would falsely read as "something answered".
                     if (magic == MagicDiscovery
@@ -695,7 +695,7 @@ public static class UdpDiscovery
                                 if (reply.Rsp == 0)
                                 {
                                     accepted = true;
-                                    Log.Info(P($"HANDSHAKE ACCEPTED — camera negotiated cid {reply.Cid}, did {reply.Did}" +
+                                    Log.Info(P($"HANDSHAKE ACCEPTED: camera negotiated cid {reply.Cid}, did {reply.Did}" +
                                                (reply.Timers != null ? $", timers {reply.Timers}" : "")));
                                     // A diagnostic leaves no half-open session behind. The
                                     // disconnect must run under the session's tid (the camera
@@ -713,7 +713,7 @@ public static class UdpDiscovery
                                     return; // ends the receiver task; accepted flag drives the verdict
                                 }
                                 Log.Info(P($"camera REJECTED the handshake: rsp {reply.Rsp}" +
-                                           (reply.Rsp == -3 ? " (busy or refused — camera may allow a limited number of clients)" : "")));
+                                           (reply.Rsp == -3 ? " (busy or refused, camera may allow a limited number of clients)" : "")));
                             }
                         }
                         else
@@ -778,28 +778,28 @@ public static class UdpDiscovery
                 return UdpOutcome.Aborted;
             }
 
-            // Section verdict — the orchestrator folds it into the sweep summary.
+            // Section verdict: the orchestrator folds it into the sweep summary.
             var refusedNote = refused > 0 ? $", {refused} ICMP-refused" : "";
             if (accepted)
             {
-                Log.Info(P($"UDP: ACCEPTED — the camera answered discovery and accepted the handshake " +
+                Log.Info(P($"UDP: ACCEPTED, the camera answered discovery and accepted the handshake " +
                            $"({sent} sent, {received} received{refusedNote}). It speaks Baichuan-over-UDP."));
                 return UdpOutcome.Accepted;
             }
             if (answered)
             {
-                Log.Info(P($"UDP: PARTIAL — something answered ({received} datagram(s) for {sent} sent{refusedNote}) " +
+                Log.Info(P($"UDP: PARTIAL, something answered ({received} datagram(s) for {sent} sent{refusedNote}) " +
                            "but no accepted handshake."));
                 return UdpOutcome.Partial;
             }
             if (refused > 0)
             {
-                Log.Info(P($"UDP: REFUSED — {sent} sent, no reply, target sent ICMP port-unreachable {refused} time(s): " +
+                Log.Info(P($"UDP: REFUSED, {sent} sent, no reply, target sent ICMP port-unreachable {refused} time(s): " +
                            "something is at the address but nothing listens on the discovery ports (not a UDP-discovery " +
                            "camera, or asleep)."));
                 return UdpOutcome.Refused;
             }
-            Log.Info(P($"UDP: SILENCE — {sent} sent, nothing came back (wrong uid, a VLAN between server and camera, " +
+            Log.Info(P($"UDP: SILENCE, {sent} sent, nothing came back (wrong uid, a VLAN between server and camera, " +
                        "Docker without --network host so broadcasts stay in the container, or the camera only answers " +
                        "its P2P/cloud rendezvous)."));
             return UdpOutcome.Silent;

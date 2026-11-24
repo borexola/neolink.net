@@ -6,9 +6,9 @@ namespace Neolink.Web;
 /// <summary>
 /// Spools SD-card recordings from the camera into temp files so the web player
 /// can actually play them. Two camera realities force this:
-///   1. The camera serves a Download strictly SEQUENTIALLY — no byte ranges.
+///   1. The camera serves a Download strictly SEQUENTIALLY, no byte ranges.
 ///   2. Camera MP4s carry their moov index at the END of the file, so a browser
-///      streaming from the front never finds the index — the player waits
+///      streaming from the front never finds the index: the player waits
 ///      forever (field report: SD recordings listed but never played).
 /// A spooled file is served with full range processing: playback starts as soon
 /// as the spool completes, scrubbing works, and the browser's multiple range
@@ -17,13 +17,13 @@ namespace Neolink.Web;
 /// The spool is bounded: only files up to <see cref="MaxBytes"/> (event clips
 /// are a few MB; anything bigger streams directly like before), kept for
 /// <see cref="KeepFor"/> since last use, cleaned eagerly on access and wholesale
-/// at startup. A spool runs on its own clock — browsers abort their first probe
+/// at startup. A spool runs on its own clock: browsers abort their first probe
 /// request routinely, and that must not kill the transfer the follow-up range
 /// request is waiting for.
 /// </summary>
 internal static class SdSpool
 {
-    /// <summary>Files above this stream directly (no spool, no seeking) — spooling
+    /// <summary>Files above this stream directly (no spool, no seeking): spooling
     /// a multi-hundred-MB continuous segment would stall playback for minutes.</summary>
     public const long MaxBytes = 300L * 1024 * 1024;
 
@@ -112,7 +112,7 @@ internal static class SdSpool
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch
         {
-            // The spool that created this entry failed — clear it so the caller
+            // The spool that created this entry failed: clear it so the caller
             // fetches fresh.
             Entries.TryRemove(Key(camera, file), out _);
             return null;
@@ -122,8 +122,8 @@ internal static class SdSpool
     /// <summary>Spools <paramref name="download"/> to a temp file (taking ownership
     /// of it) and returns the path. Concurrent callers for the same recording share
     /// one spool; the loser's download is disposed unused. The transfer runs on its
-    /// own timeout, not the caller's request — an aborted browser probe must not
-    /// kill the spool the next range request needs — but the CALLER's wait is
+    /// own timeout, not the caller's request, an aborted browser probe must not
+    /// kill the spool the next range request needs, but the CALLER's wait is
     /// bounded by <paramref name="ct"/>.</summary>
     public static async Task<string> SpoolAsync(string camera, string file,
         ReolinkHttpApi.SdDownload download, CancellationToken ct)
@@ -467,7 +467,7 @@ internal static class SdSpool
             }
             catch
             {
-                // The file is busy (still being served) — keep the entry, retry later.
+                // The file is busy (still being served): keep the entry, retry later.
             }
         }
         // Idle per-file gates of recordings no longer spooled are dropped, never disposed: a

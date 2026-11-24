@@ -6,7 +6,7 @@ using Microsoft.JSInterop;
 namespace Neolink.WebClient.Localization;
 
 /// <summary>
-/// The UI's language, scoped to one Blazor circuit — i.e. to one browser tab of
+/// The UI's language, scoped to one Blazor circuit: i.e. to one browser tab of
 /// one signed-in user, which is exactly the granularity the setting has.
 ///
 /// Components look strings up through the indexer and subscribe to
@@ -33,7 +33,7 @@ public sealed class Translator
     /// <summary>The translated text; the English original when untranslated.</summary>
     public string this[string text] => Translations.Get(Language, text);
 
-    /// <summary>Translate then fill in the placeholders — the translated sentence
+    /// <summary>Translate then fill in the placeholders: the translated sentence
     /// decides where its values go, which is the whole point of not concatenating.</summary>
     public string F(string text, params object?[] args)
     {
@@ -52,7 +52,7 @@ public sealed class Translator
 
     // ---- dates in words -------------------------------------------------
     // The server builds with InvariantGlobalization (no ICU in the image), so
-    // CultureInfo cannot supply French month/day names — they come from the
+    // CultureInfo cannot supply French month/day names: they come from the
     // catalogue like every other string. Numeric formats (HH:mm, yyyy-MM-dd)
     // never needed a culture and are untouched.
 
@@ -73,13 +73,13 @@ public sealed class Translator
     public string Day(DayOfWeek day) => this[DayNames[(int)day]];
     public string DayShort(DayOfWeek day) => this[DayShortNames[(int)day]];
 
-    /// <summary>"Tue 29 Jul" — the compact date used on event rows and players.</summary>
+    /// <summary>"Tue 29 Jul": the compact date used on event rows and players.</summary>
     public string DateShort(DateTime d) => $"{DayShort(d.DayOfWeek)} {d.Day} {MonthShort(d.Month)}";
 
-    /// <summary>"Tuesday, 29 July" — the spelled-out date used on day headers.</summary>
+    /// <summary>"Tuesday, 29 July": the spelled-out date used on day headers.</summary>
     public string DateLong(DateTime d) => $"{Day(d.DayOfWeek)}, {d.Day} {Month(d.Month)}";
 
-    /// <summary>Sets the language without persisting it — how a circuit adopts the
+    /// <summary>Sets the language without persisting it: how a circuit adopts the
     /// language the request already carried (cookie, account, server default).</summary>
     public void Initialize(string? code)
     {

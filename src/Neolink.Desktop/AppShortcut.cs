@@ -9,7 +9,7 @@ namespace Neolink.Desktop;
 /// The Start Menu shortcut that carries the app's AppUserModelID.
 ///
 /// Windows will only hand an UNPACKAGED app the rich toast API if a Start Menu
-/// shortcut stamped with that same AUMID exists — that shortcut is the app's
+/// shortcut stamped with that same AUMID exists, that shortcut is the app's
 /// identity as far as the Action Center is concerned. The MSI writes one; this
 /// class writes an equivalent for runs the installer never touched (a developer
 /// build, an extracted copy), so notifications behave identically either way.
@@ -45,7 +45,7 @@ internal static class AppShortcut
         Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu),
         "Programs", ShortcutName);
 
-    /// <summary>True when a shortcut this app can claim already exists — the
+    /// <summary>True when a shortcut this app can claim already exists: the
     /// installer's per-machine one counts.</summary>
     public static bool Exists() => File.Exists(MachineShortcutPath) || File.Exists(UserShortcutPath);
 
@@ -143,7 +143,7 @@ internal static class AppShortcut
         public uint PropertyId;
     }
 
-    /// <summary>System.AppUserModel.ID — the shell property that ties a shortcut to
+    /// <summary>System.AppUserModel.ID: the shell property that ties a shortcut to
     /// an app identity.</summary>
     private static PropertyKey PropertyKeyAppUserModelId => new()
     {

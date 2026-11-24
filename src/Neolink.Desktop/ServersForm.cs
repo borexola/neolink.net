@@ -8,7 +8,7 @@ namespace Neolink.Desktop;
 /// remove. The connect dialog handles ADDING (connecting to a new address is
 /// what adds it), so this dialog only ever points at entries that once worked.
 ///
-/// Switching and removing the active server both end in a process restart —
+/// Switching and removing the active server both end in a process restart:
 /// the WebView session, API token and alert baseline are all keyed on the old
 /// server, and a restart is the one honest way to drop them all at once.
 /// </summary>
@@ -32,7 +32,7 @@ internal sealed class ServersForm : Form
         // dialog never opens empty on a configured app.
         _settings.RememberCurrent();
 
-        Text = "Neolink.NET — servers";
+        Text = "Neolink.NET: servers";
         WindowTheme.Attach(this);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -100,7 +100,7 @@ internal sealed class ServersForm : Form
         foreach (var s in _settings.Servers)
         {
             var who = string.IsNullOrEmpty(s.Username) ? "no sign-in" : s.Username;
-            var tag = IsActive(s) ? "   — connected" : "";
+            var tag = IsActive(s) ? ": connected" : "";
             _list.Items.Add(new Entry(s, $"{s.Url}   ({who}){tag}"));
         }
         if (_list.Items.Count > 0) _list.SelectedIndex = 0;
@@ -133,12 +133,12 @@ internal sealed class ServersForm : Form
         bool active = IsActive(sel);
         var answer = MessageBox.Show(this,
             $"Remove {sel.Url}?\r\n\r\n" +
-            "Its saved sign-in — including the remembered password, if any — is erased " +
+            "Its saved sign-in, including the remembered password, if any, is erased " +
             "from this PC. Nothing on the server itself is touched; its recordings and " +
             "accounts stay." +
             (active ? "\r\n\r\nThis is the server you are connected to: Neolink.NET will " +
                       "restart and ask for a server, like a fresh install." : ""),
-            "Neolink.NET — remove server",
+            "Neolink.NET: remove server",
             MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
         if (answer != DialogResult.Yes) return;
         _settings.RemoveServer(sel);
@@ -158,7 +158,7 @@ internal sealed class ServersForm : Form
         using var dlg = new ConnectForm(_settings, reconfiguring: true);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         // The connect dialog committed a new active server (and saved both old
-        // and new into the list) — same restart contract as a switch.
+        // and new into the list): same restart contract as a switch.
         RestartNeeded = true;
         DialogResult = DialogResult.OK;
         Close();

@@ -4,7 +4,7 @@
 namespace Neolink.Desktop;
 
 /// <summary>
-/// The shell's diagnostic trail — why an alert did or did not appear. A missed
+/// The shell's diagnostic trail: why an alert did or did not appear. A missed
 /// notification is invisible by nature; this file is the only place the answer
 /// can live. Best-effort: logging must never break alerting.
 /// </summary>

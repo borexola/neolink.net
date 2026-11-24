@@ -44,7 +44,7 @@
         </div>
 
         @* --- Transport group: event hops + coarse/fine steps around play/pause.
-           Every control names its keyboard twin — the fastest way to learn them. --- *@
+           Every control names its keyboard twin: the fastest way to learn them. --- *@
         <div class="tl-group tl-transport">
             <button class="tool-btn tl-step" title="@T["Previous event · ["]" @onclick="() => JumpEventAsync(-1)">@UiIcon.Render("skip-back", 13)</button>
             <button class="tool-btn tl-step" title="@T["Back 10 seconds · J or Shift+←"]" @onclick="() => StepAsync(-10)">−10s</button>
@@ -438,7 +438,7 @@
         @* The board's height is the user's: the divider under it (over it, in the
            studio layout) drags, and the tracks share out whatever it is given. *@
         <div class="tl-board" id="tl-board" style="@BoardStyle()">
-            @* Names and lanes are one row so both columns get the same height —
+            @* Names and lanes are one row so both columns get the same height,
                that is what keeps every label level with its track as they grow. *@
             <div class="tl-tracks">
                 <div class="tl-names">
@@ -452,7 +452,7 @@
                    with zero server round-trips while the mouse moves. *@
                 <div class="tl-lanes" id="tl-scrub" data-vs="@_viewStart" data-vspan="@_viewSpan">
                     @* The whole day at a glance, always: footage blocks, the red cursor,
-                       and — when zoomed — the draggable view-window rectangle. *@
+                       and, when zoomed, the draggable view-window rectangle. *@
                     <div class="tl-overview">
                         @foreach (var cam in Included)
                         {
@@ -476,7 +476,7 @@
                     </div>
                     <div class="tl-ruler">
                         @* Saved bookmarks: gold ribbons riding the ruler's empty top
-                           band — no extra row, so the name labels never drift off
+                           band, no extra row, so the name labels never drift off
                            their lanes. Clicking one jumps to the moment (the scrub
                            JS ignores pointerdowns on .tl-bm). *@
                         @foreach (var b in DayBookmarks)
@@ -592,7 +592,7 @@
             {
                 bool focused = FocusActive && IsFocus(cam.Name);
                 @* zoom-on: every visible monitor gets the same digital zoom as the
-                   live views — wheel at the cursor, drag to pan while zoomed, and
+                   live views, wheel at the cursor, drag to pan while zoomed, and
                    the side HUD (its clicks stop propagation, so zooming never
                    toggles the studio focus; a pan-drag swallows its click too). *@
                 <div class="tl-tile zoom-on @(focused ? "tl-tile-focus" : "") @(FocusActive && !focused ? "tl-tile-rail" : "")"
@@ -610,7 +610,7 @@
                     }
                     <div class="tl-tile-name">@cam.Name</div>
                     @* Solo audio: this footage carries the camera's recorded sound.
-                       Only one monitor plays at a time — unmuting one mutes the
+                       Only one monitor plays at a time: unmuting one mutes the
                        rest, so a wall of cameras never becomes a wall of noise. *@
                     <button class="tl-snap tl-audio @(IsAudio(cam.Name) ? "on" : "")"
                             title="@(IsAudio(cam.Name) ? T["Mute this camera"] : T["Play this camera's sound (mutes the others)"])"
@@ -670,14 +670,14 @@
     private readonly List<ApiCamera> _cameras = new();
     private HashSet<string> _included = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<Seg>> _cov = new(StringComparer.OrdinalIgnoreCase);
-    // Event clips as playable segments — the fallback when there is no continuous
+    // Event clips as playable segments: the fallback when there is no continuous
     // footage under the cursor (or when continuous recording is off entirely).
     private readonly Dictionary<string, List<Seg>> _eventSegs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<Mark>> _marks = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _noFootage = new(StringComparer.OrdinalIgnoreCase);
 
     // EVENTS filter: which legend categories are drawn on the lanes. Starts with
-    // everything on and is deliberately NOT persisted — it is a per-visit view
+    // everything on and is deliberately NOT persisted: it is a per-visit view
     // filter, not a preference (the day's events reload unfiltered either way).
     private readonly HashSet<string> _eventKinds =
         new(EventKindTable.Select(k => k.Kind), StringComparer.OrdinalIgnoreCase);
@@ -716,7 +716,7 @@
     /// <summary>Timeline preferences. Fields are nullable so a partial blob (an
     /// older build's, or the server's empty "{}") only overrides what it holds.
     /// Saved to localStorage always, and per account via /api/me/settings/timeline
-    /// when signed in — so choices like the studio layout follow the user across
+    /// when signed in, so choices like the studio layout follow the user across
     /// browsers and devices.</summary>
     private sealed class Prefs
     {
@@ -737,7 +737,7 @@
     // shared number would mean every Studio toggle undid the other's tuning.
     // null = the layout's natural size, which is what everyone gets until they
     // drag. The lanes share out whatever height the board has, so this is really
-    // "how thick are my tracks" — the reason the drag is worth having at all.
+    // "how thick are my tracks": the reason the drag is worth having at all.
     private const double MinBoard = 90; // ruler + a full track stay reachable
     private double? _boardH;
     private double? _studioBoardH;
@@ -746,7 +746,7 @@
 
     /// <summary>The dragged height, if any. The max-height rides along to outrank
     /// the studio layout's 34vh cap and to keep a height saved on a roomy desktop
-    /// from swallowing a phone screen — it is the same ceiling the drag clamps to.</summary>
+    /// from swallowing a phone screen: it is the same ceiling the drag clamps to.</summary>
     private string? BoardStyle() =>
         BoardH is { } h ? $"height:{h:0}px; max-height:70vh;" : null;
 
@@ -796,13 +796,13 @@
         await SavePrefsAsync();
     }
 
-    // Studio (opt-in): monitors fill the top, and the editing desk — transport,
-    // camera chips, tracks — docks at the bottom, like a video editor.
+    // Studio (opt-in): monitors fill the top, and the editing desk, transport,
+    // camera chips, tracks, docks at the bottom, like a video editor.
     private bool _studio;
     private string? _focusCam; // studio program monitor; null = equal grid
 
     // Solo audio: at most one monitor plays sound at a time (null = all muted,
-    // which is the default so tiles keep autoplaying — unmuted autoplay is
+    // which is the default so tiles keep autoplaying, unmuted autoplay is
     // blocked until the user clicks a speaker). Deliberately not persisted: a
     // fresh load has no user gesture yet, so a remembered "on" could not play
     // anyway, and silence-by-default is the safe surprise-free start.
@@ -812,7 +812,7 @@
 
     /// <summary>Speaker click: unmute this camera and mute every other one, or
     /// mute it if it was already the one playing. SyncVideos pushes the new mute
-    /// state to the players on the same click (a user gesture — which is what
+    /// state to the players on the same click (a user gesture, which is what
     /// lets the browser start the sound).</summary>
     private async Task ToggleAudioAsync(string cam)
     {
@@ -820,7 +820,7 @@
         await SyncVideosAsync();
     }
 
-    // 0.25/0.5 are slow motion — fine review of a fast moment; the rest skim.
+    // 0.25/0.5 are slow motion: fine review of a fast moment; the rest skim.
     private static readonly double[] SpeedOptions = { 0.25, 0.5, 1, 2, 4, 8, 16 };
     private double _speed = 1;
 
@@ -834,7 +834,7 @@
     // ------------------------------------------------------------ zoomable view window
     //
     // The lanes show [_viewStart, _viewStart + _viewSpan] seconds of the day.
-    // At the full 24 h a pixel is ~a minute of footage — zooming to the 60 s
+    // At the full 24 h a pixel is ~a minute of footage: zooming to the 60 s
     // floor makes a pixel ~50 ms, which is what turns scrubbing from "roughly
     // there" into frame-level seeking.
 
@@ -910,11 +910,11 @@
     private double _maxLag;
     private bool Lagging => _playing && _maxLag > LagSoft;
 
-    /// <summary>Only explicitly selected cameras load footage — scrubbing all cams at once is expensive.</summary>
+    /// <summary>Only explicitly selected cameras load footage: scrubbing all cams at once is expensive.</summary>
     private IEnumerable<ApiCamera> Included => _cameras.Where(c => _included.Contains(c.Name));
 
     // Digital-zoom HUD, identical to the live view's: JS (neolink.zoomInit) owns
-    // the clicks and the badge — Blazor only renders the shell once per monitor.
+    // the clicks and the badge, Blazor only renders the shell once per monitor.
     private RenderFragment ZoomHud => @<div class="zoom-hud" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
         <button type="button" class="icon-btn zoom-btn" data-zoom="in" title="@T["Zoom in (or mouse-wheel up on the video)"]">＋</button>
         <span class="zoom-badge" data-zoom-badge>100%</span>
@@ -922,7 +922,7 @@
         <button type="button" class="icon-btn zoom-btn zoom-reset" data-zoom="reset" title="@T["Restore 1:1 (or double-click the video)"]">1:1</button>
     </div>;
 
-    /// <summary>"Tue, 29 Jul 2026" — toolbar/dialog date, month names via the catalogue.</summary>
+    /// <summary>"Tue, 29 Jul 2026": toolbar/dialog date, month names via the catalogue.</summary>
     private string DateText(DateTime d) => $"{T.DayShort(d.DayOfWeek)}, {d.Day} {T.MonthShort(d.Month)} {d.Year}";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -1012,7 +1012,7 @@
             await JS.InvokeVoidAsync("neolink.tlResizeDispose", "tl-resizer");
         }
 
-        // The rail divider only exists while a monitor is focused (studio) —
+        // The rail divider only exists while a monitor is focused (studio):
         // (re)hook its drag whenever it (re)appears.
         bool wantRail = FocusActive && Included.Count() > 1;
         if (wantRail && !_railInit)
@@ -1053,7 +1053,7 @@
     }
 
     /// <summary>Points the browser's detector at the chosen monitor (or at nothing).
-    /// The zones go first — no box may be drawn in a part of the view the camera was
+    /// The zones go first, no box may be drawn in a part of the view the camera was
     /// told to ignore, not even for the frame before they arrive.</summary>
     private async Task SyncDetectAsync()
     {
@@ -1095,7 +1095,7 @@
         }
     }
 
-    /// <summary>Base for BROWSER-side URLs (the segment videos) — goes through any reverse proxy.</summary>
+    /// <summary>Base for BROWSER-side URLs (the segment videos): goes through any reverse proxy.</summary>
     private string Base => _server.TrimEnd('/');
 
     /// <summary>
@@ -1195,7 +1195,7 @@
         if (!_supported || gen != _dayGen) return;
 
         // The events reply gives the day's colored lane marks AND playable event
-        // clips. The date filter must run on the server, inside the cap — a
+        // clips. The date filter must run on the server, inside the cap: a
         // newest-N window alone spans less than a day on a busy installation.
         try
         {
@@ -1274,7 +1274,7 @@
         if (_sdCard) _ = LoadSdStripAsync();
 
         // Autoplay: the day starts rolling as soon as it loads (first visit and
-        // day changes alike) — pause is one click away, dead-stopped tiles that
+        // day changes alike), pause is one click away, dead-stopped tiles that
         // LOOK broken were the common first impression.
         _playing = true;
         await SyncVideosAsync();
@@ -1305,7 +1305,7 @@
 
     /// <summary>
     /// Segment spans: the file's real media length when the server reports it
-    /// (so a segment cut short — camera suspended or offline — claims exactly the
+    /// (so a segment cut short, camera suspended or offline, claims exactly the
     /// minutes it has, and the lane goes blank for the rest of the gap), with a
     /// butt-join to the next file when it starts about where this one ends so
     /// normal rolls stay seamless. Servers that predate the duration field fall
@@ -1323,7 +1323,7 @@
             .Where(d => d > 1).OrderBy(d => d).ToList();
         double typical = diffs.Count > 0 ? Math.Clamp(diffs[diffs.Count / 2], 30, 1800) : 600;
         // The duration derives from the file's close time, which trails the last
-        // frame by the recorder's silence window (~15 s) — joins get that much slack.
+        // frame by the recorder's silence window (~15 s): joins get that much slack.
         const double Fuzz = 30;
 
         var segs = new List<Seg>();
@@ -1342,19 +1342,19 @@
                          && start + dur > (DateTime.Now - DateTime.Today).TotalSeconds - 120))
             {
                 // This file is still being written. The server says so outright
-                // (live, from the recorder's own memory — trustworthy even where
+                // (live, from the recorder's own memory, trustworthy even where
                 // an open file's mtime is stale: NTFS, FUSE, network mounts);
                 // older servers without the flag fall back to the mtime heuristic:
                 // the newest file whose reported end reaches (about) now.
                 // Cover up to NOW (plus a small buffer that the once-a-minute
-                // coverage refresh renews) — and no further: projecting a full
+                // coverage refresh renews), and no further: projecting a full
                 // segment length ahead made lanes reach into the future by
                 // different amounts per camera (a high-bitrate camera rolls on
                 // the size cap every few minutes, the others on the timer), so
                 // equal footage looked unequal. A newest file that ENDED long
                 // ago (camera suspended/offline right now) gets no allowance:
                 // that lane is genuinely blank from its end onward. The REAL
-                // reported seconds anchor the max — never the typical-length
+                // reported seconds anchor the max, never the typical-length
                 // guess, which would project a just-opened file a whole
                 // segment into the future.
                 span = Math.Max(Math.Max(0, parsed[i].Seconds),
@@ -1408,7 +1408,7 @@
     private static string LabelColor(List<string> labels) => KindColor(EventKind(labels));
 
     /// <summary>Legend categories actually present on the loaded (included) lanes, in
-    /// table order — so the filter never shows a chip that would filter nothing.
+    /// table order, so the filter never shows a chip that would filter nothing.
     /// Computed from the UNFILTERED marks, so chips stay put as you toggle them.</summary>
     private IEnumerable<string> PresentKinds
     {
@@ -1440,7 +1440,7 @@
         await InvokeAsync(async () =>
         {
             // The lane strip shows the view window, so a drag fraction maps
-            // through it — zoomed in, the same pixel distance seeks far finer.
+            // through it: zoomed in, the same pixel distance seeks far finer.
             _t = _viewStart + Math.Clamp(fraction, 0, 1) * _viewSpan;
             await SyncVideosAsync();
             StateHasChanged();
@@ -1471,7 +1471,7 @@
     }
 
     /// <summary>Dragging the day-overview strip moves the zoomed window (a viewport
-    /// control — the cursor stays where it is).</summary>
+    /// control, the cursor stays where it is).</summary>
     [JSInvokable]
     public async Task OnOverviewSeek(double frac)
     {
@@ -1684,7 +1684,7 @@
         StateHasChanged();
     }
 
-    /// <summary>Snap to the previous/next detection across the included cameras —
+    /// <summary>Snap to the previous/next detection across the included cameras:
     /// the fastest way to review a day: [ and ] hop from incident to incident.</summary>
     private async Task JumpEventAsync(int dir)
     {
@@ -1763,7 +1763,7 @@
         if (p.SdCard is { } sd) _sdCard = sd;
     }
 
-    /// <summary>Signed in: the account's server-side prefs override the local copy —
+    /// <summary>Signed in: the account's server-side prefs override the local copy,
     /// preferences follow the user across browsers. Signed out (or the endpoint is
     /// unavailable): localStorage carries on alone.</summary>
     private async Task LoadServerPrefsAsync()
@@ -1773,7 +1773,7 @@
         {
             var p = await GetJsonAsync<Prefs>("/api/me/settings/timeline");
             if (p == null || (p.Included == null && p.Speed == null && p.Studio == null))
-                return; // never saved yet — keep whatever localStorage had
+                return; // never saved yet: keep whatever localStorage had
             ApplyPrefs(p);
             // Refresh the local copy so the next (pre-network) boot starts right.
             try { await JS.InvokeVoidAsync("neolink.lsSet", PrefsKey, SerializePrefs()); } catch { }
@@ -1825,7 +1825,7 @@
                 // once a minute so new segments show up while the page is open.
                 // Without this a suspend/resume (or any recording that starts
                 // after the day loaded) records to disk but the lanes stay
-                // blank until a manual reload — REC on, timeline empty.
+                // blank until a manual reload: REC on, timeline empty.
                 if (_date == DateTime.Today && _continuous && Included.Any()
                     && now - _covRefreshed > TimeSpan.FromSeconds(60))
                 {
@@ -1854,7 +1854,7 @@
                     _t = DaySeconds - 1;
                     _playing = false;
                 }
-                // Zoomed playback follows the cursor — but ONLY when it just
+                // Zoomed playback follows the cursor, but ONLY when it just
                 // walked up to the window's right edge. A cursor far outside the
                 // window means the user deliberately zoomed elsewhere; stealing
                 // the view back would fight them.
@@ -1889,7 +1889,7 @@
 
     /// <summary>
     /// Points every included camera's player at the footage under the cursor and
-    /// measures how far the slowest healthy player is behind it — the feedback
+    /// measures how far the slowest healthy player is behind it: the feedback
     /// signal for the adaptive clock (broken media reports -1 and is ignored).
     /// One batched interop call per tick: this runs twice a second while playing,
     /// so per-camera round trips would multiply with the wall size.
@@ -2018,8 +2018,8 @@
     // ------------------------------------------------------------ studio layout
 
     // Focus needs at least TWO monitors: one for the program view and one or more
-    // for the thumbnail rail. Promoting the only camera is meaningless — it is
-    // already the sole monitor — and the 3-column program·divider·rail grid would
+    // for the thumbnail rail. Promoting the only camera is meaningless, it is
+    // already the sole monitor, and the 3-column program·divider·rail grid would
     // leave the rail column empty, shoving the lone monitor left with dead space
     // on the right.
     private bool FocusActive =>
@@ -2068,7 +2068,7 @@
     // ------------------------------------------------------------ footage export
     //
     // One camera, one day, [from, to]: the server streams a zip of the segments
-    // overlapping the range (whole files — lossless, no re-encode) and the
+    // overlapping the range (whole files, lossless, no re-encode) and the
     // browser downloads it. The dialog pre-fills the zoomed window, so "zoom to
     // the incident, hit Export" needs no typing, and it shows the size before
     // the user commits to a multi-gigabyte download.
@@ -2223,7 +2223,7 @@
     //
     // Named stretches of a day's footage ("My son's first walk", 10:00–10:08),
     // stored server-side next to the recordings, shared by every user. Creation
-    // goes through the panel — the same range idiom as Export — so no new
+    // goes through the panel, the same range idiom as Export, so no new
     // gesture touches the lanes and scrubbing stays exactly as it was.
 
     private bool _showBm;
@@ -2234,7 +2234,7 @@
     private bool _bmBusy;
     private readonly List<ApiBookmark> _bookmarks = new();
 
-    /// <summary>The loaded day's bookmarks — what the lanes and overview draw.</summary>
+    /// <summary>The loaded day's bookmarks: what the lanes and overview draw.</summary>
     private IEnumerable<ApiBookmark> DayBookmarks
     {
         get
@@ -2367,7 +2367,7 @@
         catch { /* transient: it stays in the list, deleting again works */ }
     }
 
-    /// <summary>Click a ribbon or a Saved row: land on the moment — cursor at its
+    /// <summary>Click a ribbon or a Saved row: land on the moment, cursor at its
     /// start, view zoomed to the range with air either side, playing.</summary>
     private async Task JumpToBookmarkAsync(ApiBookmark b)
     {

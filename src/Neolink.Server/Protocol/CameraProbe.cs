@@ -11,20 +11,20 @@ namespace Neolink;
 /// <summary>
 /// Opt-in camera-discovery diagnostic ("udp_probe": true). When a camera can't be
 /// reached over the normal TCP Baichuan path, this sweeps every avenue we know of
-/// and logs one comprehensive report — so a reporter pastes a single log and we
+/// and logs one comprehensive report, so a reporter pastes a single log and we
 /// learn, in one go, how the camera is reachable and what it can do, instead of a
 /// dozen back-and-forth questions.
 ///
 /// The sweep, all LAN-local (no cloud contact):
-///   1. TCP port map      — is anything listening (9000/80/443/554), from the
+///   1. TCP port map: is anything listening (9000/80/443/554), from the
 ///                          server's own vantage (more authoritative than a
 ///                          user's nmap from a different host)
-///   2. Reolink HTTP API  — if 80/443 answer, dump DevInfo + the full Ability
+///   2. Reolink HTTP API, if 80/443 answer, dump DevInfo + the full Ability
 ///                          table + SD slots: model, firmware and every supported
 ///                          capability, no reverse engineering (battery cams often
 ///                          answer this while awake)
-///   3. ONVIF WS-Discovery — a standard multicast probe; device service URL + scopes
-///   4. Baichuan-over-UDP  — the discovery handshake battery-only models speak
+///   3. ONVIF WS-Discovery: a standard multicast probe; device service URL + scopes
+///   4. Baichuan-over-UDP: the discovery handshake battery-only models speak
 ///                          (see <see cref="UdpDiscovery"/>)
 /// then a consolidated verdict + recommendation.
 ///
@@ -39,14 +39,14 @@ public static class CameraProbe
 
     /// <summary>Runs the full sweep. Returns true when a probe actually REACHED
     /// the camera (accepted UDP handshake, open TCP 9000, or an answering HTTP
-    /// API) — i.e. the camera is awake right now, whatever the earlier connect
+    /// API): i.e. the camera is awake right now, whatever the earlier connect
     /// failure said.</summary>
     public static async Task<bool> SweepAsync(string tag, CameraConfig cfg, CancellationToken ct)
     {
         string Mask(string s) => string.IsNullOrEmpty(cfg.Uid) ? s : UdpDiscovery.MaskUid(s, cfg.Uid!);
         string P(string msg) => $"{tag}: [discover] {Mask(msg)}";
 
-        Log.Info(P($"=== camera discovery sweep — host {(string.IsNullOrWhiteSpace(cfg.Host) ? "(none — UID-only)" : cfg.Host)}, " +
+        Log.Info(P($"=== camera discovery sweep: host {(string.IsNullOrWhiteSpace(cfg.Host) ? "(none, UID-only)" : cfg.Host)}, " +
                    $"uid {(string.IsNullOrEmpty(cfg.Uid) ? "(none)" : cfg.Uid)} ==="));
 
         // UID-only entry (no address): the TCP and HTTP steps have no target, so
@@ -58,13 +58,13 @@ public static class CameraProbe
             if (ip == null) return false;
         }
         else
-            Log.Info(P("no address configured — skipping the TCP/HTTP steps; UDP discovery goes by broadcast"));
+            Log.Info(P("no address configured: skipping the TCP/HTTP steps; UDP discovery goes by broadcast"));
 
         // 1. TCP reachability map.
         var open = ip == null ? new HashSet<int>() : await TcpMapAsync(P, ip, cfg.Port, ct).ConfigureAwait(false);
         if (ct.IsCancellationRequested) return false;
 
-        // 2. Reolink HTTP API — the capability jackpot when it answers.
+        // 2. Reolink HTTP API: the capability jackpot when it answers.
         var http = ip == null
             ? new HttpResult(false, null, null)
             : await HttpDumpAsync(P, cfg, ip, open, ct).ConfigureAwait(false);
@@ -78,7 +78,7 @@ public static class CameraProbe
         UdpDiscovery.UdpOutcome udp;
         if (string.IsNullOrEmpty(cfg.Uid))
         {
-            Log.Info(P("UDP: skipped — no \"uid\" set (add it from the Reolink app/sticker to probe the UDP handshake)"));
+            Log.Info(P("UDP: skipped, no \"uid\" set (add it from the Reolink app/sticker to probe the UDP handshake)"));
             udp = UdpDiscovery.UdpOutcome.Aborted;
         }
         else
@@ -89,7 +89,7 @@ public static class CameraProbe
 
         // Consolidated verdict.
         Log.Info(P("SUMMARY: " + Recommend(open, http, onvif.Count, udp) +
-                   " — please paste every [discover…] line into GitHub issue #39."));
+                   ". Please paste every [discover…] line into GitHub issue #39."));
         return udp == UdpDiscovery.UdpOutcome.Accepted || open.Contains(9000) || http.Reached;
     }
 
@@ -99,14 +99,14 @@ public static class CameraProbe
     {
         if (string.IsNullOrWhiteSpace(host))
         {
-            Log.Warn(P("no \"address\" to probe — sweep aborted"));
+            Log.Warn(P("no \"address\" to probe: sweep aborted"));
             return null;
         }
         if (IPAddress.TryParse(host, out var literal))
         {
             if (literal.AddressFamily != AddressFamily.InterNetwork)
             {
-                Log.Warn(P($"{host} is IPv6; the sweep is IPv4-only — aborted"));
+                Log.Warn(P($"{host} is IPv6; the sweep is IPv4-only: aborted"));
                 return null;
             }
             return literal;
@@ -117,7 +117,7 @@ public static class CameraProbe
             var v4 = addrs.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
             if (v4 == null)
             {
-                Log.Warn(P($"'{host}' has no IPv4 address — sweep aborted"));
+                Log.Warn(P($"'{host}' has no IPv4 address: sweep aborted"));
                 return null;
             }
             Log.Info(P($"resolved {host} → {v4}"));
@@ -125,7 +125,7 @@ public static class CameraProbe
         }
         catch (Exception ex)
         {
-            Log.Warn(P($"cannot resolve '{host}': {ex.Message} — sweep aborted"));
+            Log.Warn(P($"cannot resolve '{host}': {ex.Message}, sweep aborted"));
             return null;
         }
     }
@@ -136,7 +136,7 @@ public static class CameraProbe
         var ports = new List<(int Port, string Name)> { (configPort, "Baichuan (configured)") };
         ports.AddRange(TcpPorts.Where(p => p.Port != configPort));
 
-        // Probe them concurrently — five filtered ports would otherwise serialize
+        // Probe them concurrently: five filtered ports would otherwise serialize
         // into ~10 s of timeouts before the rest of the sweep even starts.
         async Task<(int Port, string Name, bool Open, string How)> ProbeOne(int port, string name)
         {
@@ -149,7 +149,7 @@ public static class CameraProbe
                 return (port, name, true, "OPEN");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return (port, name, false, "cancelled"); }
-            catch (OperationCanceledException) { return (port, name, false, "no response within 2s — filtered or nothing there"); }
+            catch (OperationCanceledException) { return (port, name, false, "no response within 2s: filtered or nothing there"); }
             catch (SocketException ex) { return (port, name, false, ex.SocketErrorCode.ToString()); }
         }
 
@@ -183,7 +183,7 @@ public static class CameraProbe
         }
         if (candidates.Count == 0)
         {
-            Log.Info(P("http: no HTTP port open and no \"http_address\" set — skipping the capability dump " +
+            Log.Info(P("http: no HTTP port open and no \"http_address\" set: skipping the capability dump " +
                        "(an awake Reolink usually serves its API on 80/443; a sleeping battery camera does not)"));
             return new HttpResult(false, null, null);
         }
@@ -200,7 +200,7 @@ public static class CameraProbe
                     var fields = DevInfoFields
                         .Where(f => dev[f] != null)
                         .Select(f => $"{f}={dev[f]}");
-                    Log.Info(P($"http({addr}): DevInfo — {string.Join(", ", fields)}"));
+                    Log.Info(P($"http({addr}): DevInfo, {string.Join(", ", fields)}"));
                 }
                 else
                 {
@@ -212,7 +212,7 @@ public static class CameraProbe
                 {
                     var ability = await api.GetAbilityAsync(ct).ConfigureAwait(false);
                     var keys = ability.Select(kv => kv.Key).OrderBy(k => k).ToList();
-                    Log.Info(P($"http({addr}): Ability — {keys.Count} capabilities: {string.Join(", ", keys)}"));
+                    Log.Info(P($"http({addr}): Ability, {keys.Count} capabilities: {string.Join(", ", keys)}"));
                     Log.Debug(P($"http({addr}): Ability(full) {Mask(ability.ToJsonString(), cfg)}"));
                 }
                 catch (Exception ex) { Log.Info(P($"http({addr}): GetAbility failed: {Log.Flatten(ex)}")); }
@@ -221,16 +221,16 @@ public static class CameraProbe
                 try
                 {
                     var hdd = await api.GetHddInfoAsync(ct).ConfigureAwait(false);
-                    Log.Info(P($"http({addr}): storage — {hdd.Count} slot(s)"));
+                    Log.Info(P($"http({addr}): storage, {hdd.Count} slot(s)"));
                 }
                 catch (Exception ex) { Log.Debug(P($"http({addr}): GetHddInfo failed: {Log.Flatten(ex)}")); }
 
-                Log.Info(P($"http({addr}): REACHABLE — the HTTP API answers, so capabilities above are authoritative"));
+                Log.Info(P($"http({addr}): REACHABLE, the HTTP API answers, so capabilities above are authoritative"));
                 return new HttpResult(true, model, fw);
             }
             catch (Exception ex)
             {
-                Log.Info(P($"http({addr}): not usable — {Log.Flatten(ex)}"));
+                Log.Info(P($"http({addr}): not usable, {Log.Flatten(ex)}"));
             }
         }
         return new HttpResult(false, null, null);
@@ -243,14 +243,14 @@ public static class CameraProbe
 
     /// <summary>Standard WS-Discovery: multicast a Probe to 239.255.255.250:3702 and
     /// collect ProbeMatch replies (device service URL + scopes). Returns the parsed
-    /// matches (empty when nothing answers — as most battery cams won't).</summary>
+    /// matches (empty when nothing answers, as most battery cams won't).</summary>
     private static async Task<List<(string XAddrs, string Scopes)>> OnvifProbeAsync(Func<string, string> P, CancellationToken ct)
     {
         var matches = (await WsDiscoverAsync(TimeSpan.FromSeconds(3), ct,
-                m => Log.Info(P($"onvif: reply from {m.From} — service {m.XAddrs}; scopes {m.Scopes}")))
+                m => Log.Info(P($"onvif: reply from {m.From}, service {m.XAddrs}; scopes {m.Scopes}")))
             .ConfigureAwait(false)).Select(m => (m.XAddrs, m.Scopes)).ToList();
         if (matches.Count == 0)
-            Log.Info(P("onvif: no reply (WS-Discovery not answered — typical for battery-only models)"));
+            Log.Info(P("onvif: no reply (WS-Discovery not answered, typical for battery-only models)"));
         return matches;
     }
 
@@ -348,17 +348,17 @@ public static class CameraProbe
         var model = http.Model != null ? $" (model {http.Model}, fw {http.Firmware})" : "";
 
         if (udp == UdpDiscovery.UdpOutcome.Accepted)
-            return $"the camera speaks Baichuan-over-UDP{model} — this is the case that proves full UDP support is buildable; the UDP handshake above is the ground truth for it";
+            return $"the camera speaks Baichuan-over-UDP{model}: this is the case that proves full UDP support is buildable; the UDP handshake above is the ground truth for it";
         if (open.Contains(9000))
-            return $"TCP 9000 is OPEN{model} — the camera should connect the normal way; the earlier failure is likely credentials, channel, or a transient reboot rather than a UDP-only device";
+            return $"TCP 9000 is OPEN{model}: the camera should connect the normal way; the earlier failure is likely credentials, channel, or a transient reboot rather than a UDP-only device";
         if (http.Reached)
-            return $"no TCP 9000 and no UDP handshake, but the HTTP API answers{model} — capabilities are known; streaming still needs the Baichuan transport (TCP or, if the UDP handshake later succeeds, UDP)";
+            return $"no TCP 9000 and no UDP handshake, but the HTTP API answers{model}: capabilities are known; streaming still needs the Baichuan transport (TCP or, if the UDP handshake later succeeds, UDP)";
         if (udp == UdpDiscovery.UdpOutcome.Partial)
-            return $"the UDP handshake got a partial answer{model} — promising; the replies above are what a full implementation needs";
+            return $"the UDP handshake got a partial answer{model}: promising; the replies above are what a full implementation needs";
         if (udp == UdpDiscovery.UdpOutcome.Refused)
-            return $"the address responds but nothing listens on the Baichuan TCP/UDP ports{model} — check the address/that the camera is awake";
+            return $"the address responds but nothing listens on the Baichuan TCP/UDP ports{model}: check the address/that the camera is awake";
         if (onvifCount > 0)
-            return $"only ONVIF answered{model} — the camera may be reachable via ONVIF/RTSP; try a Generic RTSP camera entry with its ONVIF stream URL";
-        return "nothing answered on any transport — the camera is unreachable from this host (asleep, wrong address, a VLAN in between, or, in Docker, run with --network host); if it is a cloud-only battery model it may only answer Reolink's P2P relay, which this LAN sweep does not contact";
+            return $"only ONVIF answered{model}: the camera may be reachable via ONVIF/RTSP; try a Generic RTSP camera entry with its ONVIF stream URL";
+        return "nothing answered on any transport: the camera is unreachable from this host (asleep, wrong address, a VLAN in between, or, in Docker, run with --network host); if it is a cloud-only battery model it may only answer Reolink's P2P relay, which this LAN sweep does not contact";
     }
 }

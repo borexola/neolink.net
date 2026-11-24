@@ -26,7 +26,7 @@ public sealed class RtspConnection
     /// client would spam), capped so hostile scanners can't grow it unbounded.</summary>
     private static readonly HashSet<string> UnknownAudioLogged = new();
     /// <summary>The audio choice the last DESCRIBE on this connection settled on.
-    /// SETUP falls back to it when its own URI carries no ?audio= — some clients
+    /// SETUP falls back to it when its own URI carries no ?audio=: some clients
     /// resolve control URIs strictly per RFC 3986 and drop the query.</summary>
     private bool? _describedOpus;
     private int _readLen;
@@ -232,7 +232,7 @@ public sealed class RtspConnection
     /// query is in play: a URL-aware resolver joins the PATH and keeps the query
     /// last ("/cam/trackID=1?audio=opus"), while one that concatenates the
     /// Content-Base string verbatim leaves the marker trailing the query
-    /// ("/cam?audio=opus/trackID=1"). Both must resolve to the same track — reading
+    /// ("/cam?audio=opus/trackID=1"). Both must resolve to the same track: reading
     /// the trackID out of only one of the two positions silently turns the audio
     /// SETUP into a second video track, and the stream plays with no sound.</summary>
     internal static (string path, int trackId, string? audio) ParseUri(string uri)
@@ -312,7 +312,7 @@ public sealed class RtspConnection
         if (!await CheckAuthAsync(req, mount, ct).ConfigureAwait(false)) return;
 
         // ?audio= picks this client's codec. An unsupported format is refused
-        // loudly — a silent fallback would leave the user debugging why the
+        // loudly: a silent fallback would leave the user debugging why the
         // codec they asked for never arrived.
         if (!TryMapAudio(audio, out var audioChoice))
         {
@@ -320,8 +320,8 @@ public sealed class RtspConnection
             lock (UnknownAudioLogged)
                 logIt = UnknownAudioLogged.Count < 16 && UnknownAudioLogged.Add(audio!);
             if (logIt)
-                Log.Warn($"DESCRIBE {path}: unsupported audio format \"{audio}\" — " +
-                         "supported: ?audio=opus, ?audio=original — answering 404");
+                Log.Warn($"DESCRIBE {path}: unsupported audio format \"{audio}\" - " +
+                         "supported: ?audio=opus, ?audio=original, answering 404");
             await RespondAsync(req, 404, "Not Found", ct: ct).ConfigureAwait(false);
             return;
         }
@@ -337,7 +337,7 @@ public sealed class RtspConnection
                          (Media.Ffmpeg.ExePath == null
                              ? "no ffmpeg was found (install one on PATH or set NEOLINK_FFMPEG)"
                              : "this ffmpeg has no libopus encoder") +
-                         " — ?audio=opus answers 404 until that changes");
+                         " - ?audio=opus answers 404 until that changes");
             await RespondAsync(req, 404, "Not Found", ct: ct).ConfigureAwait(false);
             return;
         }
@@ -607,7 +607,7 @@ public sealed class RtspConnection
 
     /// <summary>
     /// Sends one frame's worth of RTP packets as a SINGLE write. Interleaved video
-    /// used to cost one send syscall per RTP packet — ~700/s per viewer on a 4K
+    /// used to cost one send syscall per RTP packet: ~700/s per viewer on a 4K
     /// stream, which is real CPU under virtualization. The batch arrives already
     /// '$'-framed (see <see cref="RtpBatch"/>), so no copy happens here either.
     /// </summary>
@@ -616,7 +616,7 @@ public sealed class RtspConnection
 
     private async Task WriteGuardedAsync(ReadOnlyMemory<byte> data, CancellationToken ct)
     {
-        // Per-write on purpose: the timeout must cover the LOCK WAIT too — that
+        // Per-write on purpose: the timeout must cover the LOCK WAIT too, that
         // is what transitively bounds RespondAsync's unguarded writes (a reply
         // wedged on a half-dead client holds the lock, and it is the pump's timed
         // wait here that detects it and closes the connection).
@@ -869,7 +869,7 @@ internal sealed class RtspSession
                         {
                             // One write per frame instead of one per packet. UDP keeps
                             // per-packet sends: datagram boundaries ARE the packet
-                            // boundaries — but they leave from the same batch buffer.
+                            // boundaries, but they leave from the same batch buffer.
                             await _conn.SendInterleavedRawAsync(batch.Framed, ct).ConfigureAwait(false);
                         }
                         else if (Video.UdpSocket != null && Video.ClientEndpoint != null)

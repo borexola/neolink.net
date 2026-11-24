@@ -33,7 +33,7 @@ public sealed class AuthFailedException : Exception
 /// the encryption tier advertised in the response code, and whether the message
 /// carries the older 32-byte MD5 credential fields or no body at all. The default
 /// (FullAes, header only) is what every camera Neolink supports today expects, and
-/// is the only combination used unless a camera overrides it — some firmware resets
+/// is the only combination used unless a camera overrides it: some firmware resets
 /// the connection on it instead of answering (see docs/troubleshooting.md).
 /// </summary>
 public readonly record struct BcLoginMode(ushort UpgradeCode, bool LegacyCredentials)
@@ -43,7 +43,7 @@ public readonly record struct BcLoginMode(ushort UpgradeCode, bool LegacyCredent
     public bool IsDefault => UpgradeCode == BcConstants.LegacyUpgradeFullAes && !LegacyCredentials;
 
     /// <summary>Builds the mode from a camera's config values. An unrecognised
-    /// encryption name cannot reach here — the loader rejects it — so it falls back
+    /// encryption name cannot reach here, the loader rejects it, so it falls back
     /// to the default rather than inventing a code.</summary>
     public static BcLoginMode From(string? maxEncryption, bool legacyCredentials) =>
         new(BcConstants.ParseMaxEncryption(maxEncryption) ?? BcConstants.LegacyUpgradeFullAes, legacyCredentials);
@@ -69,7 +69,7 @@ public sealed class BcCamera : IBcCamera
     private byte OwnerChannel => DeviceInfo?.OwnerChannel(_channelId) ?? _channelId;
 
     // Log tag: with several cameras every one is usually channel 0, so a bare
-    // "ch0" is ambiguous in captures — callers pass the camera name instead.
+    // "ch0" is ambiguous in captures: callers pass the camera name instead.
     private readonly string _logTag;
 
     private BcCamera(IBcConnection conn, byte channelId, string? tag)
@@ -87,7 +87,7 @@ public sealed class BcCamera : IBcCamera
         return new BcCamera(conn, channelId, tag);
     }
 
-    /// <summary>Connect over UDP (Baichuan-over-UDP) — the transport battery-only
+    /// <summary>Connect over UDP (Baichuan-over-UDP): the transport battery-only
     /// models (Argus family) speak instead of TCP. The UID keys the discovery
     /// handshake; everything above the transport (login, streaming, control) is
     /// identical to the TCP path.</summary>
@@ -116,7 +116,7 @@ public sealed class BcCamera : IBcCamera
         // An overridden login is a diagnostic the user set deliberately: say so once
         // per connection tag, or their log gives no sign which framing was tried.
         if (!login.IsDefault && LoggedLoginMode.TryAdd($"{_logTag}|{login}", 0))
-            Log.Info($"BC {_logTag}: login upgrade overridden — advertising 0x{login.UpgradeCode:x4}, " +
+            Log.Info($"BC {_logTag}: login upgrade overridden, advertising 0x{login.UpgradeCode:x4}, " +
                      (login.LegacyCredentials ? "legacy credential body" : "header only"));
         await _conn.SendAsync(legacy, ct).ConfigureAwait(false);
 
@@ -177,7 +177,7 @@ public sealed class BcCamera : IBcCamera
         }
         // The level decides how much CPU the connection costs (FullAes = every
         // media byte is AES), so make it readable without debug logging when perf
-        // questions come up — but only the FIRST login of each connection tag gets
+        // questions come up, but only the FIRST login of each connection tag gets
         // Info; reconnects repeat it at Debug so a flaky camera doesn't spam.
         var encDesc = negotiated switch
         {
@@ -192,7 +192,7 @@ public sealed class BcCamera : IBcCamera
         {
             Log.Info($"BC {_logTag}: encryption negotiated: {encDesc}");
             if (UnfamiliarEncryption(negotiated, keyType) is { } why)
-                Log.Warn($"BC {_logTag}: {why} — if video or commands fail on this camera, please report this line");
+                Log.Warn($"BC {_logTag}: {why}, if video or commands fail on this camera, please report this line");
         }
         else
             Log.Debug($"BC {_logTag}: encryption negotiated: {encDesc}");
@@ -200,7 +200,7 @@ public sealed class BcCamera : IBcCamera
 
     /// <summary>
     /// The opening message of the login handshake. Public so the self-test can assert
-    /// the exact bytes each mode puts on the wire — the default has to stay
+    /// the exact bytes each mode puts on the wire: the default has to stay
     /// byte-identical, since every working camera is logging in with it today.
     /// </summary>
     public static BcMessage BuildLoginUpgrade(byte channelId, ushort msgNum, string username,
@@ -317,7 +317,7 @@ public sealed class BcCamera : IBcCamera
             catch (TimeoutException)
             {
                 // No video for 15s. If the camera is dark on purpose (privacy
-                // mode), that is expected — keep the connection (and thus control
+                // mode), that is expected: keep the connection (and thus control
                 // commands, e.g. turning privacy off) alive instead of tearing it
                 // down and reconnecting in a loop. A genuine disconnect surfaces
                 // as a socket error, not a timeout, so it still reconnects.
@@ -326,7 +326,7 @@ public sealed class BcCamera : IBcCamera
                     if (!holding)
                     {
                         holding = true;
-                        Log.Debug($"{_logTag}: no video — camera is in privacy mode; holding the connection");
+                        Log.Debug($"{_logTag}: no video: camera is in privacy mode; holding the connection");
                     }
                     continue;
                 }
@@ -344,7 +344,7 @@ public sealed class BcCamera : IBcCamera
             if (holding)
             {
                 holding = false;
-                Log.Debug($"{_logTag}: privacy mode off — video resumed");
+                Log.Debug($"{_logTag}: privacy mode off: video resumed");
             }
             answer ??= msg.Meta.ResponseCode;
             if (msg.Binary is { Length: > 0 } bin)
@@ -371,7 +371,7 @@ public sealed class BcCamera : IBcCamera
     /// <summary>
     /// One-shot control command: subscribe to the message ID, send, await the reply.
     /// Runs safely alongside an active video stream (the connection routes replies
-    /// by message ID), but concurrent commands with the SAME ID are not allowed —
+    /// by message ID), but concurrent commands with the SAME ID are not allowed:
     /// callers serialize (see CameraControl).
     /// </summary>
     public async Task<BcMessage?> SendCommandAsync(uint msgId, BcXmlBody? xml = null, ExtensionXml? extension = null,
@@ -400,7 +400,7 @@ public sealed class BcCamera : IBcCamera
             if (reply.Meta.ResponseCode != 200)
             {
                 // The rejection reply sometimes carries an XML body naming the actual
-                // problem — surface it, the numeric code alone is rarely diagnosable.
+                // problem: surface it, the numeric code alone is rarely diagnosable.
                 if (reply.Xml is { Raw.Count: > 0 } replyXml)
                     Log.Debug($"BC command {msgId} rejected ({reply.Meta.ResponseCode}); reply body: " +
                               XmlUtil.ForLog(string.Concat(replyXml.Raw.Select(e => e.ToString(SaveOptions.DisableFormatting)))));
@@ -421,7 +421,7 @@ public sealed class BcCamera : IBcCamera
         using var sub = _conn.Subscribe(BcConstants.MsgIdMotion);
 
         // Opt in to alarm pushes. Some cameras ack the request, some stay silent
-        // and just start pushing — tolerate both.
+        // and just start pushing: tolerate both.
         await SendCommandAsync(BcConstants.MsgIdMotionRequest,
             extension: new ExtensionXml { ChannelId = OwnerChannel },
             replyTimeout: TimeSpan.FromSeconds(5), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
@@ -445,7 +445,7 @@ public sealed class BcCamera : IBcCamera
             {
                 // DayNightEventList is a benign housekeeping push: the camera
                 // announcing it flipped its day/night IR mode. It rides the motion
-                // channel but is not an alarm and not a doorbell — keep it at Debug
+                // channel but is not an alarm and not a doorbell: keep it at Debug
                 // so it never masquerades as an unmapped event in the INF log.
                 if (msg.Xml?.RawElement("DayNightEventList") != null)
                 {
@@ -460,19 +460,19 @@ public sealed class BcCamera : IBcCamera
                 }
 
                 // Anything else is a firmware variant we don't map yet
-                // (doorbell/visitor pushes among the suspects) — surface the first
+                // (doorbell/visitor pushes among the suspects): surface the first
                 // one seen so the mapping can be extended from a real sample.
                 if (msg.Xml != null && (!_oddMotionPushLogged || Log.AlarmXml))
                 {
                     _oddMotionPushLogged = true;
                     var raw = Encoding.UTF8.GetString(msg.Xml.Serialize()).Replace('\r', ' ').Replace('\n', ' ');
-                    Log.Info($"BC {_logTag}: motion-channel push without AlarmEventList — " +
+                    Log.Info($"BC {_logTag}: motion-channel push without AlarmEventList, " +
                              $"raw: {(raw.Length > 400 ? raw[..400] + "…" : raw)} (please report if this " +
                              "coincides with a doorbell press)");
                 }
                 continue;
             }
-            // NEOLINK_DEBUG_ALARMS=1 elevates the full push XML to Info — the
+            // NEOLINK_DEBUG_ALARMS=1 elevates the full push XML to Info: the
             // capture mode for mapping new firmware dialects without the
             // media-packet flood of NEOLINK_LOG=debug.
             if (Log.AlarmXml)
@@ -492,7 +492,7 @@ public sealed class BcCamera : IBcCamera
     /// <summary>
     /// One AlarmEvent element → MotionPush. AItype carries the AI classifications
     /// on most firmware (repeated elements, comma lists, "none" placeholders,
-    /// varying capitalization) — but some put detection tokens INSIDE the status
+    /// varying capitalization), but some put detection tokens INSIDE the status
     /// list instead: a video doorbell's button press arrives as
     /// status="MD,visitor" with AItype="none" (captured from a real Reolink
     /// doorbell). Detection tokens found in the status are folded into the AI list.
@@ -570,7 +570,7 @@ public sealed class BcCamera : IBcCamera
     /// The first push per connection WITH ACTUAL CONTENT is logged in full at
     /// Info so a user tripping their line-crossing/intrusion zone can report
     /// the exact wire format. Empty lists (&lt;yoloWorldEventList /&gt;) ride
-    /// along constantly on some firmware and say nothing — those stay at Debug.
+    /// along constantly on some firmware and say nothing: those stay at Debug.
     /// </summary>
     private async Task WatchSmartAiEventsAsync(CancellationToken ct)
     {
@@ -593,7 +593,7 @@ public sealed class BcCamera : IBcCamera
             if (hasContent && (!logged || Log.AlarmXml))
             {
                 logged = true;
-                Log.Info($"BC {_logTag}: smart-event push (msg 600) — raw: " +
+                Log.Info($"BC {_logTag}: smart-event push (msg 600), raw: " +
                          $"{(raw.Length > 500 ? raw[..500] + "…" : raw)} (if this coincides with a " +
                          "perimeter/line-crossing alert, please report it so it can be mapped to events)");
             }
@@ -639,9 +639,9 @@ public sealed class BcCamera : IBcCamera
 
     /// <summary>
     /// msg 464 NetInfo push. Captured sample: &lt;net_type&gt;wifi&lt;/net_type&gt;
-    /// &lt;signal&gt;-45&lt;/signal&gt; — signal is the Wi-Fi RSSI in dBm. A WIRED
+    /// &lt;signal&gt;-45&lt;/signal&gt; signal is the Wi-Fi RSSI in dBm. A WIRED
     /// camera pushes net_type with no signal; that is reported too (with a null
-    /// signal), because "this camera is on a cable" is worth knowing — it is why
+    /// signal), because "this camera is on a cable" is worth knowing: it is why
     /// it will never have a Wi-Fi reading. Null only when the push says neither.
     /// </summary>
     internal static WifiSignalPush? ParseNetInfo(XElement el)
@@ -860,7 +860,7 @@ public sealed class BcCamera : IBcCamera
     public async Task TalkAsync(TalkAbilityXml ability, ChannelReader<byte[]> frames, CancellationToken ct)
     {
         // TalkConfig claims the camera's speaker for our stream. Response 422
-        // means another talker (phone app, NVR) holds it — reset and retry once.
+        // means another talker (phone app, NVR) holds it: reset and retry once.
         try
         {
             await SendTalkConfigAsync(ability, ct).ConfigureAwait(false);
@@ -901,7 +901,7 @@ public sealed class BcCamera : IBcCamera
         finally
         {
             // Release the speaker even when the caller's token is already
-            // cancelled — otherwise the camera stays "busy" for the next talker.
+            // cancelled, otherwise the camera stays "busy" for the next talker.
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             try { await SendTalkResetAsync(cts.Token).ConfigureAwait(false); }
             catch { /* best effort; the camera also times the session out */ }

@@ -9,14 +9,14 @@ namespace Neolink.Streaming;
 
 /// <summary>
 /// The control surface of a non-Reolink camera. It always streams; everything
-/// else it can do, it does over ONVIF — the standard every IP camera worth
+/// else it can do, it does over ONVIF: the standard every IP camera worth
 /// buying speaks, and the only management protocol Neolink can assume here.
 ///
 /// What appears in the panel is exactly what the camera's own ONVIF services
 /// answered for: device identity, the media profiles' encoder settings, the
 /// imaging sliders, a moving head with its saved positions, the text overlays'
 /// placement, and reboot. A camera with no ONVIF at all (or with it switched
-/// off) behaves as this class always did — it streams, and that is all — except
+/// off) behaves as this class always did, it streams, and that is all, except
 /// that it still gets a detection zone, which Neolink stores on its behalf.
 ///
 /// Every read is best-effort and yields null rather than throwing into a feature
@@ -33,7 +33,7 @@ public sealed class GenericCameraControl : ICameraControl
     private readonly OnvifClient? _onvif;
     /// <summary>The streams Neolink pulls, in config order: the hub name it mounts
     /// them under and the URL it pulls. Used to decide WHICH ONVIF profile is the
-    /// one behind "mainStream" — the panel highlights the live profile by that name.</summary>
+    /// one behind "mainStream": the panel highlights the live profile by that name.</summary>
     private readonly IReadOnlyList<(string Kind, string Url)> _streams;
 
     private readonly SemaphoreSlim _profileGate = new(1, 1);
@@ -80,10 +80,10 @@ public sealed class GenericCameraControl : ICameraControl
     /// <summary>Discovered once and kept, exactly as the Baichuan surface does. This
     /// is not an optimisation: capabilities are asked for on every Home Assistant
     /// refresh tick and every time emergency mode arms, both of which walk the
-    /// cameras one after another — so a camera that answers slowly here delays every
+    /// cameras one after another, so a camera that answers slowly here delays every
     /// camera behind it, Reolink ones included.</summary>
     private CameraCapabilities? _caps;
-    /// <summary>The last incomplete answer, and when to ask for a better one — every
+    /// <summary>The last incomplete answer, and when to ask for a better one: every
     /// minute, not on every 20-second tick.</summary>
     private CameraCapabilities? _lastCaps;
     private DateTime _capsRetryAt;
@@ -128,8 +128,8 @@ public sealed class GenericCameraControl : ICameraControl
         // through the binding also tells the client which profile is this channel.
         var bound = await BoundProfilesAsync(ct).ConfigureAwait(false);
         // A PTZ configuration only says there is a head; the node says which axes it
-        // drives. When the node cannot be read the head is assumed to pan and tilt —
-        // which is what every camera got before the node was asked — and nothing is
+        // drives. When the node cannot be read the head is assumed to pan and tilt,
+        // which is what every camera got before the node was asked, and nothing is
         // assumed about zoom, whose slider needs a position to start from.
         var node = onvif.HasPtz ? await onvif.TryGetPtzNodeAsync(ct).ConfigureAwait(false) : null;
         var caps = new CameraCapabilities(ToVersion(info), null,
@@ -321,7 +321,7 @@ public sealed class GenericCameraControl : ICameraControl
         // sent people looking for a stream that is plainly on screen.
         if (bound == null)
             throw new IOException(
-                $"{CameraName}: the camera's ONVIF media profiles could not be read just now — try again shortly");
+                $"{CameraName}: the camera's ONVIF media profiles could not be read just now: try again shortly");
         var profile = bound.FirstOrDefault(b => b.Kind == stream).Profile
             ?? throw new NotSupportedException($"{CameraName} has no ONVIF profile behind '{stream}'");
         await _onvif.SetVideoEncoderAsync(profile.Token, (int?)width, (int?)height,
@@ -335,8 +335,8 @@ public sealed class GenericCameraControl : ICameraControl
 
     /// <summary>Which ONVIF profile sits behind each stream Neolink pulls. Matched
     /// on the stream URI the camera itself reports, because the profile ORDER means
-    /// nothing: plenty of cameras list the sub-stream first. When no URI matches —
-    /// a camera that reports them through a different host, or a hand-written URL —
+    /// nothing: plenty of cameras list the sub-stream first. When no URI matches,
+    /// a camera that reports them through a different host, or a hand-written URL,
     /// the profiles fall back to biggest-first, which is how the streams were
     /// configured in the first place.</summary>
     private async Task<IReadOnlyList<(string Kind, OnvifProfile Profile)>?> BoundProfilesAsync(
@@ -362,7 +362,7 @@ public sealed class GenericCameraControl : ICameraControl
             {
                 _unmatchedLogged = true;
                 Log.Info($"{CameraName}: none of the device's ONVIF profiles streams at this camera's URL, so which of its " +
-                         $"{OnvifClient.Channels(profiles)} channels it is is unknown — its ONVIF settings, snapshot, " +
+                         $"{OnvifClient.Channels(profiles)} channels it is is unknown: its ONVIF settings, snapshot, " +
                          "motion grid and channel-tagged detections stay off");
             }
             // The main stream's profile is the camera's channel for every per-channel
@@ -468,7 +468,7 @@ public sealed class GenericCameraControl : ICameraControl
         var o = await _onvif.TryGetImagingAsync(ct).ConfigureAwait(false);
         if (o == null) return null;
         // Hue, anti-flicker and flip/mirror have no ONVIF imaging equivalent, and
-        // HDR rides a setter this surface has no path for — reported absent so the
+        // HDR rides a setter this surface has no path for: reported absent so the
         // panel does not offer a control that cannot be applied.
         return new ImageSettings(o.Brightness, o.Contrast, o.Saturation, Hue: null, o.Sharpness,
             CameraControl.IrCutToDayNight(o.IrCutFilter), AntiFlicker: null,
@@ -498,8 +498,8 @@ public sealed class GenericCameraControl : ICameraControl
         var osds = await _onvif.TryGetOsdsAsync(ct).ConfigureAwait(false);
         if (osds is not { Count: > 0 }) return null;
         var (name, time) = SplitOsds(osds);
-        // ONVIF has no "hide" flag on an overlay — an overlay either exists or it
-        // does not — so presence IS visibility here, and the panel is told (through
+        // ONVIF has no "hide" flag on an overlay, an overlay either exists or it
+        // does not, so presence IS visibility here, and the panel is told (through
         // features.onvif) not to offer a switch it cannot honour.
         return new OsdSettings(
             ShowName: name != null, Name: name?.PlainText, NamePos: name?.Position,
@@ -545,7 +545,7 @@ public sealed class GenericCameraControl : ICameraControl
         var presets = await _onvif.TryGetPresetsAsync(ct).ConfigureAwait(false);
         if (presets == null) return null;
         // The panel saves into the first FREE slot, so a few empty ones are offered
-        // past the camera's own — ONVIF creates a preset on demand rather than
+        // past the camera's own: ONVIF creates a preset on demand rather than
         // filling a fixed table, and it refuses once the head is full, which the
         // node says (MaximumNumberOfPresets); a head that did not say gets sixteen.
         var max = Math.Min(_onvif.PtzNode?.MaxPresets ?? 16, MaxPresetSlots);
@@ -573,7 +573,7 @@ public sealed class GenericCameraControl : ICameraControl
     }
 
     /// <summary>Drives the head. The panel's 1-64 speed is a fraction of full
-    /// speed here — ONVIF's velocities are normalized, not stepped.</summary>
+    /// speed here: ONVIF's velocities are normalized, not stepped.</summary>
     public async Task PtzAsync(string command, float speed, CancellationToken ct)
     {
         var o = await PtzClientAsync(ct).ConfigureAwait(false);
@@ -636,7 +636,7 @@ public sealed class GenericCameraControl : ICameraControl
     /// positions are the camera's own range (almost always 0..1); the panel is given
     /// whole steps so it never has to know. Focus is not offered: ONVIF moves focus
     /// through the imaging service in ways too varied between cameras to present as
-    /// one absolute slider. Null — and no section — when the camera has no absolute
+    /// one absolute slider. Null, and no section, when the camera has no absolute
     /// zoom or will not say where the lens is.</summary>
     public async Task<XElement?> GetZoomFocusAsync(CancellationToken ct)
     {
@@ -663,7 +663,7 @@ public sealed class GenericCameraControl : ICameraControl
         var target = ZoomPosition(movePos, node.ZoomRange);
         await o.ZoomToAsync(target, ct).ConfigureAwait(false);
         // AbsoluteMove answers as soon as the lens STARTS moving, and the panel
-        // reads the position straight back — which would catch the lens on its way
+        // reads the position straight back, which would catch the lens on its way
         // and snap the slider to wherever it happened to be. So wait, briefly, for
         // it to arrive: until the camera says it is idle, it is within half a step
         // of the target, or it has stopped moving between two looks.
@@ -759,7 +759,7 @@ public sealed class GenericCameraControl : ICameraControl
             // Settle cannot leave ZoneHolds on a read, so the move to Neolink happens here.
             _zone = ZoneNone;
             _zoneRetryAt = DateTime.UtcNow + ZoneNoneRetry;
-            Log.Info($"{CameraName}: the camera ignored the motion grid written over ONVIF — " +
+            Log.Info($"{CameraName}: the camera ignored the motion grid written over ONVIF: " +
                      "the detection zone is kept on Neolink instead (it limits the live boxes, not the camera's alerts)");
             throw;
         }
@@ -774,8 +774,8 @@ public sealed class GenericCameraControl : ICameraControl
         // Two different silences. ONVIF not answering at all is what a camera with
         // no ONVIF looks like, and those have always kept their zone on Neolink.
         // ONVIF answering while its analytics does not is a camera that may well
-        // hold a grid, so it is asked again before its zone is claimed for Neolink
-        // — a few times, not forever: an unknown zone holds the live boxes back.
+        // hold a grid, so it is asked again before its zone is claimed for Neolink:
+        // a few times, not forever: an unknown zone holds the live boxes back.
         if (answer == OnvifZoneAnswer.Unknown && _zone == ZoneNotAsked && _onvif!.Ready
             && ++_zoneSilences < ZoneSilenceLimit)
             return;
@@ -792,11 +792,11 @@ public sealed class GenericCameraControl : ICameraControl
         _zoneRetryAt = DateTime.UtcNow + (_zone == ZoneNone ? ZoneNoneRetry : ZoneRetry);
         if (_zone != was && _zone != ZoneUnsure)
             Log.Info(_zone == ZoneHolds
-                ? $"{CameraName}: the camera keeps its own motion grid (ONVIF cell motion) — the detection zone is edited there" +
+                ? $"{CameraName}: the camera keeps its own motion grid (ONVIF cell motion): the detection zone is edited there" +
                   (was is ZoneUnsure or ZoneNone
                       ? " from now on; a zone kept on Neolink for it meanwhile no longer applies (it stays stored)"
                       : "")
-                : $"{CameraName}: the camera keeps no motion grid of its own — the detection zone is kept on Neolink");
+                : $"{CameraName}: the camera keeps no motion grid of its own: the detection zone is kept on Neolink");
     }
 
     /// <summary>Asks again, off the caller's path, a camera that could not be asked
@@ -804,7 +804,7 @@ public sealed class GenericCameraControl : ICameraControl
     private void ReprobeZoneIfDue()
     {
         // Only once ONVIF has answered: until then this would be discovery itself,
-        // up to half a minute holding the client's gate — and a PTZ stop queued
+        // up to half a minute holding the client's gate, and a PTZ stop queued
         // behind that would let the head overshoot. The event service or the next
         // panel open brings discovery about soon enough.
         if (_onvif is not { Ready: true } || _zone is not (ZoneUnsure or ZoneNone)

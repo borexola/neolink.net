@@ -122,7 +122,7 @@ public sealed class RtpPacketizer
         }
     }
 
-    /// <summary>One '$'-framed RTP packet appended to the batch — the same bytes
+    /// <summary>One '$'-framed RTP packet appended to the batch: the same bytes
     /// <see cref="BuildPacket"/> plus the interleave header used to produce.</summary>
     private void WritePacket(RtpBatch b, ReadOnlySpan<byte> payload1, ReadOnlySpan<byte> payload2, uint ts,
         bool marker)
@@ -187,7 +187,7 @@ public sealed class RtpPacketizer
 /// 4-byte '$' interleave header. TCP writes <see cref="Framed"/> whole; UDP
 /// sends each <see cref="PacketAt"/> slice as its own datagram (the framing
 /// bytes between slices are simply skipped). The buffer must not be reused
-/// until the send completes — one pump per session guarantees that.
+/// until the send completes: one pump per session guarantees that.
 /// </summary>
 public sealed class RtpBatch
 {

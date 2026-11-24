@@ -34,7 +34,7 @@ internal static class Autostart
         catch { return false; }
     }
 
-    /// <summary>Any entry at all, even one pointing at an old install path — what
+    /// <summary>Any entry at all, even one pointing at an old install path: what
     /// "should I be starting with Windows?" really means across an upgrade.</summary>
     public static bool IsPresent()
     {

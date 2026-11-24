@@ -18,7 +18,7 @@ namespace Neolink.Notifications;
 /// clip's pre-roll, and reads go through <see cref="FootageVault"/> so
 /// encrypted footage samples the same as plain; without ffmpeg or a clip the
 /// thumbnail goes instead. Composition runs detached and the send rides the
-/// Notifier's bounded queue — nothing here may back up into the recorder.
+/// Notifier's bounded queue, nothing here may back up into the recorder.
 /// Flood control is per camera (<see cref="NotificationSettings.EventCooldownMinutes"/>);
 /// skipped events are still recorded.
 /// </summary>
@@ -38,7 +38,7 @@ public sealed class EventEmailer
     // pre-roll, and snapshots must not come from there.
     private readonly Dictionary<string, DateTime> _trigger = new();
     // In-memory capture (EventSnapshotMode "memory"): record hubs by camera and
-    // one live tap per event. The tap is an ordinary extra hub subscriber — its
+    // one live tap per event. The tap is an ordinary extra hub subscriber: its
     // channel drops ITS OWN oldest packets when it lags, so it can never slow
     // or starve the recording pumps.
     private readonly Dictionary<string, IStreamHub> _hubs = new(StringComparer.OrdinalIgnoreCase);
@@ -67,7 +67,7 @@ public sealed class EventEmailer
 
     /// <summary>The recorder's event-started hook (fires at the detection; a
     /// self-wake only on promotion). Schedules the email for the configured
-    /// delay; with a delay of 0 the close hook sends instead. Must not block —
+    /// delay; with a delay of 0 the close hook sends instead. Must not block:
     /// the recorder calls this on its own pump.</summary>
     public void OnEventStarted(EventRecord rec)
     {
@@ -163,7 +163,7 @@ public sealed class EventEmailer
                     && DateTime.UtcNow - last < TimeSpan.FromMinutes(s.EventCooldownMinutes))
                 {
                     Log.Debug($"{rec.Camera}: event email skipped (cooldown, " +
-                              $"{s.EventCooldownMinutes} min per camera) — the event is still recorded");
+                              $"{s.EventCooldownMinutes} min per camera): the event is still recorded");
                     return false;
                 }
                 prev = last;
@@ -185,8 +185,8 @@ public sealed class EventEmailer
         }
         catch (Exception ex)
         {
-            Log.Warn($"{rec.Camera}: event email could not be prepared: {Log.Flatten(ex)} " +
-                     "— the event itself is recorded and unaffected");
+            Log.Warn($"{rec.Camera}: event email could not be prepared: {Log.Flatten(ex)}. " +
+                     "The event itself is recorded and unaffected");
         }
         finally { StopTap(rec.Id); }
         if (!queued)
@@ -223,10 +223,10 @@ public sealed class EventEmailer
         {
             0 => " No snapshot could be captured for this event.",
             var n when n < want && why == Shortfall.NoFfmpeg =>
-                $" {n} snapshot attached — sampling {want} frames from the clip needs ffmpeg, " +
+                $" {n} snapshot attached: sampling {want} frames from the clip needs ffmpeg, " +
                 "which is not installed on this server, so this is the event's thumbnail.",
             var n when n < want && why == Shortfall.NoClip =>
-                $" {n} snapshot attached — this event has no saved clip, so this is its thumbnail.",
+                $" {n} snapshot attached: this event has no saved clip, so this is its thumbnail.",
             var n when n < want && why == Shortfall.Memory =>
                 $" {n} of the {want} snapshots asked for are attached (sampled in memory; the live tap held no more).",
             var n when n < want =>
@@ -242,7 +242,7 @@ public sealed class EventEmailer
               " The full clip is in the web UI's events page.";
 
         return _notifier.Send(new Alert($"event:{rec.Id}", Recovery: false, subject,
-            Headline: $"{Cap(labels)} — {rec.Camera}", body, Context: null,
+            Headline: $"{Cap(labels)}: {rec.Camera}", body, Context: null,
             Attachments: attachments.Count > 0 ? attachments : null,
             Channels: channels,
             Event: new EventInfo(rec.Camera, rec.Labels.ToArray(), rec.StartUtc, seconds, ongoing, rec.Id),
@@ -268,26 +268,26 @@ public sealed class EventEmailer
         if (want > 1 && Media.Ffmpeg.ExePath == null)
         {
             why = Shortfall.NoFfmpeg;
-            Log.Info($"{rec.Camera}: event email attaches the thumbnail only — sampling {want} " +
+            Log.Info($"{rec.Camera}: event email attaches the thumbnail only: sampling {want} " +
                      "frames from the clip needs ffmpeg, and none was found on PATH " +
                      "(set NEOLINK_FFMPEG, or install ffmpeg; the Docker image ships one)");
         }
         else if (want > 1 && !memory && !(rec.HasClip && File.Exists(clip)))
         {
             why = Shortfall.NoClip;
-            Log.Info($"{rec.Camera}: event email attaches the thumbnail only — this event has no clip " +
+            Log.Info($"{rec.Camera}: event email attaches the thumbnail only: this event has no clip " +
                      "(recording was off, the disk was full, or the stream never carried a keyframe)");
         }
 
         if (memory && Media.Ffmpeg.ExePath is { } ff)
         {
-            // Never opens the clip file — the frames come from the live tap.
+            // Never opens the clip file: the frames come from the live tap.
             var (tap, aus) = TakeTap(rec.Id);
             if (tap == null || aus.Count == 0)
             {
                 why = Shortfall.Memory;
                 Log.Info($"{rec.Camera}: in-memory snapshot capture held no frames (stream quiet " +
-                         "or capture unavailable) — attaching the thumbnail instead");
+                         "or capture unavailable): attaching the thumbnail instead");
             }
             else
             {
@@ -302,14 +302,14 @@ public sealed class EventEmailer
                     {
                         why = Shortfall.Memory;
                         Log.Info($"{rec.Camera}: event email carries {frames.Count} of the {want} " +
-                                 "snapshots asked for — the in-memory tap held no more decodable frames");
+                                 "snapshots asked for: the in-memory tap held no more decodable frames");
                     }
                 }
                 catch (Exception ex)
                 {
                     why = Shortfall.Memory;
                     Log.Warn($"{rec.Camera}: in-memory snapshot decode failed " +
-                             $"({Log.Flatten(ex)}) — attaching the thumbnail instead");
+                             $"({Log.Flatten(ex)}): attaching the thumbnail instead");
                 }
             }
         }
@@ -325,14 +325,14 @@ public sealed class EventEmailer
                 {
                     why = Shortfall.Sampling;
                     Log.Info($"{rec.Camera}: event email carries {frames.Count} of the {want} " +
-                             "snapshots asked for — the clip held no more decodable frames");
+                             "snapshots asked for: the clip held no more decodable frames");
                 }
             }
             catch (Exception ex)
             {
                 why = Shortfall.Sampling;
                 Log.Warn($"{rec.Camera}: could not sample the clip for the event email " +
-                         $"({Log.Flatten(ex)}) — attaching the thumbnail instead");
+                         $"({Log.Flatten(ex)}): attaching the thumbnail instead");
             }
         }
         if (result.Count > 0) return (result, why);
@@ -358,7 +358,7 @@ public sealed class EventEmailer
     /// <summary>Should a detection that started at <paramref name="detectionUtc"/>
     /// be attached to the offline alert for a camera last seen at
     /// <paramref name="offlineSinceUtc"/>? The window is measured from when the
-    /// camera stopped answering, not from now — the offline threshold would
+    /// camera stopped answering, not from now: the offline threshold would
     /// otherwise eat it, and any threshold past the lookback would silently turn
     /// the feature off.</summary>
     internal static bool ShouldAttach(NotificationSettings s, DateTime detectionUtc, DateTime offlineSinceUtc) =>
@@ -460,7 +460,7 @@ public sealed class EventEmailer
         await Mp4Pipe.Open(src).CopyToAsync(stdin, ct).ConfigureAwait(false);
     }
 
-    /// <summary>Decodes tapped access units: an elementary stream fed from RAM —
+    /// <summary>Decodes tapped access units: an elementary stream fed from RAM,
     /// the clip file is never opened.</summary>
     private static Task<List<byte[]>> DecodeMemoryAsync(string ffmpeg, MemoryTap tap,
         List<(byte[] Au, bool Key)> aus) =>
@@ -494,7 +494,7 @@ public sealed class EventEmailer
         {
             "-hide_banner", "-loglevel", "error",
             // Bounded appetite: an unthrottled full-speed decode of a 5 MP clip
-            // can starve the camera pumps on a small box — and a starved session
+            // can starve the camera pumps on a small box, and a starved session
             // is a dropped session, which cuts the very recording being sampled.
             "-threads", "2",
         }.Concat(inputArgs).Concat(new[]
@@ -510,7 +510,7 @@ public sealed class EventEmailer
         // The timeout must cover the stdout copy: it only ends when ffmpeg closes
         // stdout, and a feed stalled on dead storage keeps ffmpeg alive forever.
         using var cts = new CancellationTokenSource(DecodeTimeout);
-        // The feed runs while stdout drains concurrently — one-sided pumping
+        // The feed runs while stdout drains concurrently: one-sided pumping
         // deadlocks pipes.
         var feed = Task.Run(async () =>
         {
@@ -518,7 +518,7 @@ public sealed class EventEmailer
             {
                 await feedSource(p.StandardInput.BaseStream, cts.Token).ConfigureAwait(false);
             }
-            catch { /* ffmpeg may close stdin once it has its frames — normal */ }
+            catch { /* ffmpeg may close stdin once it has its frames: normal */ }
             finally
             {
                 try { p.StandardInput.Close(); } catch { }
@@ -581,7 +581,7 @@ public sealed class EventEmailer
         lock (_gate) _hubs.TryGetValue(rec.Camera, out hub);
         if (hub?.Codec == null)
         {
-            Log.Info($"{rec.Camera}: in-memory snapshot capture unavailable (no live stream) — " +
+            Log.Info($"{rec.Camera}: in-memory snapshot capture unavailable (no live stream): " +
                      "the event notification will carry the thumbnail");
             return;
         }

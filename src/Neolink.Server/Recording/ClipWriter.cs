@@ -20,7 +20,7 @@ namespace Neolink.Recording;
 /// Disk I/O is fully decoupled from the caller: fragments are muxed on the
 /// caller's thread but written by a dedicated background thread (below-normal
 /// priority, never a thread-pool thread) behind a bounded memory budget. A slow
-/// disk — HDD flush stalls, spun-down drives, network shares — can therefore
+/// disk, HDD flush stalls, spun-down drives, network shares, can therefore
 /// never block the media pipeline or starve the thread pool that live streaming
 /// runs on. When the disk falls behind the budget, recorded frames are dropped
 /// (with a warning) and writing resumes at the next keyframe.
@@ -28,10 +28,10 @@ namespace Neolink.Recording;
 /// While recording, the file is a live-style fragmented MP4 (crash-safe: every
 /// flushed fragment is durable). That shape is terrible to SEEK over HTTP,
 /// though: one moof per frame means a browser must range-request its way
-/// through thousands of tiny headers to build an index — instant on localhost,
+/// through thousands of tiny headers to build an index, instant on localhost,
 /// tens of seconds across a network. So when the clip closes it is finalized
 /// IN PLACE into a classic indexed MP4: a moov with full sample tables (built
-/// from offsets tracked during writing — no data is copied or moved) is
+/// from offsets tracked during writing, no data is copied or moved) is
 /// appended, every moof is retyped to a skippable "free" box, and lastly the
 /// fragmented header up front is retired the same way. Players then seek by
 /// byte offset with two or three range requests, like any ordinary MP4. A
@@ -51,7 +51,7 @@ public sealed class ClipWriter : IDisposable
     private readonly BlockingCollection<QueueItem> _queue = new();
     private readonly TaskCompletionSource _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    // Mux state — owned by the caller's thread (one producer per writer).
+    // Mux state: owned by the caller's thread (one producer per writer).
     private uint _sequence = 1;
     private long _decodeTime; // 90 kHz ticks; long so the writer thread can Volatile.Read it
     private bool _haveTs;
@@ -62,7 +62,7 @@ public sealed class ClipWriter : IDisposable
     private int _dropped;
     private bool _disposed;
 
-    // Audio (AAC track 2) mux state — same producer thread.
+    // Audio (AAC track 2) mux state: same producer thread.
     private readonly int _audioRate; // 0 = no audio track in this file
     private long _audioDecodeTime;   // sample-rate ticks; Volatile.Read on the writer thread
     private uint _prevAudioTs;
@@ -80,7 +80,7 @@ public sealed class ClipWriter : IDisposable
     internal readonly record struct SampleRec(byte Track, bool Keyframe, uint Size, uint Duration,
         ulong DecodeTime, long Offset);
 
-    /// <summary>What a walk over an old-format (fragmented) file yields — everything
+    /// <summary>What a walk over an old-format (fragmented) file yields, everything
     /// needed to build the classic index, on disk (refinalize) or in memory
     /// (<see cref="VirtualMp4"/> serving). FragEnd is where the fragments stop:
     /// the legacy mfra index, a truncated tail, or end of file.</summary>
@@ -140,7 +140,7 @@ public sealed class ClipWriter : IDisposable
 
     /// <summary>
     /// Feeds the next video packet, in hub order. <paramref name="gap"/> signals that
-    /// packets were dropped since the previous one — the caller must derive it from
+    /// packets were dropped since the previous one: the caller must derive it from
     /// the hub index of EVERY packet (audio included): hub indices are global, so a
     /// video-only view sees non-consecutive indices whenever audio is interleaved,
     /// and treating those as drops would silently discard all P-frames.
@@ -211,7 +211,7 @@ public sealed class ClipWriter : IDisposable
     }
 
     /// <summary>
-    /// Hands one muxed fragment to the writer thread — or drops it when the disk
+    /// Hands one muxed fragment to the writer thread, or drops it when the disk
     /// is too far behind. Drops start when the budget is exceeded and end at the
     /// first keyframe after the backlog has halved, so the file stays decodable.
     /// </summary>
@@ -235,7 +235,7 @@ public sealed class ClipWriter : IDisposable
             _dropping = true;
             _dropped = 1;
             Log.Warn($"{_path}: storage cannot keep up (>{QueueBudget / (1024 * 1024)} MB pending); " +
-                     "dropping recorded frames until it recovers — live streaming is unaffected");
+                     "dropping recorded frames until it recovers: live streaming is unaffected");
             return;
         }
 
@@ -278,7 +278,7 @@ public sealed class ClipWriter : IDisposable
         var samples = new List<SampleRec>();
         try
         {
-            // The vault picks plain (large write buffer — what HDDs want) or
+            // The vault picks plain (large write buffer, what HDDs want) or
             // encrypted (chunked AES-256-GCM) per the recording.encrypt setting.
             file = FootageVault.Create(_path);
             file.Write(init);
@@ -312,7 +312,7 @@ public sealed class ClipWriter : IDisposable
                     pos + moofSize + 8));
                 file.Write(item.Data);
                 // A GOP-cadence flush keeps the on-disk file within seconds of
-                // live for mid-write readers, at a few large writes per GOP —
+                // live for mid-write readers, at a few large writes per GOP,
                 // still what HDDs want. (Torn tails between flushes stay possible;
                 // ScanFragmented clamps them.)
                 if (item.Keyframe)
@@ -330,12 +330,12 @@ public sealed class ClipWriter : IDisposable
         _wroteVideo = samples.Any(s => s.Track == 1);
         if (!failed && !_wroteVideo)
         {
-            // Only the init segment landed — a writer opened against a stream that
+            // Only the init segment landed: a writer opened against a stream that
             // never sent a frame (seen live: a wake event's preview writer against
             // the parked sub stream). There is nothing to finalize or index, and
-            // nothing to warn about — the recorder's own "stream not ready" and
+            // nothing to warn about: the recorder's own "stream not ready" and
             // discard paths already tell that story at the event level.
-            Log.Debug($"{_path}: no video arrived — leaving the empty capture unfinalized");
+            Log.Debug($"{_path}: no video arrived: leaving the empty capture unfinalized");
         }
         else if (!failed)
         {
@@ -347,7 +347,7 @@ public sealed class ClipWriter : IDisposable
             }
             catch (Exception ex)
             {
-                // The file is still a valid fragmented MP4 — fall back to the
+                // The file is still a valid fragmented MP4: fall back to the
                 // legacy finalize (duration patch + mfra keyframe index).
                 Log.Warn($"{_path}: classic finalize failed ({ex.Message}); keeping fragmented layout");
                 try
@@ -369,7 +369,7 @@ public sealed class ClipWriter : IDisposable
         }
         catch (Exception ex)
         {
-            // Dispose flushes the write buffer — a volume that filled or vanished
+            // Dispose flushes the write buffer: a volume that filled or vanished
             // can throw HERE, and an unhandled exception on this raw thread would
             // take down the whole process.
             _faulted = true;
@@ -407,12 +407,12 @@ public sealed class ClipWriter : IDisposable
     /// <summary>
     /// Rewrites the closed file, in place and without moving a single media byte,
     /// into a classic indexed MP4: appends a moov whose sample tables were
-    /// accumulated during writing, then — as the single commit step — rewrites
+    /// accumulated during writing, then, as the single commit step, rewrites
     /// the live header's box head so that ONE "free" box spans everything from
     /// there to the appended moov (the retired header plus every per-frame
     /// moof/mdat, whose payloads the new tables point into). Readers thus see
     /// just ftyp → free → moov and seek by byte offset in two or three range
-    /// requests, instead of crawling thousands of per-frame fragment headers —
+    /// requests, instead of crawling thousands of per-frame fragment headers:
     /// the cause of minute-long timeline seeks over remote links. A crash
     /// anywhere in here leaves a valid fragmented file behind.
     /// </summary>
@@ -459,7 +459,7 @@ public sealed class ClipWriter : IDisposable
     /// already classic. Only understands this muxer's own single-sample
     /// fragments; anything unexpected throws before the file is touched.
     /// (Optional: <see cref="VirtualMp4"/> serves old files seek-fast without
-    /// touching them — this exists for those who want the files themselves
+    /// touching them: this exists for those who want the files themselves
     /// portable and index-complete.)
     /// </summary>
     public static bool RefinalizeClassic(string path)
@@ -477,7 +477,7 @@ public sealed class ClipWriter : IDisposable
     /// <summary>True when the file still has the live moov up front (old format /
     /// still being recorded), as opposed to the finalized free-span layout.
     /// A moov right after ftyp is not proof by itself: an ordinary fast-start
-    /// classic file (a combined export, say) has the same silhouette — only the
+    /// classic file (a combined export, say) has the same silhouette, only the
     /// live fragmented header carries an mvex box, so that is the discriminator
     /// (checked by walking the moov's child HEADERS, a few seeks, no payload
     /// reads).</summary>
@@ -511,16 +511,16 @@ public sealed class ClipWriter : IDisposable
     /// records the live writer tracks. tfhd/tfdt/trun offsets are fixed because
     /// this muxer always writes the same one-sample fragment shape; anything
     /// else throws. A truncated tail (crash mid-write, or a file still being
-    /// recorded) simply ends the walk — the scan covers the complete samples.
+    /// recorded) simply ends the walk: the scan covers the complete samples.
     /// The pass is strictly SEQUENTIAL: hopping between the ~18k fragment heads
     /// of a big segment would be instant on cached flash but minutes of random
-    /// reads on a cold spinning disk, which is where terabyte archives live —
+    /// reads on a cold spinning disk, which is where terabyte archives live,
     /// reading straight through goes at full disk streaming speed instead.
     /// </summary>
     internal static FragmentedScan ScanFragmented(Stream file)
     {
         long end = file.Length;
-        long pos = 0; // bytes consumed so far — the stream never seeks backwards
+        long pos = 0; // bytes consumed so far: the stream never seeks backwards
         file.Seek(0, SeekOrigin.Begin);
         var skip = new byte[64 * 1024];
 
@@ -563,7 +563,7 @@ public sealed class ClipWriter : IDisposable
 
         // A big segment holds tens of thousands of fragments, so the per-moof walk
         // below allocates nothing: the buffer is reused (its bytes are consumed
-        // before the next read) and box types compare as bytes — which is why it
+        // before the next read) and box types compare as bytes, which is why it
         // does not go through Boxes(), whose iterator names every box as a string.
         static bool IsBox(byte[] head, ReadOnlySpan<byte> type) => head.AsSpan(4, 4).SequenceEqual(type);
         byte[] moofBuf = Array.Empty<byte>();
@@ -620,7 +620,7 @@ public sealed class ClipWriter : IDisposable
                     if (track == 0 || sampleSize == 0)
                         throw new InvalidOperationException("unexpected fragment layout");
                     // The payload lives in the NEXT box (mdat), which may be cut short
-                    // on a growing or crash-truncated file — the write buffer flushes
+                    // on a growing or crash-truncated file: the write buffer flushes
                     // mid-fragment. Indexing that sample would point readers past the
                     // fragment region (into the synthesized moov, on the virtual view).
                     if (boxStart + dataOff + sampleSize > end) { pos = boxStart; break; }

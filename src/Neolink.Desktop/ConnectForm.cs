@@ -34,7 +34,7 @@ internal sealed class ConnectForm : Form
     {
         _settings = settings;
 
-        Text = reconfiguring ? "Neolink.NET — server connection" : "Neolink.NET — connect to your server";
+        Text = reconfiguring ? "Neolink.NET: server connection" : "Neolink.NET: connect to your server";
         WindowTheme.Attach(this);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -45,13 +45,13 @@ internal sealed class ConnectForm : Form
         // AutoScaleMode alone does nothing for a code-built form: without
         // designer-recorded AutoScaleDimensions the runtime DPI becomes the
         // baseline, no scaling ever runs, and on a 125%/150% display the text
-        // grows into fixed pixel sizes — clipped labels and buttons.
+        // grows into fixed pixel sizes, clipped labels and buttons.
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
 
         // A first run beside the installer's local server should not open with an
         // empty box asking for an address the user never chose: the service on
-        // this PC is the server. Prefilled, not forced — still editable.
+        // this PC is the server. Prefilled, not forced, still editable.
         bool localServer = string.IsNullOrEmpty(settings.ServerUrl) && LocalServerInstalled();
         _url.Text = localServer ? "http://localhost:8655" : settings.ServerUrl;
         _url.PlaceholderText = "10.1.0.60:8000";
@@ -82,7 +82,7 @@ internal sealed class ConnectForm : Form
         layout.Controls.Add(new Label());
         layout.Controls.Add(new Label
         {
-            Text = "The web UI's address — the same one you type in a browser. https:// if you use TLS.",
+            Text = "The web UI's address: the same one you type in a browser. https:// if you use TLS.",
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
             Margin = new Padding(0, 0, 0, 8),
@@ -132,7 +132,7 @@ internal sealed class ConnectForm : Form
         // two boxes looking mandatory.
         if (!reconfiguring)
             _status.Text = localServer
-                ? "The server installed on this PC is filled in — leave the boxes blank and press " +
+                ? "The server installed on this PC is filled in: leave the boxes blank and press " +
                   "Connect. It will ask you to create your admin account right after."
                 : "Leave the username and password blank if your server has no accounts.";
     }
@@ -140,7 +140,7 @@ internal sealed class ConnectForm : Form
     /// <summary>The installer's local-server feature leaves this marker; its
     /// presence means "http://localhost:8655 is (about to be) a Neolink server".
     /// The service may still be starting when the dialog opens, so this reads the
-    /// registry rather than probing the port — Test connection does the probing.</summary>
+    /// registry rather than probing the port: Test connection does the probing.</summary>
     private static bool LocalServerInstalled()
     {
         try
@@ -167,7 +167,7 @@ internal sealed class ConnectForm : Form
     }
 
     /// <summary>Proves the typed connection works, against a CANDIDATE settings
-    /// object with a non-persisting link — a mere Test must leave the real
+    /// object with a non-persisting link: a mere Test must leave the real
     /// settings file untouched. Only <paramref name="commit"/> (the Connect
     /// button's path) copies the verified values in and saves.</summary>
     private async Task<bool> TestAsync(bool commit)
@@ -175,7 +175,7 @@ internal sealed class ConnectForm : Form
         var url = DesktopSettings.NormalizeUrl(_url.Text);
         if (url == null)
         {
-            Say("That is not an address I can use — try \"10.1.0.60:8000\".", error: true);
+            Say("That is not an address I can use: try \"10.1.0.60:8000\".", error: true);
             return false;
         }
         _url.Text = url;
@@ -197,7 +197,7 @@ internal sealed class ConnectForm : Form
                 // Something answered the probe but this is not an API we can read.
                 // Treating it as "no accounts" would close the dialog on a
                 // connection that cannot work.
-                Say($"{candidate.ServerUrl} answered, but not like a Neolink.NET web UI — " +
+                Say($"{candidate.ServerUrl} answered, but not like a Neolink.NET web UI: " +
                     "check the port is the web UI's, not RTSP.", error: true);
                 return false;
             }
@@ -205,7 +205,7 @@ internal sealed class ConnectForm : Form
             {
                 if (_user.Text.Trim().Length == 0)
                 {
-                    Say("This server has accounts — a username and password are required.", error: true);
+                    Say("This server has accounts: a username and password are required.", error: true);
                     return false;
                 }
                 var failure = await link.LoginAsync(_user.Text.Trim(), _pass.Text);
@@ -214,20 +214,20 @@ internal sealed class ConnectForm : Form
                     Say(failure, error: true);
                     return false;
                 }
-                Say($"Success — signed in as {candidate.Username}.", success: true);
+                Say($"Success: signed in as {candidate.Username}.", success: true);
             }
             else if (status.SetupRequired)
             {
-                Say("Success — connected. The next screen is the server's own: it will ask you to create the admin account.", success: true);
+                Say("Success: connected. The next screen is the server's own: it will ask you to create the admin account.", success: true);
             }
             else
             {
-                Say("Success — connected. This server has no accounts, so no sign-in is needed.", success: true);
+                Say("Success: connected. This server has no accounts, so no sign-in is needed.", success: true);
             }
 
             if (!commit) return true;
 
-            // Only a verified connection is worth keeping — and only Connect keeps it.
+            // Only a verified connection is worth keeping, and only Connect keeps it.
             // The outgoing server is registered in the saved list first, so
             // pointing at a new one is a switch, never a loss.
             _settings.RememberCurrent();

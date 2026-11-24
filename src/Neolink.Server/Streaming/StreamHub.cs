@@ -19,7 +19,7 @@ public sealed record HubAudioAac(long Index, byte[] Au, uint RtpTs) : HubPacket(
 /// <summary>16-bit little-endian mono PCM decoded from ADPCM. RTP clock = sample rate.</summary>
 public sealed record HubAudioPcm(long Index, byte[] Pcm, uint RtpTs) : HubPacket(Index);
 /// <summary>One Opus packet transcoded from the camera's audio (RFC 7587: 48 kHz
-/// RTP clock, 20 ms per packet). Emitted ALONGSIDE the original audio packets —
+/// RTP clock, 20 ms per packet). Emitted ALONGSIDE the original audio packets:
 /// RTSP sessions on an Opus-active hub forward these and skip the originals,
 /// while the recorders and the web player keep the camera's own audio.</summary>
 public sealed record HubAudioOpus(long Index, byte[] Packet, uint RtpTs) : HubPacket(Index);
@@ -42,7 +42,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     // GOP cache: the ordered packets since (and including) the most recent video
     // keyframe. A brand-new viewer is primed with this so it has a decodable
     // keyframe IMMEDIATELY, instead of discarding frames until the camera's next
-    // keyframe arrives (2-4 s on typical Reolink settings) — the dominant cause of
+    // keyframe arrives (2-4 s on typical Reolink settings): the dominant cause of
     // slow first-frame on a multi-tile refresh. Audio packets are cached inline so
     // the replayed indices stay consecutive (the WS sender treats an index gap as a
     // drop) and A/V start together. Guarded by _castGate, which also serializes
@@ -113,7 +113,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
 
     public int SubscriberCount => _subscribers.Count;
 
-    /// <summary>External watchers only — recorders and other internal taps excluded.</summary>
+    /// <summary>External watchers only: recorders and other internal taps excluded.</summary>
     public int ViewerCount => Volatile.Read(ref _viewerCount);
 
     /// <summary>True once codec parameters have been learned (DESCRIBE/init can be answered).</summary>
@@ -167,7 +167,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         _videoRtpTs = unchecked(_videoRtpTs + (uint)((ulong)deltaUs * 90 / 1000));
 
         // Learn codec parameters from the stream. Parameter sets ride keyframes,
-        // so once they are known, P-frames skip the full-buffer NAL scan — that's
+        // so once they are known, P-frames skip the full-buffer NAL scan: that's
         // the hub's per-frame hot path across every stream.
         bool paramsUpdated = false;
         bool frameHasSps = false;
@@ -202,7 +202,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             Codec = frame.Codec;
             if (_firstVideoAt == DateTime.MaxValue) _firstVideoAt = DateTime.UtcNow;
             // Sources without a resolution side channel (generic RTSP pulls) get
-            // their dimensions from the SPS itself — MSE rejects a 0×0 init. Re-read on
+            // their dimensions from the SPS itself: MSE rejects a 0×0 init. Re-read on
             // every SPS: a bad first one, or a resolution change, must not stick.
             if (((Width == 0 && paramsUpdated && Sps != null) || (_sizeFromSps && frameHasSps))
                 && H26x.TryGetDimensions(frame.Codec, Sps, out var w, out var h))
@@ -229,7 +229,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
     public void PublishAac(AacFrame frame)
     {
         MaybeStartTranscoder(AudioTranscoder.SourceKind.AdtsAac);
-        _transcoder?.Feed(frame.Data); // whole ADTS block — ffmpeg reads the framing itself
+        _transcoder?.Feed(frame.Data); // whole ADTS block: ffmpeg reads the framing itself
         foreach (var au in Adts.Split(frame.Data))
         {
             if (Audio == null || !Audio.IsAac)
@@ -268,7 +268,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
 
     /// <summary>Starts the Opus transcoder on the publish loop's next audio frame
     /// once an Opus session is listening (missing ffmpeg/libopus never gets this
-    /// far — Opus mounts refuse the DESCRIBE first). The demand check is cheap,
+    /// far, Opus mounts refuse the DESCRIBE first). The demand check is cheap,
     /// so paying it per audio frame keeps the start/stop logic in one place.</summary>
     private void MaybeStartTranscoder(AudioTranscoder.SourceKind kind)
     {
@@ -279,7 +279,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             if (Ffmpeg.ExePath == null || !Ffmpeg.SupportsOpus) return; // the DESCRIBE gate already told the user
             Log.Info($"{Name}: transcoding audio to Opus " +
                      $"({(kind == AudioTranscoder.SourceKind.AdtsAac ? "AAC" : "ADPCM/PCM")} source, " +
-                     "48 kHz mono @ 32 kb/s) — runs while Opus clients are connected");
+                     "48 kHz mono @ 32 kb/s): runs while Opus clients are connected");
             _transcoder = new AudioTranscoder(Name, kind, pkt =>
             {
                 // Runs on the transcoder's reader task; Emit locks, _index is
@@ -367,7 +367,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         {
             // Prime with the buffered GOP (keyframe-first) so this viewer can decode
             // immediately. Under _castGate with registration so no live packet slips
-            // between the snapshot and the subscribe — that would show as a one-packet
+            // between the snapshot and the subscribe, that would show as a one-packet
             // index gap and make the WS sender discard back to the next keyframe.
             foreach (var p in _gop)
                 ch.Writer.TryWrite(p);
@@ -401,7 +401,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
         _cast = n == next.Length ? next : next[..n];
     }
 
-    // Ticks (UTC) of the last DESCRIBE/init attempt — the wake signal for
+    // Ticks (UTC) of the last DESCRIBE/init attempt: the wake signal for
     // sleep-friendly battery cameras (see IStreamHub.LastViewerAskUtc).
     private long _lastViewerAskTicks;
 
@@ -425,7 +425,7 @@ public sealed class StreamHub : IStreamHub, IMediaSink
             return false;
         }
         // Give audio a moment to appear (it typically arrives within a second of
-        // video) — but only probe once per hub. If the camera showed no audio the
+        // video), but only probe once per hub. If the camera showed no audio the
         // first time, don't tax every subsequent DESCRIBE with the wait.
         if (Audio == null && !_audioProbeDone)
         {

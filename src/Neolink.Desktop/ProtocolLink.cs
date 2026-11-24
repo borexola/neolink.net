@@ -6,7 +6,7 @@ using Microsoft.Win32;
 namespace Neolink.Desktop;
 
 /// <summary>
-/// The neolink-desktop: URI scheme — how a notification clicked in the Action
+/// The neolink-desktop: URI scheme, how a notification clicked in the Action
 /// Center reaches the app. An unpackaged app's in-process toast click event
 /// only works while the banner is on screen; once the card slides into the
 /// Action Center, Windows needs something it can LAUNCH. Protocol activation
@@ -58,7 +58,7 @@ internal static class ProtocolLink
     /// <summary>Anything on the machine may invoke a registered protocol, so the
     /// payload is held to the one shape a toast actually carries: a single
     /// in-app path. Anything else degrades to the dashboard rather than being
-    /// trusted — never an absolute URL, never another origin.</summary>
+    /// trusted, never an absolute URL, never another origin.</summary>
     public static string Sanitize(string link)
     {
         link = link.Trim();

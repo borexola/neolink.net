@@ -13,8 +13,8 @@ namespace Neolink.Streaming;
 /// "pull point" and then long-polls it, so this is a service of its own that holds
 /// one subscription per camera and keeps it alive.
 ///
-/// What comes out is <see cref="MotionPush"/> — the same shape a Baichuan push
-/// produces — so everything downstream (the event recorder, notifications, the MQTT
+/// What comes out is <see cref="MotionPush"/>, the same shape a Baichuan push
+/// produces, so everything downstream (the event recorder, notifications, the MQTT
 /// bridge and Home Assistant) works on it without knowing which kind of camera it
 /// came from. Ongoing detections are also re-emitted every few seconds, as a
 /// Baichuan push would be, since ONVIF reports a state only when it changes.
@@ -42,7 +42,7 @@ public sealed class OnvifEventService
 
     /// <summary>How long a ONE-SHOT detection counts as current. A notification that
     /// carries no state ("this happened") will never be followed by an end, so it
-    /// has to lapse on its own — each on its own clock, refreshed whenever the
+    /// has to lapse on its own: each on its own clock, refreshed whenever the
     /// camera reports it again. Stateful detections are never timed out here: they
     /// last until the camera says they ended, exactly as it promised to.</summary>
     private static readonly TimeSpan OneShotHold = TimeSpan.FromSeconds(20);
@@ -153,12 +153,12 @@ public sealed class OnvifEventService
                 {
                     // The camera HAS an event service and refused this once. That is
                     // worth retrying on the ordinary backoff, not the long wait for a
-                    // camera with no service — and worth saying why, once per outage.
+                    // camera with no service, and worth saying why, once per outage.
                     if (!refusalLogged)
                     {
                         refusalLogged = true;
                         Log.Info($"{_camera}: the camera refused an ONVIF event subscription " +
-                                 $"({created.Reason ?? "no reason given"}) — retrying");
+                                 $"({created.Reason ?? "no reason given"}): retrying");
                     }
                     troubled = true;
                 }
@@ -249,7 +249,7 @@ public sealed class OnvifEventService
                 if (pulled.Messages is not { } messages)
                 {
                     // Gone by the camera's word: re-subscribe. A timeout or a refused connection is retried
-                    // on this subscription instead — making new ones often is what upsets some cameras.
+                    // on this subscription instead: making new ones often is what upsets some cameras.
                     if (pulled.SubscriptionLost || ++failures > MaxPollFailures) return (delivered, false);
                     // The lost reply may have carried an end, which ONVIF never repeats: the camera is
                     // asked to restate its states before the next poll. One that lapsed faults that poll.
@@ -265,7 +265,7 @@ public sealed class OnvifEventService
                     bool first = !EverSubscribed;
                     EverSubscribed = true;
                     if (first || announce)
-                        Log.Info($"{_camera}: ONVIF events subscribed — detections from this camera " +
+                        Log.Info($"{_camera}: ONVIF events subscribed: detections from this camera " +
                                  "record, notify and reach Home Assistant like a Reolink camera's");
                     else
                         Log.Debug($"{_camera}: ONVIF event subscription renewed after the camera dropped it");
@@ -289,7 +289,7 @@ public sealed class OnvifEventService
                 }
                 ExpireOneShots();
                 // A camera is ASKED to hold the poll open until it has something to say,
-                // but not all of them do — some answer "nothing" at once, and polling
+                // but not all of them do: some answer "nothing" at once, and polling
                 // one of those as fast as it can reply is a busy loop against the
                 // camera. When a poll comes back early and empty, pause before the next.
                 if (messages.Count == 0 && DateTime.UtcNow - started < MinPollInterval)
@@ -307,7 +307,7 @@ public sealed class OnvifEventService
                     if (refused && !_renewRefusedLogged)
                     {
                         _renewRefusedLogged = true;
-                        Log.Debug($"{_camera}: the camera refused to renew its ONVIF event subscription — " +
+                        Log.Debug($"{_camera}: the camera refused to renew its ONVIF event subscription: " +
                                   "relying on the polls to keep it alive");
                     }
                     renewDue = renewed is { } g ? DateTime.UtcNow + RenewAfter(g)
@@ -441,7 +441,7 @@ public sealed class OnvifEventService
                       $"[{TopicOf(key)}]");
         if (unbroken is { } u)
             Log.Info($"{_camera}: the camera still reports {string.Join("+", labels)} after {u.TotalMinutes:0} min " +
-                     $"without a break ({TopicOf(key)}) — if nothing is there, its own detection is misfiring");
+                     $"without a break ({TopicOf(key)}), if nothing is there, its own detection is misfiring");
     }
 
     /// <summary>The topic a detection key starts with.</summary>
@@ -466,7 +466,7 @@ public sealed class OnvifEventService
         }
         if (gone.Count == 0) return;
         foreach (var (key, held) in gone)
-            Log.Info($"{_camera}: the camera no longer reports {string.Join("+", held.Labels)} ({TopicOf(key)}) — " +
+            Log.Info($"{_camera}: the camera no longer reports {string.Join("+", held.Labels)} ({TopicOf(key)}): " +
                      "its end was missed, so the detection ends now");
         Emit();
     }
@@ -500,7 +500,7 @@ public sealed class OnvifEventService
 
     /// <summary>Lapses the one-shot detections whose own last report is older than
     /// <see cref="OneShotHold"/>. Stateful ones are left alone however quiet the
-    /// camera is — ONVIF reports a state only when it CHANGES, so silence during a
+    /// camera is: ONVIF reports a state only when it CHANGES, so silence during a
     /// stateful detection means "still happening", not "over".</summary>
     internal void ExpireOneShots()
     {

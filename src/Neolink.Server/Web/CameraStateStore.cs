@@ -8,7 +8,7 @@ namespace Neolink.Web;
 /// <summary>
 /// Per-camera runtime state the user toggles and that must survive a restart
 /// (camera-state.json in the UI state directory), including wake-hint trust and whether
-/// the camera is SUSPENDED — Neolink holds no connection to it, so it can't be
+/// the camera is SUSPENDED: Neolink holds no connection to it, so it can't be
 /// viewed or recorded here, without editing the config or restarting. Nothing
 /// here is secret, so it is plain JSON like settings.json.
 /// </summary>
@@ -28,7 +28,7 @@ public sealed class CameraStateStore
     {
         public bool Suspended { get; set; }
         /// <summary>AI detection types the camera's per-type alarm probe last
-        /// answered for (person/vehicle/dog_cat/package dialect) — cached so the
+        /// answered for (person/vehicle/dog_cat/package dialect): cached so the
         /// settings dialog can filter its event-type chips IMMEDIATELY instead of
         /// showing everything and pruning when the live probe lands. Null = the
         /// camera was never probed. Refreshed on every successful probe; a
@@ -39,14 +39,14 @@ public sealed class CameraStateStore
 
         /// <summary>Detection zones Neolink keeps on the camera's behalf, keyed by
         /// detection type ("md"). Only cameras that cannot store a zone THEMSELVES
-        /// have entries here — a generic RTSP camera, or a Baichuan one whose
+        /// have entries here: a generic RTSP camera, or a Baichuan one whose
         /// firmware carries no grid. See <see cref="StoredZone"/>.</summary>
         public Dictionary<string, StoredZone>? Zones { get; set; }
 
         /// <summary>Absolute UTC time of the last received wake hint; never reset on restart.</summary>
         public DateTime? LastWakeHintUtc { get; set; }
 
-        /// <summary>The UID the camera reported at login — what finds it again when its IP changes.</summary>
+        /// <summary>The UID the camera reported at login: what finds it again when its IP changes.</summary>
         public string? Uid { get; set; }
         /// <summary>Where the camera last answered; config.json's address wins until it stops working.</summary>
         public string? LastHost { get; set; }
@@ -58,7 +58,7 @@ public sealed class CameraStateStore
     }
 
     /// <summary>One locally-kept detection zone: Table is Cols*Rows characters, row
-    /// by row from the top-left, '1' = watched and '0' = ignored — the same shape a
+    /// by row from the top-left, '1' = watched and '0' = ignored, the same shape a
     /// camera reports, so everything downstream reads it identically.</summary>
     public sealed class StoredZone
     {
@@ -110,7 +110,7 @@ public sealed class CameraStateStore
         }
         catch (Exception ex)
         {
-            // A corrupt state file must not take the server down — cameras just
+            // A corrupt state file must not take the server down: cameras just
             // start un-suspended (the safe default: they stream and record).
             Log.Warn($"camera-state.json unreadable ({ex.Message}); camera runtime state reset");
         }
@@ -164,7 +164,7 @@ public sealed class CameraStateStore
             if (!_state.TryGetValue(camera, out var s))
                 _state[camera] = s = new CameraState();
             s.Suspended = suspended;
-            if (s.IsDefault) // keep the file minimal — only non-default state persists
+            if (s.IsDefault) // keep the file minimal, only non-default state persists
                 _state.Remove(camera);
             Save();
         }
@@ -181,7 +181,7 @@ public sealed class CameraStateStore
     }
 
     /// <summary>Updates the cached signals from a live probe. A null argument means
-    /// "that signal wasn't probed this time — keep what's cached". Only an actual
+    /// "that signal wasn't probed this time: keep what's cached". Only an actual
     /// change touches the disk (panels re-probe on every open).</summary>
     public void SetDetectionCaps(string camera, IReadOnlyList<string>? aiTypes = null, bool? doorbell = null)
     {
@@ -256,7 +256,7 @@ public sealed class CameraStateStore
     /// so it is a pure function of three facts and is pinned by a test.
     ///
     /// <paramref name="cameraHoldsZone"/> is <see cref="ICameraControl.CameraHoldsZone"/>:
-    /// only a definite FALSE — the camera provably has no grid — moves a zone here.
+    /// only a definite FALSE, the camera provably has no grid, moves a zone here.
     /// Null ("not asked yet") and true both mean the camera owns it, so a read that
     /// merely failed can never migrate a Reolink camera's zone onto the server.
     /// Only the shared "md" grid is ever kept locally, and only on a camera that
@@ -265,8 +265,8 @@ public sealed class CameraStateStore
         type == "md" && cameraHoldsZone == false && zoneTypeCount == 1;
 
     /// <summary>The zone Neolink keeps for this camera and type, or null when it
-    /// keeps none. A stored grid whose shape no longer adds up is treated as absent
-    /// — a hand-edited file must not put a scrambled grid on screen.</summary>
+    /// keeps none. A stored grid whose shape no longer adds up is treated as absent:
+    /// a hand-edited file must not put a scrambled grid on screen.</summary>
     public StoredZone? Zone(string camera, string type)
     {
         lock (_gate)

@@ -5,7 +5,7 @@ namespace Neolink.Recording;
 
 /// <summary>
 /// Process-wide record of recent recording WRITE failures (a disk error mid-write:
-/// a failing/disconnected drive or a permissions problem — distinct from the
+/// a failing/disconnected drive or a permissions problem, distinct from the
 /// volume being full, which the free-space guard handles). Recorders stamp a
 /// camera on each fault; the alert monitor reads the recent set. Thread-safe and
 /// dependency-free so it can be shared without coupling the recorders to email.

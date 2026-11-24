@@ -41,7 +41,7 @@ public sealed class BcConnection : IBcConnection
     {
         _tcp = tcp;
         _stream = tcp.GetStream();
-        // The read loop parses a 20-byte header, then the body, per message —
+        // The read loop parses a 20-byte header, then the body, per message:
         // hundreds of messages/s on a streaming camera. Unbuffered, every one of
         // those small reads is its own recv() syscall (expensive under
         // virtualization); buffering turns them into few large recvs. Reads only:
@@ -84,7 +84,7 @@ public sealed class BcConnection : IBcConnection
             {
                 var msg = await BcCodec.ReadMessageAsync(_readStream, _context, ct).ConfigureAwait(false);
                 // Hot path: media arrives as one message per chunk, so guard the
-                // level BEFORE building the string — otherwise every video chunk
+                // level BEFORE building the string, otherwise every video chunk
                 // pays for an interpolation that Info-level runs then discard.
                 if (Log.Level <= LogLevel.Debug)
                     Log.Debug($"BC recv: msgId={msg.Meta.MsgId} class=0x{msg.Meta.Class:x4} msgNum={msg.Meta.MsgNum} channel={msg.Meta.ChannelId} stream={msg.Meta.StreamType} response=0x{msg.Meta.ResponseCode:x4}");
@@ -100,7 +100,7 @@ public sealed class BcConnection : IBcConnection
                 }
                 else
                 {
-                    // The first sighting of an unhandled push logs its payload —
+                    // The first sighting of an unhandled push logs its payload:
                     // that's how new firmware features (doorbell buttons, extra
                     // sensors) get mapped. Debug level on purpose: cameras
                     // broadcast a burst of routine status pushes (VideoInput,
@@ -109,7 +109,7 @@ public sealed class BcConnection : IBcConnection
                     bool first;
                     lock (_subGate) { first = _reportedUnhandled.Add(msg.Meta.MsgId); }
                     if (first && msg.Meta.MsgId == BcConstants.MsgIdMotion)
-                        Log.Info($"BC: alarm push (msgId=33) arrived with no motion watch subscribed — " +
+                        Log.Info($"BC: alarm push (msgId=33) arrived with no motion watch subscribed, " +
                                  $"detection dropped{XmlPreview(msg)}");
                     else if (first)
                         Log.Debug($"BC: unhandled push msgId={msg.Meta.MsgId}{XmlPreview(msg)}");

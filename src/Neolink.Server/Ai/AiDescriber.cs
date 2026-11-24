@@ -14,10 +14,10 @@ namespace Neolink.Ai;
 
 /// <summary>
 /// One event's frame set: while the event records, the camera's own JPEG
-/// snapshot command is sampled — the Baichuan snap serves the low-res
+/// snapshot command is sampled, the Baichuan snap serves the low-res
 /// sub-stream image, so no server-side video decoding is ever needed. The
 /// event's OPENING seconds get one paced shot per second, and those frames are
-/// kept at full density however long the event runs — the subject that
+/// kept at full density however long the event runs: the subject that
 /// triggered the event is in them. The rest of the budget SPREADS across the
 /// remainder: sampling continues at one frame per second, and whenever the
 /// budget fills, every other stored tail frame is dropped and the interval
@@ -42,14 +42,14 @@ public sealed class AiCapture
     internal string Camera { get; }
     internal List<(DateTime Utc, byte[] Jpeg)> Frames { get; } = new();
     internal Task Completion { get; }
-    /// <summary>The recorder's pre-roll at event start (compressed packet refs) —
+    /// <summary>The recorder's pre-roll at event start (compressed packet refs):
     /// decoded into leading frames at describe time, if ffmpeg is around.</summary>
     internal AiPrerollVideo? Preroll { get; }
     /// <summary>Stream-tap mode (ffmpeg + a flowing stream): instead of asking
     /// the camera for snapshots, the capture listens to this hub and keeps the
     /// event's own KEYFRAMES (compressed refs; an IDR decodes standalone) on the
-    /// same budget/thinning contract. Costs the camera nothing — the frames are
-    /// already flowing for the recording — and never touches the HTTP session
+    /// same budget/thinning contract. Costs the camera nothing, the frames are
+    /// already flowing for the recording, and never touches the HTTP session
     /// pool the snapshot fallback chain drains (max-session lockout, live
     /// 2026-07-26). Null = classic snapshot polling.</summary>
     internal IStreamHub? StreamHub { get; }
@@ -73,7 +73,7 @@ public sealed class AiCapture
     }
 
     /// <summary>Event over: stop sampling, keep what was captured. The loop may
-    /// already be done (frame budget spent, or the camera gave up) — the CTS is
+    /// already be done (frame budget spent, or the camera gave up): the CTS is
     /// only disposed via <see cref="DisposeWhenDone"/>, so Cancel stays legal.</summary>
     internal void Stop() => _stop.Cancel();
 
@@ -82,7 +82,7 @@ public sealed class AiCapture
     {
         _discarded = true;
         _stop.Cancel();
-        DisposeWhenDone(); // nobody will submit this capture — clean up here
+        DisposeWhenDone(); // nobody will submit this capture: clean up here
     }
 
     internal bool Discarded => _discarded;
@@ -99,7 +99,7 @@ public sealed class AiCapture
     }
 
     /// <summary>The event's first seconds get one PACED shot per second, and
-    /// frames landed in this window are exempt from decimation — the subject
+    /// frames landed in this window are exempt from decimation: the subject
     /// that triggered the event is often FAST (a car passing takes 2-3 seconds)
     /// and the pre-roll footage it appears in cannot be sampled after the fact,
     /// so the opening seconds are the best look at it and stay at full density
@@ -119,7 +119,7 @@ public sealed class AiCapture
         int locked = 0;   // opening-window frames, exempt from decimation
         var launched = DateTime.UtcNow;
         var interval = _startInterval; // doubles at every decimation
-        // The spread phase keeps at least two budget slots — decimation needs
+        // The spread phase keeps at least two budget slots: decimation needs
         // headroom to halve (the Math.Max(2, budget) floor, same reason).
         int maxLocked = Math.Clamp(_budget - 2, 0, OpeningSeconds);
         var lastKept = DateTime.MinValue;
@@ -138,7 +138,7 @@ public sealed class AiCapture
                     // Per-shot deadline so one hung command can't silently eat the
                     // whole window; SnapshotSmall is the size-limited variant (the
                     // HTTP API scales server-side, Baichuan answers sub-stream).
-                    // Opening slots stay tight — miss one second, try the next.
+                    // Opening slots stay tight: miss one second, try the next.
                     // Afterwards the deadline WIDENS with consecutive misses: the
                     // fallback chain behind SnapshotSmall allows ~20s per HTTP
                     // tier before the Baichuan snap, and a camera busy starting
@@ -152,7 +152,7 @@ public sealed class AiCapture
                     // Stamped at ARRIVAL, not at request start: the patient retry
                     // deadline stretches to 45s, and a frame the camera finally
                     // answered a minute in must not be labeled with the offset of
-                    // the second the command was issued — the model is told these
+                    // the second the command was issued, the model is told these
                     // offsets as truth, so they have to be when the frame is FROM.
                     var taken = DateTime.UtcNow;
                     if (jpeg is { Length: > 100 } && jpeg[0] == 0xFF && jpeg[1] == 0xD8)
@@ -199,12 +199,12 @@ public sealed class AiCapture
                     Log.Debug($"{Camera}: AI frame capture miss: {_lastMiss}");
                 }
                 // Pacing. The opening window ticks at one shot per second, hit
-                // or miss. After it, successes keep the BASE cadence — the
+                // or miss. After it, successes keep the BASE cadence, the
                 // doubled interval only selects which polls join Frames, since
-                // the closing buffer can only be dense if polling never slowed
-                // — and misses BACK OFF instead of giving up: events run
+                // the closing buffer can only be dense if polling never slowed,
+                // and misses BACK OFF instead of giving up: events run
                 // minutes, and a camera too busy to answer while its streams
-                // spin up usually answers fine moments later — walking away
+                // spin up usually answers fine moments later, walking away
                 // after three early strikes cost every frame of a 4-minute
                 // event (live 2026-07-25). A camera with no snapshot support at
                 // all costs one failed command per ~30s.
@@ -236,14 +236,14 @@ public sealed class AiCapture
     /// <summary>The event's LAST seconds get the same protection as its first:
     /// every frame of the closing window rides a rolling side buffer regardless
     /// of pacing, and merges into the kept set when the event ends. The
-    /// departure that closes an event — the car pulling away, the visitor
-    /// walking off — happens in exactly the stretch the doubled interval samples
+    /// departure that closes an event, the car pulling away, the visitor
+    /// walking off, happens in exactly the stretch the doubled interval samples
     /// most thinly, and it cannot be re-sampled after the fact (live complaint
     /// 2026-07-27: "the AI doesn't see the driving-away part").</summary>
     private const int ClosingSeconds = 10;
 
     /// <summary>An event closes only after the recorder's post-quiet seconds, so
-    /// the last ACTIVITY sits that far before the recording's end — the window
+    /// the last ACTIVITY sits that far before the recording's end: the window
     /// extends by <paramref name="postSeconds"/> to reach it.</summary>
     internal static TimeSpan ClosingWindowFor(int postSeconds) =>
         TimeSpan.FromSeconds(ClosingSeconds + Math.Clamp(postSeconds, 0, 120));
@@ -262,7 +262,7 @@ public sealed class AiCapture
     }
 
     /// <summary>Stream-tap mode: listen to the hub and keep keyframes on the
-    /// same opening/budget/thin-and-double contract as the snapshot loop —
+    /// same opening/budget/thin-and-double contract as the snapshot loop,
     /// keyframes arrive at the camera's GOP cadence (typically 2-4s), so the
     /// pacing interval acts as a floor, not a metronome. Packets are shared
     /// byte-array refs; they die with the capture.</summary>
@@ -325,7 +325,7 @@ public sealed class AiCapture
         finally
         {
             // Event over: fold the closing window in. Runs before this task
-            // completes, and the worker awaits Completion before reading — the
+            // completes, and the worker awaits Completion before reading: the
             // merged set is what ProcessAsync sees.
             lock (StreamPackets)
                 MergeClosing(StreamPackets, closing, locked, _budget);
@@ -335,7 +335,7 @@ public sealed class AiCapture
 
     /// <summary>Budget full: drop every other frame BEYOND the protected opening
     /// prefix (<paramref name="locked"/> frames), starting from the SECOND-newest
-    /// so the newest capture always survives — the freshest look at the event
+    /// so the newest capture always survives: the freshest look at the event
     /// must never be the one a thinning pass deletes. The survivors still span
     /// the whole tail so far; the opening keeps its full density.</summary>
     internal static void ThinTail(List<(DateTime Utc, byte[] Jpeg)> frames, int locked)
@@ -346,7 +346,7 @@ public sealed class AiCapture
 
     /// <summary>Folds the closing-window buffer into the kept set: every buffered
     /// frame newer than the newest kept one appends, then the budget is enforced
-    /// by thinning the MIDDLE — an event is explained by its opening and its
+    /// by thinning the MIDDLE, an event is explained by its opening and its
     /// ending, so those two windows keep full density and the long middle pays.</summary>
     internal static void MergeClosing(List<(DateTime Utc, byte[] Data)> kept,
         IReadOnlyList<(DateTime Utc, byte[] Data)> closing, int locked, int budget)
@@ -373,7 +373,7 @@ public sealed class AiCapture
     }
 
     /// <summary>Pause before the next attempt after N consecutive misses:
-    /// 4, 8, 16, then 30s flat — patient enough to ride out a busy event start,
+    /// 4, 8, 16, then 30s flat, patient enough to ride out a busy event start,
     /// cheap enough to run for the life of a long event.</summary>
     internal static TimeSpan RetryPause(int failures) =>
         TimeSpan.FromSeconds(Math.Min(30, 1 << Math.Min(failures + 1, 5)));
@@ -381,9 +381,9 @@ public sealed class AiCapture
     private int _attempts;
     private volatile string? _lastMiss;
 
-    /// <summary>Snapshot attempts made (successful or not) — for the skip log.</summary>
+    /// <summary>Snapshot attempts made (successful or not), for the skip log.</summary>
     internal int Attempts => _attempts;
-    /// <summary>What the last failed attempt said — the skip log's diagnosis.</summary>
+    /// <summary>What the last failed attempt said: the skip log's diagnosis.</summary>
     internal string? LastMiss => _lastMiss;
 
 }
@@ -394,7 +394,7 @@ public sealed class AiCapture
 /// description on the event. Deliberately fire-and-forget from the recorder's
 /// point of view: jobs queue on a small bounded channel and one background
 /// worker drains it, so a slow or dead LLM can never back-pressure recording,
-/// streaming or anything else — when the queue is full, new jobs are dropped
+/// streaming or anything else, when the queue is full, new jobs are dropped
 /// (and say so in the log).
 /// </summary>
 public sealed class AiDescriber
@@ -430,7 +430,7 @@ public sealed class AiDescriber
     private readonly Func<string, bool> _cameraOptIn;
     private readonly Func<string, string?>? _cameraContext;
     // Events queued or in flight, so the UI can say "describing…" instead of
-    // showing nothing while the model works. Ids only — jobs hold the frames.
+    // showing nothing while the model works. Ids only: jobs hold the frames.
     private readonly ConcurrentDictionary<string, byte> _pending = new();
 
     public AiDescriber(AiStore store, EventStore events, Func<string, bool> cameraOptIn,
@@ -447,7 +447,7 @@ public sealed class AiDescriber
     public bool WantsCapture(string camera) => _store.Enabled && _cameraOptIn(camera);
 
     /// <summary>Fires after a description (and threat level) lands on an event and
-    /// is persisted — the MQTT bridge mirrors it into the camera's sensors.</summary>
+    /// is persisted: the MQTT bridge mirrors it into the camera's sensors.</summary>
     public event Action<EventRecord>? Described;
 
     /// <summary>Starts the frame capture for a starting event; null when the
@@ -472,7 +472,7 @@ public sealed class AiDescriber
     }
 
     /// <summary>Event closed and saved: stop sampling and queue the description
-    /// job. Never blocks — a full queue drops the job with a log line.</summary>
+    /// job. Never blocks: a full queue drops the job with a log line.</summary>
     public void Submit(AiCapture capture, EventRecord rec)
     {
         capture.Stop();
@@ -480,14 +480,14 @@ public sealed class AiDescriber
         _pending[rec.Id] = 1;
         if (!_jobs.Writer.TryWrite(new Job(capture, rec)))
         {
-            Log.Warn($"{capture.Camera}: AI describe queue is full — event {rec.Id} skipped " +
+            Log.Warn($"{capture.Camera}: AI describe queue is full: event {rec.Id} skipped " +
                      "(the model is not keeping up with the event rate)");
             _pending.TryRemove(rec.Id, out _);
             capture.DisposeWhenDone();
         }
     }
 
-    /// <summary>True while the event's description is queued or being generated —
+    /// <summary>True while the event's description is queued or being generated:
     /// the web UI shows "describing…" instead of silently missing text.</summary>
     public bool IsPending(string eventId) => _pending.ContainsKey(eventId);
 
@@ -532,7 +532,7 @@ public sealed class AiDescriber
         lock (job.Capture.Frames) frames = job.Capture.Frames.ToList();
         if (cfg.ActiveUrl() is not { } url)
         {
-            Log.Warn($"{job.Capture.Camera}: AI describe skipped — the " +
+            Log.Warn($"{job.Capture.Camera}: AI describe skipped: the " +
                      $"{(cfg.UsesOllama ? "Ollama" : cfg.UsesAnthropic ? "Anthropic-style" : "OpenAI-style")} " +
                      $"endpoint '{(cfg.UsesOllama ? cfg.OllamaEndpoint : cfg.UsesAnthropic ? cfg.AnthropicEndpoint : cfg.Endpoint)}' " +
                      "is not a usable http(s) URL");
@@ -541,7 +541,7 @@ public sealed class AiDescriber
 
         var rec = job.Record;
         // Stream-tap mode: the frames ARE the event's own keyframes, decoded
-        // here in one ffmpeg pass — no snapshot command was ever sent. A failed
+        // here in one ffmpeg pass, no snapshot command was ever sent. A failed
         // decode falls through to whatever the snapshot list holds (usually
         // nothing in this mode) and then to the pre-roll below.
         bool streamMode = false;
@@ -559,12 +559,12 @@ public sealed class AiDescriber
             else
             {
                 Log.Warn($"{rec.Camera}: stream-tap decode produced no frames from " +
-                         $"{taps.Count} keyframe(s) — the event falls back to snapshots/pre-roll");
+                         $"{taps.Count} keyframe(s): the event falls back to snapshots/pre-roll");
             }
         }
         // The pre-roll seconds, decoded here on the worker (never on the event
         // path): the trigger moment itself, which the live burst structurally
-        // missed. They PREPEND — oldest first still holds, offsets go negative.
+        // missed. They PREPEND: oldest first still holds, offsets go negative.
         // A short event whose burst came up empty can still be described by
         // these alone.
         if (job.Capture.Preroll is { } preroll)
@@ -579,7 +579,7 @@ public sealed class AiDescriber
         }
         if (frames.Count == 0)
         {
-            Log.Warn($"{job.Capture.Camera}: AI describe skipped — no frames captured (" +
+            Log.Warn($"{job.Capture.Camera}: AI describe skipped, no frames captured (" +
                      (job.Capture.StreamHub != null
                          ? "the stream tap caught no decodable keyframes"
                          : job.Capture.Attempts == 0
@@ -589,7 +589,7 @@ public sealed class AiDescriber
             return;
         }
         // Some cameras answer the "small" snapshot command with the FULL
-        // resolution picture (~5 MB a frame) — a long event's payload then
+        // resolution picture (~5 MB a frame): a long event's payload then
         // outgrows what chat endpoints accept (a 234 MB body broke the pipe,
         // live 2026-07-26). With ffmpeg around, oversized frames shrink to
         // model size here; without it, the byte-capped parts below keep every
@@ -604,12 +604,12 @@ public sealed class AiDescriber
                 long after = frames.Sum(f => (long)f.Jpeg.Length);
                 if (after < before)
                     Log.Info($"{rec.Camera}: downscaled {oversized} full-resolution frame(s) " +
-                             $"for the model ({before / 1024 / 1024} MB → {after / 1024 / 1024} MB — " +
+                             $"for the model ({before / 1024 / 1024} MB → {after / 1024 / 1024} MB, " +
                              "this camera's snapshot command ignores the size request)");
             }
             else if (before > MaxBytesPerRequest)
             {
-                Log.Info($"{rec.Camera}: {frames.Count} frame(s) total {before / 1024 / 1024} MB — " +
+                Log.Info($"{rec.Camera}: {frames.Count} frame(s) total {before / 1024 / 1024} MB: " +
                          "this camera's snapshot command serves full-resolution images, so the " +
                          "event goes to the model in byte-capped parts; installing ffmpeg (or " +
                          "setting NEOLINK_FFMPEG) would downscale the frames to a fraction of " +
@@ -619,7 +619,7 @@ public sealed class AiDescriber
 
         var modelName = cfg.UsesOllama ? cfg.OllamaModel : cfg.UsesAnthropic ? cfg.AnthropicModel : cfg.Model;
         // Coverage up front: "12 frames over 14s of the 15s event" answers the
-        // first question a puzzling description raises — what did the model see?
+        // first question a puzzling description raises: what did the model see?
         long bytes = frames.Sum(f => (long)f.Jpeg.Length);
         int coveredSecs = (int)(frames[^1].Utc - frames[0].Utc).TotalSeconds;
         int eventSecs = Math.Max(1, (int)(rec.EndUtc - rec.StartUtc).TotalSeconds);
@@ -631,15 +631,15 @@ public sealed class AiDescriber
         if (cfg.KeepFrames)
             await KeepFramesAsync(rec, frames, ct).ConfigureAwait(false); // before the call: reviewable even if the model fails
 
-        // Very long events (fixed-rate mode especially) — and full-resolution
-        // frames a missing ffmpeg couldn't shrink — can outgrow a single
+        // Very long events (fixed-rate mode especially), and full-resolution
+        // frames a missing ffmpeg couldn't shrink, can outgrow a single
         // request: parts are capped by FRAME COUNT and by PAYLOAD BYTES, sent
         // in order, each part told what came before it, and the answers append
         // to the same event. The final threat level is the most severe any part
         // reported.
         var chunks = ChunkFrames(frames, MaxFramesPerRequest, MaxBytesPerRequest);
         if (chunks.Count > 1)
-            Log.Info($"{rec.Camera}: long event — describing in {chunks.Count} parts " +
+            Log.Info($"{rec.Camera}: long event: describing in {chunks.Count} parts " +
                      $"of up to {MaxFramesPerRequest} frames / {MaxBytesPerRequest / 1024 / 1024} MB each");
 
         var sw = Stopwatch.StartNew();
@@ -654,14 +654,14 @@ public sealed class AiDescriber
         for (int c = 0; c < chunks.Count; c++)
         {
             var chunk = chunks[c];
-            // The carry-forward is ALL earlier parts, not just the last one — a
+            // The carry-forward is ALL earlier parts, not just the last one: a
             // subject from part 1 must not resurface in part 3 as a stranger.
             var userText = BuildUserText(rec, chunk, c + 1, chunks.Count,
                 prevSummary: parts.Count > 0 ? string.Join(" ", parts) : null,
                 sceneNotes: sceneNotes);
-            // Every image travels with its own inline label ("Frame 3 of 12 —
+            // Every image travels with its own inline label ("Frame 3 of 12:
             // +4s…") so the timestamp sits ADJACENT to its picture on backends
-            // that allow interleaving — a single offsets list up front provably
+            // that allow interleaving: a single offsets list up front provably
             // smears: the model loses which image is which and starts narrating.
             var jpegs = chunk.Select((f, i) => (f.Jpeg, (string?)FrameLabel(i, chunk.Count,
                 (int)(f.Utc - rec.StartUtc).TotalSeconds))).ToList();
@@ -675,12 +675,12 @@ public sealed class AiDescriber
                 }
                 catch (HttpRequestException ex)
                 {
-                    // Connection-level failure only (refused, reset, DNS) — the
+                    // Connection-level failure only (refused, reset, DNS): the
                     // server is probably restarting or swapping models; one delayed
                     // retry rescues the description. Slow answers (timeouts) are NOT
                     // retried: doubling the wait on a struggling model would only
                     // dig the queue deeper.
-                    Log.Info($"{rec.Camera}: AI endpoint unreachable ({Log.Flatten(ex)}) — retrying once in 10s");
+                    Log.Info($"{rec.Camera}: AI endpoint unreachable ({Log.Flatten(ex)}): retrying once in 10s");
                     await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
                     reply = await CompleteAsync(cfg, _store.ActiveApiKey(cfg), userText, jpegs,
                         classify: true, ct).ConfigureAwait(false);
@@ -689,8 +689,8 @@ public sealed class AiDescriber
             catch (Exception) when (parts.Count > 0 && !ct.IsCancellationRequested)
             {
                 // A later part failing must not throw away the parts that already
-                // answered — save what the model DID say and note the cut.
-                Log.Warn($"{rec.Camera}: part {c + 1} of {chunks.Count} failed — saving the " +
+                // answered: save what the model DID say and note the cut.
+                Log.Warn($"{rec.Camera}: part {c + 1} of {chunks.Count} failed: saving the " +
                          $"description of the first {c} part(s)");
                 break;
             }
@@ -702,7 +702,7 @@ public sealed class AiDescriber
             if (!string.IsNullOrWhiteSpace(chunkText)) parts.Add(chunkText!);
             level = MoreSevere(level, chunkLevel);
             // A long event is described in parts; each part inventories what IT saw,
-            // and the event carries the union — the dog in minute one belongs to the
+            // and the event carries the union: the dog in minute one belongs to the
             // event as much as the van in minute four.
             foreach (var o in chunkObjects)
                 if (!objects.Contains(o) && objects.Count < 12) objects.Add(o);
@@ -723,10 +723,10 @@ public sealed class AiDescriber
         }
 
         // The event may have been deleted (retention, user) while the model
-        // thought — Save() on an unknown id is a no-op, but don't log success.
+        // thought: Save() on an unknown id is a no-op, but don't log success.
         if (_events.Find(rec.Id) == null)
         {
-            Log.Info($"{rec.Camera}: AI description arrived after the event was deleted — discarded");
+            Log.Info($"{rec.Camera}: AI description arrived after the event was deleted: discarded");
             return;
         }
         rec.AiDescription = text;
@@ -744,7 +744,7 @@ public sealed class AiDescriber
     /// <summary>Stores the exact JPEGs going to the model in the event's folder
     /// (ai-frames/, one file per frame with its time offset in the name) so a
     /// puzzling description can be checked against what the model saw. PLAIN
-    /// files on purpose — they exist to be opened, so the footage vault is
+    /// files on purpose: they exist to be opened, so the footage vault is
     /// deliberately not used (the clip beside them stays encrypted when the
     /// vault is on). They are deleted together with the event.</summary>
     private async Task KeepFramesAsync(EventRecord rec,
@@ -781,10 +781,10 @@ public sealed class AiDescriber
     {
         if (string.IsNullOrWhiteSpace(text)) return (null, null);
         // Accepts the bare word and the "Threat level: X" spelling some models
-        // insist on — but ONLY as a prefix, so "a man in a RED jacket" in a
+        // insist on, but ONLY as a prefix, so "a man in a RED jacket" in a
         // level-less answer can never be misread as a verdict.
         var m = Regex.Match(text,
-            @"^[\s*#>_`\-]*(?:threat\s*level\s*[:=\-]\s*)?[*_`]*(GREEN|YELLOW|RED)\b[.:,;!\s*_`\-—]*",
+            @"^[\s*#>_`\-]*(?:threat\s*level\s*[:=\-]\s*)?[*_`]*(GREEN|YELLOW|RED)\b[.:,;!\s*_`\-\u2014]*",
             RegexOptions.IgnoreCase);
         if (!m.Success) return (null, text.Trim());
         var rest = text[m.Length..].Trim();
@@ -805,7 +805,7 @@ public sealed class AiDescriber
     /// models actually send rather than what they were told to: the label may be
     /// bold, bulleted, "Objects detected -", or missing entirely, and the list may be
     /// commas, semicolons or bullet points. Only ever peels a line the model marked
-    /// as the inventory — a description that happens to open with a noun is left
+    /// as the inventory: a description that happens to open with a noun is left
     /// whole, because a missing list costs a search term while a stolen first
     /// sentence costs the description itself.
     /// </summary>
@@ -814,7 +814,7 @@ public sealed class AiDescriber
         var found = new List<string>();
         if (string.IsNullOrWhiteSpace(text)) return (found, null);
         var m = Regex.Match(text,
-            @"^[\s*#>_`\-]*objects?(?:\s+(?:detected|seen|visible|present|in\s+\w+))?[*_`]*\s*[:\-–—=]\s*(?<list>[^\r\n]*)\r?\n?",
+            @"^[\s*#>_`\-]*objects?(?:\s+(?:detected|seen|visible|present|in\s+\w+))?[*_`]*\s*[:\-–\u2014=]\s*(?<list>[^\r\n]*)\r?\n?",
             RegexOptions.IgnoreCase | RegexOptions.Multiline);
         if (!m.Success) return (found, text.Trim());
         foreach (var raw in m.Groups["list"].Value.Split(',', ';', '|', '·', '•'))
@@ -834,29 +834,29 @@ public sealed class AiDescriber
     }
 
     /// <summary>The inline label sent immediately before each image, binding the
-    /// picture to its place and time — "Frame 3 of 12 — +4s into the event:".
+    /// picture to its place and time: "Frame 3 of 12: +4s into the event:".
     /// Negative offsets are pre-roll (decoded from before the trigger) and say so
-    /// in words — a bare "-3s" invites the model to misread it as a typo.</summary>
+    /// in words: a bare "-3s" invites the model to misread it as a typo.</summary>
     internal static string FrameLabel(int index, int count, int offsetSeconds) =>
         offsetSeconds < 0
-            ? $"Frame {index + 1} of {count} — {-offsetSeconds}s BEFORE the trigger (pre-roll):"
-            : $"Frame {index + 1} of {count} — +{offsetSeconds}s into the event:";
+            ? $"Frame {index + 1} of {count}: {-offsetSeconds}s BEFORE the trigger (pre-roll):"
+            : $"Frame {index + 1} of {count}: +{offsetSeconds}s into the event:";
 
     /// <summary>No more than this many frames ride one model request. A very long
     /// event (fixed-rate sampling on a half-hour clip) is described in ordered
-    /// parts instead of one context-blowing payload — each part is told what the
+    /// parts instead of one context-blowing payload: each part is told what the
     /// previous part saw, and the answers append to the same event.</summary>
     internal const int MaxFramesPerRequest = 100;
 
     /// <summary>No part may carry more than this much raw JPEG either (base64
     /// adds a third on top). Chat endpoints slam the connection shut on huge
-    /// bodies — "Broken pipe" mid-upload, live 2026-07-26 at 210+ MB, while
+    /// bodies: "Broken pipe" mid-upload, live 2026-07-26 at 210+ MB, while
     /// 28 MB sailed through; 24 MB stays under the proven ceiling.</summary>
     internal const long MaxBytesPerRequest = 24_000_000;
 
     /// <summary>The frame list in ordered slices, each at most
     /// <paramref name="maxFrames"/> frames AND <paramref name="maxBytes"/> of
-    /// JPEG. A single frame over the byte budget still travels — alone.</summary>
+    /// JPEG. A single frame over the byte budget still travels: alone.</summary>
     internal static List<List<(DateTime Utc, byte[] Jpeg)>> ChunkFrames(
         IReadOnlyList<(DateTime Utc, byte[] Jpeg)> frames, int maxFrames, long maxBytes)
     {
@@ -900,18 +900,18 @@ public sealed class AiDescriber
         var offsets = string.Join(", ",
             frames.Select(f => (int)(f.Utc - rec.StartUtc).TotalSeconds)
                 .Select(s => s < 0 ? $"-{-s}s" : $"+{s}s"));
-        // The trigger labels as an ASSIGNMENT, not metadata — paired with the
+        // The trigger labels as an ASSIGNMENT, not metadata: paired with the
         // default prompt's "find it first" guide, both halves point at each
         // other. The camera's detector is the one witness that saw the event
         // at full resolution.
         var text = $"Camera \"{rec.Camera}\" recorded this event; its own detector " +
-                   $"triggered on: {string.Join(", ", rec.Labels)} — these are the " +
+                   $"triggered on: {string.Join(", ", rec.Labels)}: these are the " +
                    $"subjects to look for. " +
                    $"Event started {local:yyyy-MM-dd HH:mm:ss} (local) and lasted " +
                    $"{Math.Max(1, (int)(rec.EndUtc - rec.StartUtc).TotalSeconds)}s. ";
         if (!string.IsNullOrWhiteSpace(sceneNotes))
         {
-            // The owner's own words about what this camera watches — the model's
+            // The owner's own words about what this camera watches: the model's
             // only source of "what is normal HERE". Framed as context, so notes
             // can calibrate the threat call but never overwrite what frames show.
             text += $"The owner's notes about this camera's scene (context for judging what " +
@@ -919,9 +919,9 @@ public sealed class AiDescriber
         }
         if (frames.Count > 0 && frames[0].Utc < rec.StartUtc)
         {
-            // Only when pre-roll frames actually made it in — an unexplained
+            // Only when pre-roll frames actually made it in: an unexplained
             // negative offset would otherwise read like an error to the model.
-            text += "Frames at negative offsets were decoded from the recorder's pre-roll — " +
+            text += "Frames at negative offsets were decoded from the recorder's pre-roll: " +
                     "the moments just BEFORE the trigger, usually showing what caused it. ";
         }
         if (parts > 1)
@@ -945,18 +945,18 @@ public sealed class AiDescriber
         if (part == parts && frames.Count > 0)
         {
             // The tail can be thin (snapshot pacing backs off as an event runs):
-            // when the last frame sits well short of the event's end, say so —
+            // when the last frame sits well short of the event's end, say so,
             // paired with the grounding rules, the model then reports the gap
             // instead of writing an ending those frames never showed.
             int endGap = (int)(rec.EndUtc - frames[^1].Utc).TotalSeconds;
             if (endGap > 10)
-                text += $" The event ran another {endGap}s after the last frame below — " +
+                text += $" The event ran another {endGap}s after the last frame below: " +
                         "that final stretch is not pictured.";
         }
         return text;
     }
 
-    /// <summary>One text-only completion with a caller-supplied system prompt —
+    /// <summary>One text-only completion with a caller-supplied system prompt:
     /// the event search's query translator. Null when AI is disabled or on failure.</summary>
     public static async Task<string?> CompleteTextAsync(AiStore store, string system, string user,
         CancellationToken ct)
@@ -978,7 +978,7 @@ public sealed class AiDescriber
     }
 
     /// <summary>One chat request against the active backend (OpenAI-style or
-    /// Ollama native). Returns the cleaned answer (level line still attached — the
+    /// Ollama native). Returns the cleaned answer (level line still attached, the
     /// caller splits it), the model the server says it used, and a token count.</summary>
     private static async Task<(string? Text, string? Model, long? Tokens)> CompleteAsync(
         AiSettings cfg, string apiKey, string userText, IReadOnlyList<(byte[] Jpeg, string? Label)> frames,
@@ -986,8 +986,8 @@ public sealed class AiDescriber
     {
         // NoThink rides the prompt ("/no_think", the Qwen-family convention, which
         // Ollama templates honor too); <think> blocks are stripped either way.
-        // Claude models don't use the marker — it would just be prompt noise.
-        // Grounding rules ride event requests only (classify) — the Test button's
+        // Claude models don't use the marker: it would just be prompt noise.
+        // Grounding rules ride event requests only (classify): the Test button's
         // probe stays a bare connectivity check.
         var system = (systemOverride
                      ?? cfg.EffectivePrompt
@@ -1000,11 +1000,11 @@ public sealed class AiDescriber
         {
             if (string.IsNullOrWhiteSpace(cfg.AnthropicModel))
                 throw new InvalidOperationException(
-                    "the Anthropic backend needs a vision-capable model name — set one in Settings → AI");
+                    "the Anthropic backend needs a vision-capable model name: set one in Settings → AI");
             // Messages API: system is a top-level field, images are base64 source
             // blocks, and max_tokens is REQUIRED. Each image is PRECEDED by its
             // own label block, so its timestamp cannot detach from the picture
-            // (a single offsets list up front provably smears — see FrameLabel).
+            // (a single offsets list up front provably smears, see FrameLabel).
             var blocks = new List<object> { new { type = "text", text = userText } };
             foreach (var (jpeg, label) in frames)
             {
@@ -1016,7 +1016,7 @@ public sealed class AiDescriber
                     {
                         type = "base64",
                         media_type = "image/jpeg",
-                        // byte[] serializes as base64 — same JSON, but written
+                        // byte[] serializes as base64: same JSON, but written
                         // straight into the UTF-8 buffer instead of via a
                         // per-frame base64 UTF-16 string 8/3 the JPEG's size.
                         data = jpeg,
@@ -1037,9 +1037,9 @@ public sealed class AiDescriber
             if (string.IsNullOrWhiteSpace(cfg.OllamaModel))
                 throw new InvalidOperationException(
                     "Ollama needs a vision-capable model name (it has no \"currently loaded\" " +
-                    "default) — set one in Settings → AI");
-            // Native /api/chat: images are a flat base64 array on the user message
-            // — no interleaving possible, so the per-frame labels join the text as
+                    "default): set one in Settings → AI");
+            // Native /api/chat: images are a flat base64 array on the user message,
+            // no interleaving possible, so the per-frame labels join the text as
             // a numbered list instead (in the same order as the images array).
             var labels = frames.Where(f => f.Label != null).Select(f => f.Label!).ToList();
             var ollama = new Dictionary<string, object>
@@ -1084,7 +1084,7 @@ public sealed class AiDescriber
                     },
                 });
             }
-            // Only fields every OpenAI-compatible server understands — vendor
+            // Only fields every OpenAI-compatible server understands: vendor
             // extensions get 400s from strict ones. reasoning_effort is opt-in for that reason.
             var oai = new Dictionary<string, object>
             {
@@ -1179,14 +1179,14 @@ public sealed class AiDescriber
 
     private static (string? Text, string? Model, long? Tokens) ParseOpenAi(JsonDocument doc, string body)
     {
-        // A 200 without choices is not a completion at all — LM Studio answers a
+        // A 200 without choices is not a completion at all: LM Studio answers a
         // wrong path with exactly that ("Unexpected endpoint ... Returning 200
         // anyway"). Name the real problem instead of "empty completion".
         if (!doc.RootElement.TryGetProperty("choices", out var choices)
             || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
             throw new InvalidOperationException(
                 "the server answered 200, but not with a chat completion (no choices). " +
-                "The endpoint is probably not the OpenAI-style API base — it usually ends " +
+                "The endpoint is probably not the OpenAI-style API base: it usually ends " +
                 $"in /v1. Server said: {Excerpt(body)}");
         string? text = null;
         if (choices[0].TryGetProperty("message", out var msg)
@@ -1238,7 +1238,7 @@ public sealed class AiDescriber
 
     /// <summary>A tiny embedded JPEG (64×48, an amber circle on dark blue, ~0.9 KB)
     /// attached to the connectivity test so it exercises the same vision path real
-    /// events use — a text-only model fails at the Test button, not on the first
+    /// events use: a text-only model fails at the Test button, not on the first
     /// event. Trivial token cost even against a hosted API.</summary>
     internal static byte[] TestJpeg() => Convert.FromBase64String(
         "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDABIMDhAOCxIQDxAUExIVGy0dGxkZGzcoKiEtQjpFREA6Pz5IUWhYSE1iTj4/WntcYmtvdHZ0RleAiX9xiGhydHD/" +
@@ -1254,7 +1254,7 @@ public sealed class AiDescriber
         "SUtGFFFFbGZ//9k=");
 
     /// <summary>Connectivity test for the settings UI: one tiny completion WITH a
-    /// test image, against (possibly unsaved) settings — so a text-only model fails
+    /// test image, against (possibly unsaved) settings, so a text-only model fails
     /// here instead of on the first real event. When the vision request fails for
     /// any reason other than a timeout, a text-only probe tells apart "server
     /// unreachable" from "model rejects images". Null = OK; otherwise the error.</summary>
@@ -1265,7 +1265,7 @@ public sealed class AiDescriber
             return (cfg.UsesOllama
                 ? "The Ollama endpoint is not a usable http(s) URL. Expected something like http://127.0.0.1:11434"
                 : cfg.UsesAnthropic
-                    ? "The Anthropic-style endpoint is not a usable http(s) URL — blank means https://api.anthropic.com"
+                    ? "The Anthropic-style endpoint is not a usable http(s) URL: blank means https://api.anthropic.com"
                     : "The endpoint is not a usable http(s) URL. Expected something like http://127.0.0.1:1234/v1", null);
         const string probe = "Connectivity test. Reply with the single word: READY";
         try
@@ -1280,7 +1280,7 @@ public sealed class AiDescriber
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            // The request carried an image; find out whether THAT was the problem —
+            // The request carried an image; find out whether THAT was the problem,
             // except after a timeout or when the server was never reached, where a
             // second wait would help nobody.
             if (ex is not TimeoutException && !Unreachable(ex))
@@ -1290,14 +1290,14 @@ public sealed class AiDescriber
                     _ = await CompleteAsync(cfg, apiKey, probe, Array.Empty<(byte[], string?)>(),
                         classify: false, ct).ConfigureAwait(false);
                     return ("The server is reachable and answers a text-only request, but " +
-                            "rejected it once an image was attached — the model is probably " +
+                            "rejected it once an image was attached: the model is probably " +
                             "not vision-capable. Event descriptions need a model that accepts " +
                             $"images. The server said: {Log.Flatten(ex)}", null);
                 }
                 catch { /* text fails too: the original error names the real problem */ }
             }
             return (Log.Flatten(ex) + (UntrustedCert(ex)
-                ? " — the server does not trust this certificate. Turn on 'Accept self-signed " +
+                ? ": the server does not trust this certificate. Turn on 'Accept self-signed " +
                   "certificates', or add your CA to the server's trusted certificates."
                 : ""), null);
         }

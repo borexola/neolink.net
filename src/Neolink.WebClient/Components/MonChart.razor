@@ -13,7 +13,7 @@
         {
             <span class="mon-leg">
                 <i style="background:@s.Color"></i>@s.Label
-                <b>@(Current(s) is { } v ? Fmt(v) + Unit : "—")</b>
+                <b>@(Current(s) is { } v ? Fmt(v) + Unit : "-")</b>
             </span>
         }
         <span class="mon-chart-max">@Fmt(MaxY())@Unit</span>
@@ -87,7 +87,7 @@
     /// <summary>
     /// Payload for the JS hover tooltip (neolink.monHoverInit): the x domain plus
     /// visible points per series, strided to ≤450 points so the 2s re-render diff
-    /// stays light — the mouse can't target finer than that anyway.
+    /// stays light, the mouse can't target finer than that anyway.
     /// </summary>
     private string HoverJson()
     {
@@ -143,7 +143,7 @@
             var pts = Visible(s);
             if (pts.Count < 2) continue;
             // Wide windows can hold thousands of points; the chart is 600 units
-            // across, so stride to ~2 per unit — invisible, and it keeps the SVG
+            // across, so stride to ~2 per unit: invisible, and it keeps the SVG
             // (re-rendered every poll over the circuit) small.
             int stride = Math.Max(1, pts.Count / 1200);
             var line = new StringBuilder();
@@ -155,7 +155,7 @@
             }
             if (first)
             {
-                // Only the primary series gets the area fill — stacked fills turn to mud.
+                // Only the primary series gets the area fill: stacked fills turn to mud.
                 var area = $"{line}L{F(X(pts[^1].T))} {F(H)}L{F(X(pts[0].T))} {F(H)}Z";
                 sb.Append($"<path d=\"{area}\" fill=\"{s.Color}\" opacity=\"0.16\"/>");
                 first = false;

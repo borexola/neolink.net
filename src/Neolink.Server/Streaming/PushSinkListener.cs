@@ -11,17 +11,17 @@ namespace Neolink.Streaming;
 /// push service. The user adds a DNS override on their router (or Pi-hole /
 /// AdGuard) so pushx.reolink.com resolves to the Neolink host; on a PIR event the
 /// camera "delivers" its phone push here, and the mere TCP connection is an
-/// instant, event-grade wake signal — no firewall logging or syslog required, so
+/// instant, event-grade wake signal, no firewall logging or syslog required, so
 /// it works on routers (OpenWRT and friends) the filterlog path can't cover.
 ///
 /// The connection is accepted and closed immediately: nothing here speaks TLS or
-/// the push protocol — the attempt IS the signal, exactly like the firewall-log
+/// the push protocol, the attempt IS the signal, exactly like the firewall-log
 /// path treats a BLOCK rule. Consequence the docs spell out: the real push never
 /// reaches Reolink, so app notifications on the phone stop for cameras behind
 /// the override; Neolink → Home Assistant becomes the notification channel.
 ///
 /// TCP ONLY, deliberately: the camera's post-wake p2p re-registration bursts are
-/// UDP, so even if a user over-broad DNS override (a reolink.com wildcard —
+/// UDP, so even if a user over-broad DNS override (a reolink.com wildcard,
 /// docs say don't) lands that chatter on this host, a TCP-only sink stays
 /// silent and the park/hint loop the syslog filter guards against can't start.
 /// </summary>
@@ -54,14 +54,14 @@ public sealed class PushSinkListener
             try { l.Start(); bound.Add((l, port)); }
             catch (SocketException e)
             {
-                Log.Error($"Wake hints: push decoy cannot listen on tcp:{port} ({e.SocketErrorCode}) — " +
+                Log.Error($"Wake hints: push decoy cannot listen on tcp:{port} ({e.SocketErrorCode}), " +
                           (port < 1024 ? "ports below 1024 need elevated privileges outside a container; " : "") +
                           "is another service (a local DNS server?) already using it?");
             }
         }
         if (bound.Count == 0)
             throw new InvalidOperationException("none of the wake_hints.push_ports could be bound");
-        Log.Info($"Wake hints: decoy push service on tcp://{_bind}:{string.Join(",", bound.Select(b => b.Port))} — " +
+        Log.Info($"Wake hints: decoy push service on tcp://{_bind}:{string.Join(",", bound.Select(b => b.Port))}: " +
                  "add a DNS override so pushx.reolink.com (that hostname ONLY) resolves to this host. " +
                  "Reolink app notifications will stop for cameras behind the override.");
         try
@@ -83,7 +83,7 @@ public sealed class PushSinkListener
             catch (OperationCanceledException) { break; }
             catch (SocketException e)
             {
-                Log.Debug($"Wake hints: push decoy accept error on tcp:{port} ({e.SocketErrorCode}) — continuing");
+                Log.Debug($"Wake hints: push decoy accept error on tcp:{port} ({e.SocketErrorCode}), continuing");
                 continue;
             }
             using (client)
@@ -100,11 +100,11 @@ public sealed class PushSinkListener
                 // override actually send the camera here" is the first thing
                 // every setup needs to verify.
                 if (firstContact)
-                    Log.Info($"Wake hints: push decoy contacted by {ip} (tcp/{port}) — the redirect works");
+                    Log.Info($"Wake hints: push decoy contacted by {ip} (tcp/{port}), the redirect works");
                 if (pass)
                     _hint(ip, $"{ip} called the decoy push service on tcp/{port}");
             }
-            // Dispose closes the socket without a TLS handshake or any reply —
+            // Dispose closes the socket without a TLS handshake or any reply:
             // the connect attempt was the whole signal.
         }
     }

@@ -38,7 +38,7 @@ public sealed class NeolinkConfig
     public List<CameraConfig> Cameras { get; } = new();
 
     /// <summary>The per-camera "stream" values the loader accepts. Public so the web
-    /// admin API validates against the SAME list the loader enforces — one source of
+    /// admin API validates against the SAME list the loader enforces: one source of
     /// truth, or the editor could save a config the loader then rejects on restart.</summary>
     public static readonly string[] ValidCameraStreams =
         { "mainStream", "subStream", "externStream", "both", "all" };
@@ -94,7 +94,7 @@ public sealed class NeolinkConfig
             bool keepOld = !Directory.Exists(full);
             if (!_moveWarned.ContainsKey(old) && _moveWarned.TryAdd(old, 0))
                 Log.Warn(keepOld
-                    ? $"Recording path '{p}' now means {full} (beside the config file); still using {old} because footage is there — move the folder, or set an absolute path"
+                    ? $"Recording path '{p}' now means {full} (beside the config file); still using {old} because footage is there: move the folder, or set an absolute path"
                     : $"Recording path '{p}' now means {full} (beside the config file); earlier footage is still in {old}");
             return keepOld ? old : full;
         }
@@ -565,11 +565,11 @@ public sealed class NeolinkConfig
     /// A camera entry the loader cannot use is dropped, never fatal. The Home
     /// Assistant add-on merges its options INTO config.json and only ever adds
     /// (see neolink-addon/run.sh), so it can write an entry its own Options page
-    /// is then unable to un-write — one of those used to take every other camera
+    /// is then unable to un-write: one of those used to take every other camera
     /// down with it, recoverable only by hand-editing config.json.
     /// </summary>
     private static void DropCamera(string label, string why) =>
-        Log.Error($"Config: skipping camera {label} — {why}. Every other camera still starts. " +
+        Log.Error($"Config: skipping camera {label}, {why}. Every other camera still starts. " +
                   "A skipped camera is not listed in the web UI, so fix or remove this entry in the " +
                   "config file itself (under the Home Assistant add-on, check its Options too).");
 
@@ -644,7 +644,7 @@ public sealed class NeolinkConfig
         // TCP has no such lookup, so an address-less entry REQUIRES "udp": true.
         if (uid != null && address == null && !udp)
             throw new FormatException(
-                $"Camera \"{name}\": a \"uid\" without an \"address\" needs \"udp\": true — " +
+                $"Camera \"{name}\": a \"uid\" without an \"address\" needs \"udp\": true, " +
                 "broadcast discovery finds the camera by UID, but only over UDP " +
                 "(or give the camera a direct \"address\" for TCP)");
         if (address == null && uid == null)
@@ -689,7 +689,7 @@ public sealed class NeolinkConfig
         var v = value?.Trim().ToLowerInvariant();
         if (v is null or "" or "off" or "none") return null;
         if (v == "opus") return v;
-        Log.Warn($"Camera \"{name}\": unknown audio_transcode \"{value}\" — supported: " +
+        Log.Warn($"Camera \"{name}\": unknown audio_transcode \"{value}\", supported: " +
                  "\"opus\" or \"off\". Serving the camera's original audio.");
         return null;
     }
@@ -720,8 +720,8 @@ public sealed class NeolinkConfig
                 Drop(cam, $"invalid stream \"{cam.Stream}\" (expected one of: {string.Join(", ", ValidStreams)})");
         }
 
-        // A second entry under the same name is unreachable anyway — the app matches
-        // cameras by name, case-insensitively — so the first one wins.
+        // A second entry under the same name is unreachable anyway, the app matches
+        // cameras by name, case-insensitively, so the first one wins.
         foreach (var g in Cameras.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).ToList())
         {
             foreach (var dupe in g.Skip(1).ToList())
@@ -744,12 +744,12 @@ public sealed class NeolinkConfig
         // (empty wall) so the user can set up and add cameras to the config,
         // rather than the process crash-looping on a first-run config.
         if (Cameras.Count == 0)
-            Log.Warn("No cameras configured yet — the web UI will run but show no cameras. " +
+            Log.Warn("No cameras configured yet: the web UI will run but show no cameras. " +
                      "Add your first under Server settings (the gear icon) in the web UI " +
-                     "and restart when it prompts you — or edit the config file directly.");
+                     "and restart when it prompts you, or edit the config file directly.");
 
         // A camera name also becomes a Home Assistant object id and a recordings
-        // folder name — by DIFFERENT reductions (HA lowercases and collapses
+        // folder name, by DIFFERENT reductions (HA lowercases and collapses
         // non-alphanumerics to '_'; the folder only replaces characters the
         // filesystem refuses), so each collision is checked on its own. Warnings,
         // not errors, because an install already running that way must keep starting.
@@ -775,7 +775,7 @@ public sealed class NeolinkConfig
             if (!OperatingSystem.IsWindows())
                 foreach (var (key, p) in new[] { ("path", Recording.Path), ("clips_path", Recording.ClipsPath), ("archive_path", Recording.ArchivePath) })
                     if (IsWindowsOnlyPath(p) && _windowsPathWarned.TryAdd(p, 0))
-                        Log.Warn($"recording.{key} '{p}' is a Windows path, which this system treats as a folder name — " +
+                        Log.Warn($"recording.{key} '{p}' is a Windows path, which this system treats as a folder name: " +
                                  "set one like /recordings in Settings → Storage");
             if (Recording.RetentionDays < 0)
                 throw new FormatException("recording.retention_days must be >= 0 (0 = keep forever)");
@@ -834,7 +834,7 @@ public sealed class NeolinkConfig
                     throw new FormatException($"wake_hints.push_ports: {p} is not a valid port (1-65535)");
             if (WakeHints.PushPorts.Count > 16)
                 throw new FormatException("wake_hints.push_ports: at most 16 ports");
-            // The listeners do IPAddress.Parse on this — fail at load, not at runtime.
+            // The listeners do IPAddress.Parse on this: fail at load, not at runtime.
             if (WakeHints.Bind is { } whb && !System.Net.IPAddress.TryParse(whb, out _))
                 throw new FormatException($"wake_hints.bind must be an IP address, not \"{whb}\"");
         }
@@ -868,8 +868,8 @@ public sealed class NeolinkConfig
             var mode = cam.PtzMode;
             if (cam.PtzRelativeOff is { } bad)
             {
-                if (strict) throw new FormatException($"Camera \"{cam.Name}\": relative PTZ moves — {bad}");
-                Log.Error($"Camera \"{cam.Name}\": relative PTZ moves are off — {bad}.");
+                if (strict) throw new FormatException($"Camera \"{cam.Name}\": relative PTZ moves, {bad}");
+                Log.Error($"Camera \"{cam.Name}\": relative PTZ moves are off, {bad}.");
             }
             else if (cam.PtzRelative != null && mode == "off")
                 Log.Warn($"Camera \"{cam.Name}\": ptz_fov_h and ptz_pan_rate do nothing until ptz_share or ptz_port turns on PTZ for Frigate");
@@ -889,8 +889,8 @@ public sealed class NeolinkConfig
                 if (mode == "own") taken[cam.PtzPort!.Value] = $"camera \"{cam.Name}\"'s own PTZ port";
                 continue;
             }
-            if (strict) throw new FormatException($"Camera \"{cam.Name}\": PTZ for Frigate — {why}");
-            Log.Error($"Camera \"{cam.Name}\": PTZ for Frigate is off — {why}. The camera itself still starts.");
+            if (strict) throw new FormatException($"Camera \"{cam.Name}\": PTZ for Frigate, {why}");
+            Log.Error($"Camera \"{cam.Name}\": PTZ for Frigate is off, {why}. The camera itself still starts.");
             cam.PtzOff = why;
         }
     }
@@ -927,14 +927,14 @@ public sealed class UserConfig
 
 /// <summary>
 /// Web-UI settings ("ui" in the config). Note: UI accounts (sign-in) are NOT
-/// configured here — they live in users.json under <see cref="StateDir"/> and
+/// configured here, they live in users.json under <see cref="StateDir"/> and
 /// are managed from the UI itself; the top-level "users" list is RTSP-only.
 /// </summary>
 public sealed class UiConfig
 {
     /// <summary>
     /// Where the UI's server-side state persists (users.json, settings.json).
-    /// Defaults to the config file's directory — point it at a persistent volume
+    /// Defaults to the config file's directory: point it at a persistent volume
     /// if the config is mounted read-only or replaced on deployments.
     /// </summary>
     public string? StateDir { get; set; }
@@ -1003,7 +1003,7 @@ public sealed class WakeHintConfig
     /// connects resume. Positive fractional hours are supported.</summary>
     public double TrustHours { get; set; } = DefaultTrustHours;
     /// <summary>UDP port to receive the router's remote syslog (filterlog) on.
-    /// 5140 by convention — 514 needs elevated privileges on most systems.
+    /// 5140 by convention: 514 needs elevated privileges on most systems.
     /// 0 turns the syslog listener off (push_ports may still run).</summary>
     public int SyslogPort { get; set; } = 5140;
     /// <summary>TCP ports for the decoy push service (DNS-override mode): a DNS
@@ -1035,7 +1035,7 @@ public sealed class RecordingConfig
     public string ClipsPath { get; set; } = "";
 
     /// <summary>Optional archive tier: aged footage is MOVED here instead of being
-    /// deleted — but only for cameras whose Archive switch is turned ON in the web
+    /// deleted, but only for cameras whose Archive switch is turned ON in the web
     /// UI (per-camera move/delete ages live there too). Point this at a DIFFERENT
     /// drive than <see cref="Path"/> (in Docker, map a second volume). Empty =
     /// no archive tier; expired footage is deleted as always.</summary>
@@ -1062,7 +1062,7 @@ public sealed class RecordingConfig
     /// thumbnails) at rest with chunked AES-256-GCM. Existing plaintext footage keeps
     /// playing; footage recorded while this was on stays playable after turning it
     /// off. The key is the server secret (NEOLINK_SECRET_KEY or the state dir's
-    /// secret.key) — losing it means losing the encrypted footage.</summary>
+    /// secret.key): losing it means losing the encrypted footage.</summary>
     public bool Encrypt { get; set; }
 
     /// <summary>When a recording volume runs low, free the oldest footage instead of
@@ -1116,7 +1116,7 @@ public sealed class CameraConfig
     /// <summary>True when this entry is a plain RTSP camera instead of a Baichuan (Reolink) one.</summary>
     public bool IsGenericRtsp => RtspMain != null || RtspSub != null;
     /// <summary>Code-built --demo camera: synthetic looped footage, no network.
-    /// Never parsed from a config file — the demo rig is the only author.</summary>
+    /// Never parsed from a config file: the demo rig is the only author.</summary>
     public bool Demo { get; init; }
     public byte ChannelId { get; init; }
 
@@ -1142,7 +1142,7 @@ public sealed class CameraConfig
     public string? HttpAddress { get; init; }
 
     /// <summary>Optional override for the camera's ONVIF device-service endpoint
-    /// (host, host:port, or a full URL — a full URL may carry "user:pass@" when the
+    /// (host, host:port, or a full URL, a full URL may carry "user:pass@" when the
     /// ONVIF account differs from the streaming one). Defaults to the Baichuan host,
     /// or a generic camera's stream-URL host, on the standard /onvif/device_service
     /// path. On a Reolink it is the picture-settings fallback for models with no
@@ -1171,41 +1171,41 @@ public sealed class CameraConfig
     /// <summary>
     /// Battery cameras: true holds the connection (and the camera awake) around the
     /// clock; false lets it sleep, connecting only while someone watches. Unset =
-    /// auto — cameras that report a battery sleep, everything else stays always-on.
+    /// auto: cameras that report a battery sleep, everything else stays always-on.
     /// </summary>
     public bool? AlwaysOn { get; init; }
     /// <summary>The camera's UID (Reolink app → device info, or the sticker; e.g.
-    /// "95270000ABCDEFGH"). Used by the UDP discovery probe — UDP-only battery
+    /// "95270000ABCDEFGH"). Used by the UDP discovery probe: UDP-only battery
     /// models (Argus family) answer discovery keyed on it.</summary>
     public string? Uid { get; init; }
     /// <summary>Diagnostic (opt-in): when the camera cannot be reached over TCP,
-    /// probe Baichuan-over-UDP discovery — what battery-only models speak instead
-    /// of TCP — and log the exchange comprehensively (UID masked, no credentials).
+    /// probe Baichuan-over-UDP discovery, what battery-only models speak instead
+    /// of TCP, and log the exchange comprehensively (UID masked, no credentials).
     /// Requires "uid".</summary>
     public bool UdpProbe { get; init; }
     /// <summary>Opt-in: connect to this camera over Baichuan-over-UDP
-    /// instead of TCP — for battery-only models (Argus family) that never listen on
+    /// instead of TCP, for battery-only models (Argus family) that never listen on
     /// TCP. Requires "uid". The default (false) is the unchanged TCP path.</summary>
     public bool Udp { get; init; }
     /// <summary>Battery cameras (opt-in): while sleep-friendly and unwatched, keep a
     /// cheap liveness poll running so Neolink connects the moment the camera wakes
-    /// itself (motion) and captures the event — instead of only connecting on viewer
+    /// itself (motion) and captures the event, instead of only connecting on viewer
     /// demand. Default false = the classic park-until-viewer behavior. No effect with
     /// always_on (never sleeps) or on non-battery cameras.</summary>
     public bool WakeCapture { get; init; }
     /// <summary>Battery cameras (opt-in): keep this camera awake and connected for
     /// this many hours after startup (0–24, 0 = off), so every event is caught live
-    /// instead of relying on the non-waking wake-scan. A deliberate battery cost — the
+    /// instead of relying on the non-waking wake-scan. A deliberate battery cost: the
     /// UI warns about drain and caps it at 24h so it can never hold a camera awake
     /// forever. Only meaningful when the camera is sleep-friendly (battery, no
     /// always_on); ignored otherwise.</summary>
     public double KeepAliveHours { get; init; }
     /// <summary>Diagnostic (opt-in): cap the encryption this camera's login
-    /// advertises — "none", "bcencrypt", "aes" or "fullaes" (the default). Only for
+    /// advertises, "none", "bcencrypt", "aes" or "fullaes" (the default). Only for
     /// firmware that will not answer the default; see docs/troubleshooting.md.</summary>
     public string? MaxEncryption { get; init; }
-    /// <summary>Diagnostic (opt-in): open the login with the older framing — the
-    /// 32-byte MD5 credential fields — instead of the header-only upgrade. Pairs
+    /// <summary>Diagnostic (opt-in): open the login with the older framing, the
+    /// 32-byte MD5 credential fields, instead of the header-only upgrade. Pairs
     /// with <see cref="MaxEncryption"/>; see docs/troubleshooting.md.</summary>
     public bool LegacyLogin { get; init; }
     /// <summary>Transcode this camera's audio for RTSP clients: "opus" (needs

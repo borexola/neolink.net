@@ -49,7 +49,7 @@ internal sealed class NotificationsForm : Form
         _link = link;
         _prefs = engine.Prefs.Clone();
 
-        Text = "Neolink.NET — notifications";
+        Text = "Neolink.NET: notifications";
         WindowTheme.Attach(this);
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = false;
@@ -73,7 +73,7 @@ internal sealed class NotificationsForm : Form
     {
         base.OnLoad(e);
         // Only once the handle exists: the fetch ends in a BeginInvoke, which
-        // throws into the void on a handle-less form — and starting it here also
+        // throws into the void on a handle-less form, and starting it here also
         // keeps the selftest's construction pass free of network calls.
         _ = LoadCamerasAsync();
     }
@@ -227,7 +227,7 @@ internal sealed class NotificationsForm : Form
         _sysWrite.Checked = _prefs.SysWriteFailure;
         _backend.Text = _toaster.RichToasts
             ? "Notifications appear as Windows toasts and stay in the Action Center."
-            : "Notifications appear as tray balloons — Windows toasts need the Start Menu shortcut the installer creates.";
+            : "Notifications appear as tray balloons: Windows toasts need the Start Menu shortcut the installer creates.";
 
         _cameras.SelectedIndexChanged += (_, _) => ShowCamera(_cameras.SelectedItem as string);
         _labels.ItemCheck += (_, e) => BeginInvoke(() => CaptureLabels(e));
@@ -250,7 +250,7 @@ internal sealed class NotificationsForm : Form
     }
 
     /// <summary>Fills the camera list from the server, keeping any camera the rules
-    /// already mention even when it is gone — deleting a camera should not silently
+    /// already mention even when it is gone: deleting a camera should not silently
     /// delete the rule that mentions it.</summary>
     private async Task LoadCamerasAsync()
     {
@@ -315,7 +315,7 @@ internal sealed class NotificationsForm : Form
         _toaster.Show(alert, Snapshot(), null);
     }
 
-    /// <summary>The this-PC settings as currently typed, without committing them —
+    /// <summary>The this-PC settings as currently typed, without committing them,
     /// so the test notification honours the sound and click boxes before Save.</summary>
     private DesktopSettings Snapshot() => new()
     {
@@ -344,7 +344,7 @@ internal sealed class NotificationsForm : Form
 
         _settings.Save();
         // Fire and forget: the local cache is already written, so a server that is
-        // briefly down cannot lose the edit — the next successful poll pushes it.
+        // briefly down cannot lose the edit, the next successful poll pushes it.
         _ = _engine.SavePrefsAsync(_prefs);
     }
 }

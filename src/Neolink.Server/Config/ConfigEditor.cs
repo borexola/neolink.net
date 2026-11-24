@@ -12,7 +12,7 @@ namespace Neolink.Config;
 /// The raw file is the source of truth: unknown fields survive untouched, every
 /// candidate is validated through the normal <see cref="NeolinkConfig.Load"/>
 /// before it replaces the file (atomically, keeping a .bak of the previous
-/// version). Comments do NOT survive a rewrite — the UI says so.
+/// version). Comments do NOT survive a rewrite: the UI says so.
 /// Cameras and RTSP users are editable via the helpers below; their passwords
 /// are handled write-only by the API layer.
 /// </summary>
@@ -52,7 +52,7 @@ public static class ConfigEditor
 
     /// <summary>The editable settings, read fresh from the file.
     /// <paramref name="encryption"/> is the caller's live key report (source,
-    /// fingerprint, same-disk flag) — runtime state, not part of the file.</summary>
+    /// fingerprint, same-disk flag): runtime state, not part of the file.</summary>
     public static object Describe(string path, object? encryption = null)
     {
         var cfg = NeolinkConfig.Load(path, resolvePaths: false); // the form shows the file's own spelling
@@ -108,7 +108,7 @@ public static class ConfigEditor
                     deleteOldestWhenFull = cfg.Recording.DeleteOldestWhenFull,
                 },
                 // Passwords never leave the server; hasPassword drives the
-                // "stored — blank keeps it" placeholder client-side.
+                // "stored: blank keeps it" placeholder client-side.
                 mqtt = cfg.Mqtt == null ? null : new
                 {
                     broker = cfg.Mqtt.Broker,
@@ -124,7 +124,7 @@ public static class ConfigEditor
                     maxPacketBytes = cfg.Mqtt.MaxPacketBytes,
                     statsInterval = cfg.Mqtt.StatsIntervalSeconds,
                 },
-                // The push-port list travels as display text ("443, 53") — the
+                // The push-port list travels as display text ("443, 53"): the
                 // editor is a text field and the API parses it back strictly.
                 wakeHints = cfg.WakeHints == null ? null : new
                 {
@@ -141,7 +141,7 @@ public static class ConfigEditor
         };
     }
 
-    /// <summary>Parses a user-typed port list ("443, 53" — commas/spaces/semicolons).
+    /// <summary>Parses a user-typed port list ("443, 53": commas/spaces/semicolons).
     /// Empty text is an empty list. Throws <see cref="FormatException"/> on junk or
     /// out-of-range entries; duplicates collapse, order is kept, 16 ports max.</summary>
     public static List<int> ParsePortList(string text)
@@ -171,7 +171,7 @@ public static class ConfigEditor
 
             // strict: a camera the loader would merely SKIP at boot has to be refused
             // here, or the editor accepts it and it vanishes next start. But only ever
-            // as strict as the file being REPLACED — a config that already holds an
+            // as strict as the file being REPLACED: a config that already holds an
             // unusable entry (the add-on can write one) would otherwise fail every
             // save, including the ones that would have removed it.
             bool strict = true;
@@ -275,7 +275,7 @@ public static class ConfigEditor
         return section;
     }
 
-    /// <summary>Like <see cref="Section"/>, but never creates — for sections that
+    /// <summary>Like <see cref="Section"/>, but never creates, for sections that
     /// are only meaningful with fields the UI doesn't edit (an mqtt block without
     /// a broker would just fail validation).</summary>
     public static JsonObject? TryGetSection(JsonObject root, string key)
@@ -406,8 +406,8 @@ public static class ConfigEditor
     /// <summary>Where the password sits inside a "scheme://user:pass@host/path" or a
     /// bare "user:pass@host:port": PassStart is its first character (-1 when there
     /// is a user but no password), At is the '@' that ends the login. The login ends
-    /// at the LAST '@' inside the authority — which is how a URL parser reads it, and
-    /// so how the camera sees it — because an '@' in a password is common and people
+    /// at the LAST '@' inside the authority, which is how a URL parser reads it, and
+    /// so how the camera sees it, because an '@' in a password is common and people
     /// do not percent-escape it. Null when the value carries no login at all.</summary>
     internal static (int PassStart, int At)? LoginSpan(string? url)
     {

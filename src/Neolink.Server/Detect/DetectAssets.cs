@@ -10,11 +10,11 @@ namespace Neolink.Detect;
 public sealed record DetectAsset(string FileName, string Url, string Sha256, long Bytes);
 
 /// <summary>
-/// The object detector runs in the BROWSER — the server never decodes a frame for
-/// it — so all this holds is the files the page loads: ONNX Runtime Web and the
+/// The object detector runs in the BROWSER, the server never decodes a frame for
+/// it, so all this holds is the files the page loads: ONNX Runtime Web and the
 /// model. They are not in the repository or the image: 35 MB every install would
 /// carry for a preview feature only some switch on. They download once into the
-/// state dir the first time the feature is enabled, pinned by sha256 — a file
+/// state dir the first time the feature is enabled, pinned by sha256: a file
 /// that does not hash right is deleted rather than served. An install with no
 /// internet can drop the same filenames into a "detect-assets" folder next to the
 /// executable instead, which is then used as-is.
@@ -49,7 +49,7 @@ public sealed class DetectAssets
         "a77dd863933f184a19e84361c64b788228a7c7dacc2c78939239a96ad3efca3b", 9_386_116);
 
     /// <summary>YOLOv10-small: the same graph shape (one 640 square in, 300 finished
-    /// boxes out), three times the work and a large step up in what it recognises —
+    /// boxes out), three times the work and a large step up in what it recognises,
     /// awkward angles and half-hidden things above all. Optional, because it is
     /// another 29 MB here and only a machine with a working GPU can run it at any
     /// useful rate; the browser falls back to the nano model when it cannot.</summary>
@@ -92,7 +92,7 @@ public sealed class DetectAssets
     private readonly Job _extra = new();
 
     /// <param name="allowDownload">False makes every fetch a no-op, so missing files
-    /// stay "missing" instead of becoming "downloading" — the self-tests pass false,
+    /// stay "missing" instead of becoming "downloading": the self-tests pass false,
     /// since a test suite must not reach the network.</param>
     public DetectAssets(string stateDir, bool allowDownload = true)
     {
@@ -102,7 +102,7 @@ public sealed class DetectAssets
     }
 
     /// <summary>The verified file to serve for this name, or null when it is absent
-    /// or fails its checksum. Unknown names return null — this is what a public URL
+    /// or fails its checksum. Unknown names return null: this is what a public URL
     /// resolves against, so it can only ever name one of <see cref="All"/>.</summary>
     public string? Locate(string fileName)
     {
@@ -205,7 +205,7 @@ public sealed class DetectAssets
         catch (Exception ex)
         {
             lock (_gate) job.Error = Log.Flatten(ex);
-            Log.Warn($"Live object boxes: download failed — {Log.Flatten(ex)}");
+            Log.Warn($"Live object boxes: download failed, {Log.Flatten(ex)}");
         }
     }
 
@@ -240,7 +240,7 @@ public sealed class DetectAssets
     /// <summary>
     /// Gives back the disk the feature is no longer using: switched off, the whole
     /// 35 MB goes; the detailed model alone goes when only it was turned off.
-    /// Only ever the copies this server downloaded — files an operator placed next
+    /// Only ever the copies this server downloaded: files an operator placed next
     /// to the executable are theirs, and an install with no internet depends on
     /// them surviving. Switching the feature back on downloads again.
     /// </summary>

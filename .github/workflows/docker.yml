@@ -17,7 +17,7 @@ jobs:
   # Skip pointless rebuilds: a BRANCH push that only touches docs/manifests
   # (README, CHANGELOG, the add-on manifests, ...) doesn't change the app image,
   # so main won't republish :latest for them. Tags (releases) and manual runs
-  # always build — path filters on the `push` trigger itself would risk skipping
+  # always build: path filters on the `push` trigger itself would risk skipping
   # a doc-heavy release commit, so the decision lives here instead.
   gate:
     runs-on: ubuntu-latest
@@ -66,7 +66,7 @@ jobs:
       # Release tags (vX.Y.Z) become the app's self-reported version; beta
       # branch builds report "<csproj version>-beta.<run>" so every beta push
       # is unmistakable AND unique everywhere the version shows (web UI,
-      # startup log, /api/features) — without consuming stable patch numbers:
+      # startup log, /api/features), without consuming stable patch numbers:
       # the csproj stays at the NEXT stable version for the whole beta cycle,
       # and each stable release increments by exactly one. The Dockerfile
       # falls back to the csproj <Version> when this is empty (local builds).
@@ -105,7 +105,7 @@ jobs:
   # The Windows desktop app's MSI rides the same release tag as the docker
   # images, so the installer on the release page and the server image always
   # carry the same vX.Y.Z. Beta pushes build one too, kept as a workflow
-  # artifact — testable without being published to users. Release tags don't
+  # artifact: testable without being published to users. Release tags don't
   # run ci.yml, so the desktop selftest is repeated here: an installer must
   # not package an app that fails its own checks.
   desktop-msi:
@@ -130,7 +130,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           # WinExe (GUI subsystem): PowerShell does not wait for it and never
           # sets $LASTEXITCODE, so the build's 0 above would mask a failing
-          # selftest — only Start-Process -Wait sees the real result.
+          # selftest, only Start-Process -Wait sees the real result.
           $p = Start-Process -FilePath "src/Neolink.Desktop/bin/Release/net10.0-windows10.0.19041.0/Neolink.Desktop.exe" `
             -ArgumentList '--selftest' -NoNewWindow -Wait -PassThru
           if ($p.ExitCode -ne 0) { exit 1 }
@@ -184,7 +184,7 @@ jobs:
           retention-days: 30
 
   # The launcher runs at every add-on boot for every user, and nothing else
-  # executes it before an image ships — a jq typo in its options mapping would
+  # executes it before an image ships: a jq typo in its options mapping would
   # crash-loop them all. Run it against fixtures before publishing.
   addon-check:
     runs-on: ubuntu-latest
@@ -193,8 +193,8 @@ jobs:
       - run: bash neolink-addon/tests/check.sh
 
   # Home Assistant add-on images: the app image plus the options/MQTT launcher
-  # (see neolink-addon/). The Supervisor installs prebuilt per-arch images —
-  # ghcr.io/borexola/neolink.net-addon-{arch}:<version> — where <version> must
+  # (see neolink-addon/). The Supervisor installs prebuilt per-arch images,
+  # ghcr.io/borexola/neolink.net-addon-{arch}:<version>, where <version> must
   # equal the `version:` in the add-on's config.yaml.
   # Built on release tags (:X.Y.Z), the beta branch (rolling :beta, from the
   # neolink.net:beta app image) and workflow_dispatch (:edge, from :latest).
@@ -202,7 +202,7 @@ jobs:
     needs: [gate, build-and-push, addon-check]
     # Runs on release tags, the beta branch and manual dispatch. always() lets it
     # proceed even when build-and-push was SKIPPED (a docs-only beta push, where it
-    # rebuilds from the existing app image) — but not when that build FAILED, and
+    # rebuilds from the existing app image), but not when that build FAILED, and
     # never when the launcher smoke test did.
     if: >-
       always()

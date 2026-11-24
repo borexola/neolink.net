@@ -7,18 +7,18 @@ namespace Neolink.Ai;
 
 /// <summary>
 /// A frozen copy of the recorder's pre-roll video at the instant an event
-/// started: the compressed packets (references, not copies — a few hundred KB of
+/// started: the compressed packets (references, not copies, a few hundred KB of
 /// sub-stream for the seconds before the trigger) plus the codec parameters an
 /// out-of-band decoder needs. Taken BEFORE StartClip drains the buffers into the
 /// clip writer, because these seconds are the one part of the event the live
-/// snapshot burst can never reach — and they usually contain whatever caused it.
+/// snapshot burst can never reach, and they usually contain whatever caused it.
 /// </summary>
 public sealed record AiPrerollVideo(VideoCodec Codec, byte[]? Vps, byte[]? Sps, byte[]? Pps,
     IReadOnlyList<(byte[] AnnexB, bool Keyframe, uint RtpTs)> Packets);
 
 /// <summary>
 /// Turns an <see cref="AiPrerollVideo"/> into a handful of JPEGs for the AI
-/// frame set by piping the raw Annex-B stream through an ffmpeg found on PATH —
+/// frame set by piping the raw Annex-B stream through an ffmpeg found on PATH:
 /// the server itself stays decoder-free, exactly like the thumbnail and
 /// snapshot paths. No ffmpeg, no pre-roll frames: the feature quietly sits out
 /// (one Info line says what installing it would add). Runs on the describe
@@ -27,11 +27,11 @@ public sealed record AiPrerollVideo(VideoCodec Codec, byte[]? Vps, byte[]? Sps, 
 public static class AiPreroll
 {
     /// <summary>At most this many pre-roll frames join the set (oldest, spread,
-    /// and always the newest — the frame nearest the trigger instant).</summary>
+    /// and always the newest, the frame nearest the trigger instant).</summary>
     public const int MaxFrames = 3;
 
     /// <summary>Full path of the ffmpeg binary, or null when none was found.
-    /// (The locate logic lives in <see cref="Ffmpeg"/> — it is shared with the
+    /// (The locate logic lives in <see cref="Ffmpeg"/>: it is shared with the
     /// audio transcoder.)</summary>
     public static string? FfmpegPath => Ffmpeg.ExePath;
 
@@ -41,7 +41,7 @@ public static class AiPreroll
     /// Decodes the pre-roll and returns up to <see cref="MaxFrames"/> JPEGs,
     /// oldest first, each stamped with its real wall-clock instant (derived from
     /// the RTP timestamps, anchored to <paramref name="triggerUtc"/> = the last
-    /// pre-roll packet). Empty on any failure — pre-roll frames are a bonus, and
+    /// pre-roll packet). Empty on any failure: pre-roll frames are a bonus, and
     /// nothing about describing an event may ever depend on them.
     /// </summary>
     public static async Task<List<(DateTime Utc, byte[] Jpeg)>> ExtractAsync(
@@ -51,7 +51,7 @@ public static class AiPreroll
         if (FfmpegPath is not { } ffmpeg)
         {
             if (Interlocked.Exchange(ref _missingLogged, 1) == 0)
-                Log.Info("AI describe: no ffmpeg found — event descriptions run without " +
+                Log.Info("AI describe: no ffmpeg found, event descriptions run without " +
                          "pre-roll frames (the seconds before the trigger). Installing ffmpeg " +
                          "on PATH (or pointing NEOLINK_FFMPEG at a binary) adds them " +
                          "automatically.");
@@ -87,7 +87,7 @@ public static class AiPreroll
                 // Height-based on purpose: a 16:9 frame lands at the classic
                 // 640×360, while an ultra-wide dual-lens panorama keeps its
                 // proportional width (5120×1552 → 1188×360) instead of being
-                // crushed to 640×194 — where a rabbit on the lawn dissolved
+                // crushed to 640×194, where a rabbit on the lawn dissolved
                 // into ~5 unfindable pixels (live 2026-07-27).
                 "-vf", "scale=-2:360",
                 "-q:v", "5",
@@ -121,7 +121,7 @@ public static class AiPreroll
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            Log.Info("AI pre-roll: ffmpeg exceeded its 20s deadline — skipped");
+            Log.Info("AI pre-roll: ffmpeg exceeded its 20s deadline, skipped");
             return none;
         }
         catch (Exception ex)
@@ -132,11 +132,11 @@ public static class AiPreroll
     }
 
     /// <summary>Decodes a run of self-contained keyframe access units (the
-    /// stream tap's harvest — one IDR each, so every AU yields one picture)
+    /// stream tap's harvest, one IDR each, so every AU yields one picture)
     /// into model-sized JPEGs, each keeping its packet's wall-clock stamp.
     /// Output count normally matches input 1:1; a decoder hiccup falls back to
     /// proportional mapping so no frame ever wears another frame's time.
-    /// Empty on any failure — the caller has its own fallbacks.</summary>
+    /// Empty on any failure: the caller has its own fallbacks.</summary>
     public static async Task<List<(DateTime Utc, byte[] Jpeg)>> DecodeFramesAsync(
         VideoCodec codec, byte[]? vps, byte[]? sps, byte[]? pps,
         IReadOnlyList<(DateTime Utc, byte[] AnnexB)> aus, CancellationToken ct)
@@ -182,7 +182,7 @@ public static class AiPreroll
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            Log.Info("AI stream-tap decode: ffmpeg exceeded its deadline — skipped");
+            Log.Info("AI stream-tap decode: ffmpeg exceeded its deadline, skipped");
             return none;
         }
         catch (Exception ex)
@@ -193,7 +193,7 @@ public static class AiPreroll
     }
 
     /// <summary>A JPEG bigger than this is not the sub-stream thumbnail it was
-    /// meant to be — some cameras answer the "small" snapshot command with the
+    /// meant to be: some cameras answer the "small" snapshot command with the
     /// full-resolution picture (~5 MB each; a 50-frame event became a 234 MB
     /// payload and broke the endpoint's pipe, live 2026-07-26).</summary>
     public const int OversizeBytes = 300_000;
@@ -201,7 +201,7 @@ public static class AiPreroll
     /// <summary>Rescales every oversized JPEG in <paramref name="frames"/> to
     /// model size (360 tall, width proportional) through ONE ffmpeg pass, leaving small frames
     /// untouched and every timestamp in place. Returns the original list when
-    /// ffmpeg is missing or anything goes wrong — shrinking is an optimization,
+    /// ffmpeg is missing or anything goes wrong: shrinking is an optimization,
     /// never a gate; the describer's byte-capped parts carry the fallback.</summary>
     public static async Task<List<(DateTime Utc, byte[] Jpeg)>> ShrinkAsync(
         List<(DateTime Utc, byte[] Jpeg)> frames, CancellationToken ct)
@@ -225,11 +225,11 @@ public static class AiPreroll
             var scaled = SplitJpegs(outBytes);
             if (scaled.Count != big.Count)
             {
-                // A miscount means frames would pair with the wrong timestamps —
+                // A miscount means frames would pair with the wrong timestamps:
                 // originals are oversized but at least honest.
                 Log.Info($"AI frame downscale: expected {big.Count} JPEG(s) back, got {scaled.Count}" +
                           $"{(stderr.Length > 0 ? $" ({stderr[..Math.Min(200, stderr.Length)]})" : "")}" +
-                          " — sending the originals");
+                          ": sending the originals");
                 return frames;
             }
             var result = new List<(DateTime, byte[])>(frames);
@@ -239,7 +239,7 @@ public static class AiPreroll
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            Log.Info($"AI frame downscale failed ({Log.Flatten(ex)}) — sending the originals");
+            Log.Info($"AI frame downscale failed ({Log.Flatten(ex)}): sending the originals");
             return frames;
         }
     }

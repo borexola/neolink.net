@@ -39,7 +39,7 @@ public interface IBcCamera : IAsyncDisposable
     /// <paramref name="binaryOut"/> until cancelled or the connection drops.
     /// When <paramref name="stallTolerable"/> returns true, a 15s no-video gap is
     /// treated as expected (the camera is dark on purpose, e.g. privacy mode) and
-    /// the connection is held open instead of failing — so control stays available.
+    /// the connection is held open instead of failing, so control stays available.
     /// </summary>
     Task StartVideoAsync(StreamKind stream, ChannelWriter<byte[]> binaryOut,
         Func<bool>? stallTolerable, CancellationToken ct);
@@ -54,9 +54,9 @@ public interface IBcCamera : IAsyncDisposable
     Task WatchMotionAsync(Action<MotionPush> onEvent, CancellationToken ct);
 
     /// <summary>
-    /// Listens for the unsolicited status pushes the camera broadcasts on its own —
+    /// Listens for the unsolicited status pushes the camera broadcasts on its own,
     /// Wi-Fi signal (msg 464), sleep state (msg 623), siren (msg 547) and floodlight
-    /// (msg 291) — and invokes <paramref name="onEvent"/> for each one it can parse,
+    /// (msg 291), and invokes <paramref name="onEvent"/> for each one it can parse,
     /// until cancelled or the connection drops. Unlike motion, no opt-in is needed.
     /// </summary>
     Task WatchStatusAsync(Action<StatusPush> onEvent, CancellationToken ct);
@@ -85,7 +85,7 @@ public interface IBcCamera : IAsyncDisposable
     /// Sends one control message and awaits the camera's reply on the same message ID.
     /// Throws <see cref="CameraCommandException"/> when the camera answers with a
     /// non-200 response code. With <paramref name="tolerateNoReply"/> a missing reply
-    /// yields null instead of a timeout — some cameras simply don't acknowledge
+    /// yields null instead of a timeout: some cameras simply don't acknowledge
     /// accepted "set" commands.
     /// Callers must not issue concurrent commands with the same message ID.
     /// </summary>
@@ -99,8 +99,8 @@ public interface IBcCamera : IAsyncDisposable
 /// classification when it has one ("people", "vehicle", "dog_cat").
 /// External marks a push the CAMERA never sent: an outside system (the Home
 /// Assistant "Record" switch) commanding recording. External pushes bypass the
-/// per-camera event-type filter and capture schedule — they are explicit user
-/// intent, not a detection to be second-guessed — but still respect the master
+/// per-camera event-type filter and capture schedule, they are explicit user
+/// intent, not a detection to be second-guessed, but still respect the master
 /// events on/off switch.
 /// </summary>
 public sealed record MotionPush(string Status, IReadOnlyList<string> AiTypes, bool External = false)
@@ -115,7 +115,7 @@ public sealed record MotionPush(string Status, IReadOnlyList<string> AiTypes, bo
 public abstract record StatusPush;
 
 /// <summary>msg 464 NetInfo: connection type and Wi-Fi signal strength (RSSI, dBm).</summary>
-/// <summary>msg 464 NetInfo. <paramref name="SignalDbm"/> is null on a WIRED camera —
+/// <summary>msg 464 NetInfo. <paramref name="SignalDbm"/> is null on a WIRED camera:
 /// it still announces its link type, which is how a camera on a cable is told apart
 /// from one whose Wi-Fi reading simply hasn't arrived yet.</summary>
 public sealed record WifiSignalPush(string? NetType, int? SignalDbm) : StatusPush;

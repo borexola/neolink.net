@@ -8,7 +8,7 @@ namespace Neolink.Recording;
 /// <summary>Which tier a storage location serves.</summary>
 public enum StorageRole
 {
-    /// <summary>The bulk recordings volume — continuous footage, and the default for everything.</summary>
+    /// <summary>The bulk recordings volume: continuous footage, and the default for everything.</summary>
     Main,
     /// <summary>Optional fast tier holding event clips (SSD).</summary>
     Clips,
@@ -97,7 +97,7 @@ public sealed class StorageLocations
     /// <summary>The bulk/main recordings root (continuous footage; default for all).</summary>
     public string MainRoot => _main;
 
-    /// <summary>Where new event clips are written — the clips tier when set, else main.</summary>
+    /// <summary>Where new event clips are written: the clips tier when set, else main.</summary>
     public string ClipsRoot => _clips;
 
     /// <summary>The archive root, or null when archiving is off.</summary>
@@ -123,7 +123,7 @@ public sealed class StorageLocations
         }
     }
 
-    /// <summary>Configured-distinct tiers that report byte-identical capacity — a
+    /// <summary>Configured-distinct tiers that report byte-identical capacity: a
     /// strong hint they actually resolve to the SAME filesystem. The usual cause
     /// is a Docker bind mount that never attached to the intended drive (the drive
     /// wasn't mounted when the container started, or the container wasn't
@@ -136,13 +136,13 @@ public sealed class StorageLocations
             .Where(g => g.Count() > 1)
             .Select(g =>
                 $"{string.Join(" and ", g.Select(s => $"{s.Label} ({s.Path})"))} report identical " +
-                "capacity — they are probably on the SAME filesystem, not the separate drives you " +
+                "capacity: they are probably on the SAME filesystem, not the separate drives you " +
                 "configured. In Docker, recreate the container (docker compose up -d --force-recreate) " +
                 "and make sure the drives are mounted before Docker starts.");
 
     /// <summary>
     /// True when <paramref name="filePath"/>'s volume looks like the same
-    /// filesystem as a configured footage tier — the capacity-fingerprint
+    /// filesystem as a configured footage tier: the capacity-fingerprint
     /// heuristic of <see cref="SharedVolumeWarnings"/> (equal total size,
     /// near-equal free space; mount points and drive letters lie inside
     /// containers). Used to warn when the footage-encryption key file lives on
@@ -160,7 +160,7 @@ public sealed class StorageLocations
         if (probe is not { } p || p.Total == 0) return false;
         foreach (var s in Sample())
         {
-            // Free space drifts between the two probes on a busy disk — allow slack.
+            // Free space drifts between the two probes on a busy disk: allow slack.
             if (s.Online && s.TotalBytes == p.Total
                 && Math.Abs(s.FreeBytes - p.Free) < 256L << 20)
             {
@@ -204,7 +204,7 @@ public sealed class StorageLocations
     }
 
     /// <summary>Is there room to keep writing to the tier that backs this role?
-    /// Unknown/unreadable volumes are treated as writable (fail open — never block
+    /// Unknown/unreadable volumes are treated as writable (fail open, never block
     /// recording just because a stat call hiccuped).</summary>
     public bool HasRoom(StorageRole role)
     {

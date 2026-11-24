@@ -7,7 +7,7 @@ namespace Neolink.Streaming;
 
 /// <summary>
 /// Keeps one generic RTSP stream flowing into its hub: connect, pump, and on any
-/// failure back off and reconnect — the same contract CameraService gives
+/// failure back off and reconnect, the same contract CameraService gives
 /// Baichuan cameras. Online reflects whether the pull is currently established.
 /// </summary>
 public sealed class RtspCameraService
@@ -63,7 +63,7 @@ public sealed class RtspCameraService
             // clients pulling it directly are unaffected). Resuming reconnects.
             if (_suspended)
             {
-                Log.Info($"{_tag}: suspended — Neolink.NET will not view or record this camera until it is resumed");
+                Log.Info($"{_tag}: suspended: Neolink.NET will not view or record this camera until it is resumed");
                 try
                 {
                     while (_suspended && !ct.IsCancellationRequested)
@@ -71,7 +71,7 @@ public sealed class RtspCameraService
                 }
                 catch (OperationCanceledException) { return; }
                 if (ct.IsCancellationRequested) return;
-                Log.Info($"{_tag}: resumed — reconnecting");
+                Log.Info($"{_tag}: resumed: reconnecting");
                 backoff = TimeSpan.FromSeconds(1);
                 continue;
             }
@@ -93,7 +93,7 @@ public sealed class RtspCameraService
             }
             catch (OperationCanceledException) when (_suspended)
             {
-                // Interrupted by a user suspend — park at the top, no backoff, no noise.
+                // Interrupted by a user suspend: park at the top, no backoff, no noise.
                 continue;
             }
             catch (Exception ex)

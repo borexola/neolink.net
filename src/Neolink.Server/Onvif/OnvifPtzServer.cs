@@ -67,8 +67,8 @@ public sealed partial class OnvifPtzServer
         var host = NetUtil.DisplayHost(bind);
         var login = AnyLogin ? ", user and password: an RTSP user permitted on the camera" : "";
         Log.Info(_cameras.Count == 1
-            ? $"{_tag} on http://{host}:{port}/onvif/device_service — in Frigate: onvif host {host}, port {port}{login}"
-            : $"{_tag} on http://{host}:{port}/onvif/device_service for {string.Join(", ", _cameras.Select(c => c.Name))} — " +
+            ? $"{_tag} on http://{host}:{port}/onvif/device_service, in Frigate: onvif host {host}, port {port}{login}"
+            : $"{_tag} on http://{host}:{port}/onvif/device_service for {string.Join(", ", _cameras.Select(c => c.Name))}: " +
               $"in Frigate 0.18+: onvif host {host}, port {port}, profile: the camera's name{login}");
         foreach (var cam in _cameras) _ = cam.KeepReadingCapabilitiesAsync(ct);
         var slots = new SemaphoreSlim(MaxConnections);

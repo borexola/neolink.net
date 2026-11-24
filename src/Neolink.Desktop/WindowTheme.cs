@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 namespace Neolink.Desktop;
 
 /// <summary>
-/// Title-bar theming: Windows never darkens a title bar on its own — the app
+/// Title-bar theming: Windows never darkens a title bar on its own, the app
 /// must ask per window (DWMWA_USE_IMMERSIVE_DARK_MODE). Follows the system
 /// "choose your default app mode" setting, so a dark Windows gets dark chrome
 /// and a light Windows stays light, whatever the page inside looks like.
@@ -45,7 +45,7 @@ internal static class WindowTheme
     public static void Attach(Form form) =>
         form.HandleCreated += (_, _) => Apply(form);
 
-    /// <summary>WM_SETTINGCHANGE("ImmersiveColorSet") — the user flipped the
+    /// <summary>WM_SETTINGCHANGE("ImmersiveColorSet"): the user flipped the
     /// Windows theme while the app runs. Call from WndProc before base.</summary>
     public static void OnSettingChange(Form form, ref Message m)
     {

@@ -24,16 +24,16 @@ public sealed record WebStreamInfo(string Kind, string Path, IStreamHub Hub);
 /// <param name="ContinuousActive">Probe: is 24/7 footage being written right now? Null when the camera has no continuous recorder.</param>
 /// <param name="SupportsEvents">Whether this camera can produce detections at all. A
 /// Baichuan camera always can; a non-Reolink one can when its ONVIF event service
-/// answers, which is only known once it has — see <see cref="WebCameraInfo.EventsProbe"/>.</param>
+/// answers, which is only known once it has: see <see cref="WebCameraInfo.EventsProbe"/>.</param>
 /// <param name="Battery">Latest battery reading, or null (mains-powered / generic RTSP / unknown yet).</param>
-/// <param name="WifiSignal">Latest Wi-Fi RSSI pushed over Baichuan (dBm), or null — the only Wi-Fi source on cameras without the HTTP API.</param>
+/// <param name="WifiSignal">Latest Wi-Fi RSSI pushed over Baichuan (dBm), or null: the only Wi-Fi source on cameras without the HTTP API.</param>
 /// <param name="NetType">Link type the camera last announced over Baichuan ("wifi", "ethernet"), or null.</param>
 /// <param name="Asleep">Probe: is the camera intentionally disconnected so it can sleep (battery doze)?</param>
 /// <param name="SirenOn">Latest siren state the camera pushed, or null (no push yet / unsupported).</param>
 /// <param name="PrivacyOn">Latest privacy-mode state the camera pushed, or null (no push yet / unsupported).</param>
 /// <param name="Suspended">Probe: has the user suspended this camera in Neolink (no connection held)?</param>
 /// <param name="SetSuspended">Suspends/resumes the camera at runtime and persists it; null when unsupported.</param>
-/// <param name="ActiveSegment">Probe: the continuous segment being written right now (day, file, media seconds) — the recorder's in-memory truth for the day listing.</param>
+/// <param name="ActiveSegment">Probe: the continuous segment being written right now (day, file, media seconds), the recorder's in-memory truth for the day listing.</param>
 /// <param name="ContinuousEnabled">Probe: is 24/7 recording EFFECTIVELY on for this camera (the persisted setting minus the battery-sleep veto, not whether a segment is open right now)? Null when the camera has no continuous recorder.</param>
 /// <param name="SetContinuousEnabled">Turns 24/7 recording on/off at runtime and persists it (same setting as the web UI toggle); refuses ON for a battery camera that is allowed to sleep. Null when unsupported.</param>
 public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICameraControl Control,
@@ -45,7 +45,7 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     Func<(string Date, string File, double Seconds)?>? ActiveSegment = null,
     Func<bool>? ContinuousEnabled = null, Action<bool>? SetContinuousEnabled = null)
 {
-    /// <summary>The camera's event recorder when server-side event recording runs —
+    /// <summary>The camera's event recorder when server-side event recording runs:
     /// the shared entry point for on-demand clips (web UI button and HA switch).</summary>
     public EventRecorder? EventRecorder { get; set; }
 
@@ -60,12 +60,12 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     /// use this rather than the constructor flag.</summary>
     public bool EventsAvailableNow => EventsProbe?.Invoke() ?? SupportsEvents;
 
-    /// <summary>The configured network address (host, or host:port when non-default) —
+    /// <summary>The configured network address (host, or host:port when non-default),
     /// shown on the camera-settings identity strip. Null for generic RTSP cameras
     /// (their address lives in the stream URL) or when unknown.</summary>
     public string? Address { get; set; }
 
-    /// <summary>The address in use right now — differs from <see cref="Address"/> after the
+    /// <summary>The address in use right now: differs from <see cref="Address"/> after the
     /// camera was followed to a new IP. Null for cameras that have no network address.</summary>
     public Func<string?>? LiveAddress { get; init; }
 
@@ -81,7 +81,7 @@ public sealed record WebCameraInfo(string Name, List<WebStreamInfo> Streams, ICa
     public bool Udp { get; init; }
 
     /// <summary>Feeds an external wake hint to this camera's wake-capture scan (the
-    /// generic entry for POST /api/cameras/{name}/wake-hint — Home Assistant, a
+    /// generic entry for POST /api/cameras/{name}/wake-hint, Home Assistant, a
     /// router webhook, any external motion source). No-op unless the camera is a
     /// parked wake-capture battery camera; see CameraService.NotifyWakeHint.</summary>
     public Action<string>? WakeHint { get; init; }
@@ -116,7 +116,7 @@ public sealed class WebApiOptions
     public bool ArchiveAvailable { get; init; }
     /// <summary>Configured storage tiers and their capacity (feeds the monitor and the full-storage banners).</summary>
     public StorageLocations? Storage { get; init; }
-    /// <summary>Free-space trend per location — the "~N days until full" forecast on the monitor.</summary>
+    /// <summary>Free-space trend per location: the "~N days until full" forecast on the monitor.</summary>
     public StorageForecast? Forecast { get; init; }
     /// <summary>The server secret (key source/fingerprint reporting for admins).</summary>
     public Neolink.Notifications.SecretProtector? Secrets { get; init; }
@@ -129,14 +129,14 @@ public sealed class WebApiOptions
     public bool TalkEnabled { get; init; }
     /// <summary>Show the admin background-process strip in the web UI (ui.show_background_tasks).</summary>
     public bool ShowBackgroundTasks { get; init; } = true;
-    /// <summary>ui.language from the config file — the SEED for the default UI
+    /// <summary>ui.language from the config file: the SEED for the default UI
     /// language on a server whose state has none yet (a fresh provisioned deploy).
     /// Once anyone picks a language in the UI, the stored choice wins.</summary>
     public string? ConfigLanguage { get; init; }
     public required string Version { get; init; }
     public required string ConfigPath { get; init; }
     /// <summary>--demo: a public throwaway showroom. Suppresses the "secure this
-    /// server" first-run prompt — inviting every visitor to set an admin password
+    /// server" first-run prompt: inviting every visitor to set an admin password
     /// on a shared demo would be a trap, not security.</summary>
     public bool Demo { get; init; }
     public UpdateChecker? Updates { get; init; }
@@ -144,7 +144,7 @@ public sealed class WebApiOptions
     public SystemMonitor? Monitor { get; init; }
     /// <summary>Live viewers (RTSP and web), listed for admins on the monitor page.</summary>
     public ViewerRegistry Viewers { get; init; } = new();
-    /// <summary>Recent recording write-failure tracker — surfaced in /api/features
+    /// <summary>Recent recording write-failure tracker: surfaced in /api/features
     /// so the dashboard's browser alerts can fire on it.</summary>
     public Neolink.Recording.RecordingHealth? RecordingHealth { get; init; }
     /// <summary>Email-notification service (config store + test send); admin only.</summary>
@@ -160,7 +160,7 @@ public sealed class WebApiOptions
     /// <summary>The opt-in for correcting camera clocks from this server.</summary>
     public Neolink.Streaming.CameraClockStore? CameraClock { get; init; }
     /// <summary>Is this event's AI description queued or in flight right now?
-    /// (AiDescriber.IsPending — lets the UI say "describing…" instead of nothing.)</summary>
+    /// (AiDescriber.IsPending, lets the UI say "describing…" instead of nothing.)</summary>
     public Func<string, bool>? AiPending { get; init; }
     /// <summary>Captured server log lines for the UI's live log stream (admin only).</summary>
     public LogBuffer? Logs { get; init; }
@@ -181,31 +181,31 @@ public sealed class WebApiOptions
 
 /// <summary>
 /// HTTP/WebSocket API for web clients, optionally serving the Blazor web UI:
-///   GET /api/cameras                        — JSON list of cameras and their streams
-///   WS  /api/stream?path=...                — live fMP4 video (MSE-compatible)
-///   GET /api/cameras/{name}/capabilities    — discovered device info + feature flags
-///   GET /api/cameras/{name}/streaminfo      — encode profiles (resolution/fps/bitrate tables)
-///   GET/POST/PUT .../settings/stream        — current encode selection / change it (needs http_address, or ONVIF)
+///   GET /api/cameras, JSON list of cameras and their streams
+///   WS  /api/stream?path=... live fMP4 video (MSE-compatible)
+///   GET /api/cameras/{name}/capabilities, discovered device info + feature flags
+///   GET /api/cameras/{name}/streaminfo, encode profiles (resolution/fps/bitrate tables)
+///   GET/POST/PUT .../settings/stream, current encode selection / change it (needs http_address, or ONVIF)
 ///   GET/POST .../led /pir /zoomfocus /floodlight /siren /privacy /whiteled;
-///   POST .../ptz /reboot; GET .../battery   — camera control
-///   GET .../httpfeatures — combined HTTP-API extras (picture/volume/Wi-Fi/presets/
+///   POST .../ptz /reboot; GET .../battery, camera control
+///   GET .../httpfeatures, combined HTTP-API extras (picture/volume/Wi-Fi/presets/
 ///   quick replies/auto-track/SD); POST .../image /volume /ptzpreset /quickreply /autotrack
-///   GET/POST .../detectionzone[?type=]      — the camera's watched/ignored cell grid
-///   GET /api/cameras/{name}/snapshot.jpg     — a current still (server-cached; ?maxAge= seconds)
-///   GET /api/events[?camera=&amp;reviewed=&amp;limit=] — recorded detection events (when enabled)
-///   GET /api/events/{id}[/clip /thumb /preview] — one event / its artifacts; POST .../review to (un)dismiss
-///   (footage URLs — snapshot + event clip/thumb/preview — also take RTSP Basic credentials)
-///   POST /api/events/delete {ids[],estimate} — bulk delete events + files (admin; ?estimate summarizes)
-///   GET/POST /api/cameras/{name}/recording  — per-camera recording switches + event-type filter
-///   POST /api/cameras/{name}/record         — start/stop an on-demand clip (one clip, auto-capped)
-///   POST /api/cameras/{name}/wake-hint      — external "the camera is up for an event" signal (battery cams)
-///   GET /api/recordings/{camera}[/{date}[/{file}]] — browse/play continuous footage
-///   GET .../{date}/export?from=&to=[&format=mp4][&estimate=1] — a range (≤ one day) as one MP4 or a zip
+///   GET/POST .../detectionzone[?type=], the camera's watched/ignored cell grid
+///   GET /api/cameras/{name}/snapshot.jpg, a current still (server-cached; ?maxAge= seconds)
+///   GET /api/events[?camera=&amp;reviewed=&amp;limit=], recorded detection events (when enabled)
+///   GET /api/events/{id}[/clip /thumb /preview], one event / its artifacts; POST .../review to (un)dismiss
+///   (footage URLs, snapshot + event clip/thumb/preview, also take RTSP Basic credentials)
+///   POST /api/events/delete {ids[],estimate}: bulk delete events + files (admin; ?estimate summarizes)
+///   GET/POST /api/cameras/{name}/recording, per-camera recording switches + event-type filter
+///   POST /api/cameras/{name}/record, start/stop an on-demand clip (one clip, auto-capped)
+///   POST /api/cameras/{name}/wake-hint: external "the camera is up for an event" signal (battery cams)
+///   GET /api/recordings/{camera}[/{date}[/{file}]], browse/play continuous footage
+///   GET .../{date}/export?from=&to=[&format=mp4][&estimate=1], a range (≤ one day) as one MP4 or a zip
 ///   /api/auth/* (status/setup/login/reset-admin), /api/users (admin CRUD),
-///   GET/PUT /api/me/settings[/{page}] — web-UI accounts; once any account exists, every
+///   GET/PUT /api/me/settings[/{page}]: web-UI accounts; once any account exists, every
 ///   other /api route requires a Bearer session token (or ?token= where headers
 ///   can't go: media elements and the stream WebSocket)
-///   /                                       — web UI (when enabled in the config)
+///   /, web UI (when enabled in the config)
 /// Mutating endpoints require HTTP Basic auth when users are configured (same
 /// credentials and per-camera permissions as RTSP).
 /// </summary>
@@ -342,8 +342,8 @@ public static class WebApi
     private sealed record SecuritySettingsRequest(bool? Enabled, int? MaxAttempts, int? LockMinutes);
 
     /// <summary>
-    /// Serves a recording segment or event clip. Old-format (fragmented) files —
-    /// pre-upgrade archives and the segment currently being recorded — are
+    /// Serves a recording segment or event clip. Old-format (fragmented) files,
+    /// pre-upgrade archives and the segment currently being recorded, are
     /// presented through <see cref="VirtualMp4"/> with a classic seek index
     /// synthesized in memory, so jumping around them costs a couple of range
     /// requests instead of a crawl over thousands of per-frame fragment headers.
@@ -351,12 +351,12 @@ public static class WebApi
     /// file serving, the pre-existing behavior.
     /// </summary>
     /// <summary>Event artifacts never change once the event has closed, so the
-    /// browser may cache them hard — without this every events-page visit
+    /// browser may cache them hard, without this every events-page visit
     /// re-downloads every visible thumbnail (brutal on NAS-backed storage).</summary>
     private static void SetArtifactCaching(HttpContext ctx, Neolink.Recording.EventRecord? rec)
     {
         // An ongoing event's artifacts change constantly under a constant URL
-        // (v=live) — never let a browser cache a partial clip against it.
+        // (v=live), never let a browser cache a partial clip against it.
         ctx.Response.Headers.CacheControl = rec is { Ongoing: false }
             ? "private, max-age=31536000, immutable"
             : "no-store";
@@ -366,7 +366,7 @@ public static class WebApi
     {
         // Home Assistant's ingress proxy mishandles ranged media (field report:
         // finished clips decode-fail mid-play through ingress while the same
-        // bytes download and play everywhere) — so behind ingress a clip is one
+        // bytes download and play everywhere), so behind ingress a clip is one
         // plain 200 stream the proxy cannot mis-stitch. Direct port, Docker and
         // reverse-proxy access keep full range support.
         bool ingress = ctx.Request.Headers.ContainsKey("X-Ingress-Path");
@@ -468,7 +468,7 @@ public static class WebApi
             // The UI's camera-list fetches run server-side (Blazor Server circuits).
             // 100s is a CAP, not the working budget: call sites bound themselves
             // with per-request tokens (settings 30s, SD-card file search 95s).
-            // The old blanket 15s sat BELOW legitimate handler times — an SD file
+            // The old blanket 15s sat BELOW legitimate handler times: an SD file
             // search or a slow feature sweep got cancelled client-side and the UI
             // showed "Cannot reach http://127.0.0.1:8655" for its own server.
             // One client per circuit over a shared pool, so each carries its own browser's X-Forwarded-For.
@@ -480,7 +480,7 @@ public static class WebApi
                 ctx => LoginGuard.ClientAddress(ctx.Connection.RemoteIpAddress, ctx.Request.Headers["X-Forwarded-For"])));
             // The UI language: one live singleton for the server default (so
             // changing it never needs a restart) and one per-circuit translator,
-            // which is the granularity the setting actually has — one tab of one
+            // which is the granularity the setting actually has, one tab of one
             // signed-in user.
             builder.Services.AddSingleton(serverLanguage);
             builder.Services.AddScoped<Neolink.WebClient.Localization.Translator>();
@@ -529,8 +529,8 @@ public static class WebApi
 
         // Once any account exists, every /api call (except the auth handshake
         // itself) requires a valid session. The Blazor UI shell stays public so
-        // the login screen can render. Exception: FOOTAGE urls — snapshots and an
-        // event's media (thumbnail, clip, preview) — may instead carry RTSP Basic
+        // the login screen can render. Exception: FOOTAGE urls, snapshots and an
+        // event's media (thumbnail, clip, preview), may instead carry RTSP Basic
         // credentials: they serve what the rtsp:// stream URLs already serve, to
         // the same kind of client (HA generic camera, notification templates,
         // scripts) that already holds those credentials; the endpoints validate
@@ -614,11 +614,11 @@ public static class WebApi
         app.MapPost("/api/auth/setup", (CredentialsRequest req, HttpContext ctx) =>
         {
             // On a shared demo, whoever creates the admin account owns the server
-            // for everyone — and unlocks the whole AdminOnly surface (config,
+            // for everyone, and unlocks the whole AdminOnly surface (config,
             // camera test's outbound connects, SMTP). Keeping accounts impossible
             // keeps that entire surface locked by its existing gate.
             if (o.Demo)
-                return Results.Json(new { error = "this is a shared demo — accounts are disabled" }, statusCode: 403);
+                return Results.Json(new { error = "this is a shared demo: accounts are disabled" }, statusCode: 403);
             if (userStore.Enabled)
                 return Results.Json(new { error = "already set up" }, statusCode: 409);
             // Until the admin exists this is the one open door: a server exposed
@@ -644,7 +644,7 @@ public static class WebApi
             try
             {
                 // The language chosen on the first-run form is both the admin's own
-                // and the server default — it is the only language question a fresh
+                // and the server default: it is the only language question a fresh
                 // install asks, so it has to answer for the sign-in screen too.
                 var language = Neolink.WebClient.Localization.Lang.IsSupported(req.Language)
                     ? Neolink.WebClient.Localization.Lang.Normalize(req.Language)
@@ -672,7 +672,7 @@ public static class WebApi
 
         // The list of languages needs no endpoint: the UI renders in this very
         // process, so it reads Lang.All directly. What it cannot know on its own
-        // is who picked what — that rides on /api/auth/status above.
+        // is who picked what, that rides on /api/auth/status above.
 
         // The signed-in user's own language. Null clears it, i.e. follow the default.
         app.MapPut("/api/me/language", (LanguageRequest req, HttpContext ctx) =>
@@ -691,7 +691,7 @@ public static class WebApi
         });
 
         // The server default, for everyone who has not chosen: admin only, and
-        // live — the singleton every new render reads is updated in the same
+        // live, the singleton every new render reads is updated in the same
         // breath, so nothing has to be restarted for it to take hold.
         app.MapPut("/api/admin/language", (LanguageRequest req, HttpContext ctx) =>
         {
@@ -719,7 +719,7 @@ public static class WebApi
             {
                 ctx.Response.Headers.RetryAfter = retryAfter.ToString();
                 await Task.Delay(Random.Shared.Next(250, 500));
-                return Results.Json(new { error = "too many failed sign-ins — try again later" }, statusCode: 429);
+                return Results.Json(new { error = "too many failed sign-ins: try again later" }, statusCode: 429);
             }
             var user = req.Username == null || req.Password == null
                 ? null
@@ -807,7 +807,7 @@ public static class WebApi
             {
                 ctx.Response.Headers.RetryAfter = retryAfter.ToString();
                 await Task.Delay(Random.Shared.Next(250, 500));
-                return Results.Json(new { error = "too many failed sign-ins — try again later" }, statusCode: 429);
+                return Results.Json(new { error = "too many failed sign-ins: try again later" }, statusCode: 429);
             }
             if (string.IsNullOrEmpty(req.Password))
             {
@@ -928,7 +928,7 @@ public static class WebApi
             {
                 // Which encryption key the RUNNING server uses (source + one-way
                 // fingerprint, never the key), and whether the key file sits on
-                // the same disk as the footage it protects — the admin must be
+                // the same disk as the footage it protects: the admin must be
                 // able to see both without shell access.
                 object? enc = null;
                 if (o.Secrets is { } sec)
@@ -966,7 +966,7 @@ public static class WebApi
                     throw new FormatException($"web bind must be an IP address, localhost, * or +, not \"{wb}\"");
                 if (req.BindPort is { } bp && bp is < 1 or > 65535)
                     throw new FormatException("RTSP port must be 1-65535");
-                // 0 legally disables the web API — but never from the web UI,
+                // 0 legally disables the web API, but never from the web UI,
                 // which would saw off the branch it sits on.
                 if (req.WebPort is { } wp && wp is < 1 or > 65535)
                     throw new FormatException("web port must be 1-65535 (disable the web API in the file, not from the UI it serves)");
@@ -1050,7 +1050,7 @@ public static class WebApi
                         if (r.MaxSegmentSizeMb != null) ConfigEditor.Set(rec, "max_segment_size_mb", r.MaxSegmentSizeMb);
                         if (r.ContinuousRetentionDays != null)
                             ConfigEditor.Set(rec, "continuous_retention_days", r.ContinuousRetentionDays);
-                        // Optional tiers: blank means "no such tier" — drop the key
+                        // Optional tiers: blank means "no such tier": drop the key
                         // rather than storing an empty string.
                         if (r.ClipsPath != null)
                             ConfigEditor.Set(rec, "clips_path", r.ClipsPath.Length == 0 ? null : r.ClipsPath);
@@ -1063,14 +1063,14 @@ public static class WebApi
 
                     if (req.Mqtt is { } m)
                     {
-                        // Never conjure a broker-less mqtt section — but a broker
+                        // Never conjure a broker-less mqtt section, but a broker
                         // arriving IS how MQTT gets enabled from the UI.
                         var mq = ConfigEditor.TryGetSection(root, "mqtt");
                         if (mq == null)
                         {
                             if (string.IsNullOrWhiteSpace(m.Broker))
                                 throw new FormatException(
-                                    "mqtt is not configured — enter a broker to enable it");
+                                    "mqtt is not configured: enter a broker to enable it");
                             mq = ConfigEditor.Section(root, "mqtt");
                         }
                         if (m.Broker != null) ConfigEditor.Set(mq, "broker", m.Broker);
@@ -1093,7 +1093,7 @@ public static class WebApi
                     if (req.WakeHints is { } w)
                         ConfigEditor.ApplyWakeHintEdit(root, w.SyslogPort, w.PushPorts, w.Bind, w.TrustHours);
                 });
-                Log.Warn($"config.json updated via the web UI by '{SessionName(ctx)}' — restart to apply");
+                Log.Warn($"config.json updated via the web UI by '{SessionName(ctx)}': restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
             }
             catch (FormatException ex)
@@ -1232,7 +1232,7 @@ public static class WebApi
                     }, statusCode: 400);
                 if (req.AlwaysOn is { Length: > 0 } ao && ao is not ("auto" or "true" or "false"))
                     return Results.Json(new { error = "always_on must be auto, true or false" }, statusCode: 400);
-                // Both UDP options are keyed on the camera's UID — without one the
+                // Both UDP options are keyed on the camera's UID, without one the
                 // discovery probe has nothing to address, so it would fail at runtime.
                 bool wantsUdp = req.Udp == true || req.UdpProbe == true;
                 if (wantsUdp && string.IsNullOrWhiteSpace(req.Uid))
@@ -1302,7 +1302,7 @@ public static class WebApi
                     if (!isRtsp)
                     {
                         // Blank address only survives validation for a UID-only UDP
-                        // camera — there it must actually REMOVE the key.
+                        // camera: there it must actually REMOVE the key.
                         ConfigEditor.Set(cam, "address",
                             string.IsNullOrWhiteSpace(req.Address) ? null : req.Address.Trim());
                         ConfigEditor.Set(cam, "username", req.Username!.Trim());
@@ -1400,7 +1400,7 @@ public static class WebApi
                     o.CameraState?.Rename(was, name);
                 }
                 Log.Warn($"config.json cameras updated via the web UI by '{SessionName(ctx)}' " +
-                         $"({(req.OriginalName == null ? "added" : "edited")} \"{name}\") — restart to apply");
+                         $"({(req.OriginalName == null ? "added" : "edited")} \"{name}\"): restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
             }
             catch (FormatException ex)
@@ -1469,7 +1469,7 @@ public static class WebApi
             return Results.Json(new { ok = true, entries = change.Entries });
         });
 
-        // Auto discover: what the dialog starts with — the server's own /24s.
+        // Auto discover: what the dialog starts with, the server's own /24s.
         app.MapGet("/api/admin/discover", (HttpContext ctx) =>
         {
             if (AdminOnly(ctx) is { } denied) return denied;
@@ -1480,7 +1480,7 @@ public static class WebApi
             return Results.Json(new { subnets });
         });
 
-        // Auto discover: plug-in cameras only — battery models answer nothing but their UID.
+        // Auto discover: plug-in cameras only, battery models answer nothing but their UID.
         // Sweeps the ranges in the request (the local /24s when there are none) and the
         // /24 of every configured camera, so a camera VLAN this host is not on is covered.
         app.MapPost("/api/admin/discover", async (DiscoverRequest? req, HttpContext ctx) =>
@@ -1553,7 +1553,7 @@ public static class WebApi
                 // Account camera lists first (they gate access), then stored zones and wake-hint trust.
                 userStore.RenameCamera(name, null);
                 o.CameraState?.Forget(name);
-                Log.Warn($"config.json camera \"{name}\" deleted via the web UI by '{SessionName(ctx)}' — restart to apply");
+                Log.Warn($"config.json camera \"{name}\" deleted via the web UI by '{SessionName(ctx)}': restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
             }
             catch (FormatException ex)
@@ -1574,7 +1574,7 @@ public static class WebApi
             try
             {
                 ConfigEditor.Apply(o.ConfigPath, root => mutate(ConfigEditor.RtspUsers(root)));
-                Log.Warn($"config.json RTSP user {what} via the web UI by '{SessionName(ctx)}' — restart to apply");
+                Log.Warn($"config.json RTSP user {what} via the web UI by '{SessionName(ctx)}': restart to apply");
                 return Results.Json(new { ok = true, requiresRestart = true });
             }
             catch (FormatException ex)
@@ -1654,7 +1654,7 @@ public static class WebApi
             if (listedOn.Count > 0)
                 return Results.Json(new
                 {
-                    error = $"\"{name}\" is in permitted_users of {string.Join(", ", listedOn)} — remove it there first",
+                    error = $"\"{name}\" is in permitted_users of {string.Join(", ", listedOn)}: remove it there first",
                 }, statusCode: 400);
             return EditRtspUsers(ctx, $"\"{name}\" deleted", list =>
                 list.Remove(ConfigEditor.FindRtspUser(list, name)
@@ -1682,15 +1682,15 @@ public static class WebApi
                 var info = await probe.TryGetDeviceInfoAsync(ct).ConfigureAwait(false);
                 var name = info == null ? "" : string.Join(" ", new[] { info.Manufacturer, info.Model }
                     .Where(s => !string.IsNullOrWhiteSpace(s)));
-                var who = name.Length > 0 ? $" — {name}" : "";
+                var who = name.Length > 0 ? $": {name}" : "";
                 // Many firmwares answer device information without a login; the
                 // first call that needed one (the video source) is what found out.
                 if (probe.AuthRejected)
                     return $"ONVIF answered{who} but rejected the login, so this camera will stream and record " +
-                           "but show no settings — check the ONVIF user and password (a full URL in the ONVIF " +
+                           "but show no settings: check the ONVIF user and password (a full URL in the ONVIF " +
                            "address above can carry its own, http://user:pass@host/onvif/device_service).";
                 if (info == null)
-                    return "ONVIF did not answer, so this camera will stream and record but show no settings — " +
+                    return "ONVIF did not answer, so this camera will stream and record but show no settings: " +
                            "enable ONVIF on the camera, or set its ONVIF address above." +
                            (probe.LastError is { Length: > 0 } why ? $" ({why})" : "");
                 return $"ONVIF answered{who}, so its settings will be editable here.";
@@ -1704,7 +1704,7 @@ public static class WebApi
                     stored = NeolinkConfig.Load(o.ConfigPath).Cameras
                         .FirstOrDefault(c => string.Equals(c.Name, storedName, StringComparison.OrdinalIgnoreCase));
                 }
-                catch { /* config unreadable — test with what was sent */ }
+                catch { /* config unreadable: test with what was sent */ }
             }
 
             // UDP transport: these models (Argus family) never listen on TCP, so
@@ -1737,21 +1737,21 @@ public static class WebApi
                     int n = await stream.ReadAsync(buf, cts.Token);
                     var reply = System.Text.Encoding.ASCII.GetString(buf, 0, n);
                     if (!reply.StartsWith("RTSP/", StringComparison.Ordinal))
-                        return Results.Json(new { ok = false, message = "the host answered, but not with RTSP — check the URL and port" });
-                    // The stream is what matters, so this never fails the test — but
+                        return Results.Json(new { ok = false, message = "the host answered, but not with RTSP: check the URL and port" });
+                    // The stream is what matters, so this never fails the test, but
                     // ONVIF is where every setting for this camera comes from, and
                     // saying so here is far cheaper than hunting an empty panel later.
                     // On its OWN budget. The outer 12s belongs to the RTSP check,
                     // which has already passed by now: letting the ONVIF probe spend
                     // what is left of it turned a perfectly good camera into "timed
-                    // out — is the address reachable?".
+                    // out: is the address reachable?".
                     using var onvifCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
                     onvifCts.CancelAfter(TimeSpan.FromSeconds(8));
                     string onvifNote;
                     try
                     {
                         // Null (not sent) = the stored address; "" = none, derive it
-                        // from the stream host — the same reading Save gives it.
+                        // from the stream host: the same reading Save gives it.
                         onvifNote = await TestOnvifAsync(
                             req.OnvifAddress == null ? stored?.OnvifAddress
                                 : req.OnvifAddress.Length == 0 ? null
@@ -1760,7 +1760,7 @@ public static class WebApi
                     }
                     catch (OperationCanceledException) when (!ctx.RequestAborted.IsCancellationRequested)
                     {
-                        onvifNote = "ONVIF did not answer in time, so this camera may show no settings — " +
+                        onvifNote = "ONVIF did not answer in time, so this camera may show no settings: " +
                                     "enable ONVIF on the camera, or set its ONVIF address above.";
                     }
                     return Results.Json(new
@@ -1820,7 +1820,7 @@ public static class WebApi
                 {
                     ok = true,
                     message = (udp ? "Connected over UDP and logged in" : "Connected and logged in") +
-                        (di is { Width: > 0 } ? $" — the camera reports {di.Width}x{di.Height}" : "") +
+                        (di is { Width: > 0 } ? $": the camera reports {di.Width}x{di.Height}" : "") +
                         (di is { IsNvr: false, VideoChannels: > 0 } && channel >= channels
                             ? $". It reports {channels} channel(s), numbered from 0, so channel {channel} may not exist"
                             : lenses > 1
@@ -1848,7 +1848,7 @@ public static class WebApi
                     message = udp
                         ? "The camera answered over UDP but the login timed out. It may have gone back to sleep: "
                           + "wake it and test again."
-                        : "timed out — is the address reachable from this server?",
+                        : "timed out: is the address reachable from this server?",
                 });
             }
             catch (Exception ex)
@@ -1869,11 +1869,11 @@ public static class WebApi
             return Results.Json(new
             {
                 ok = true,
-                note = "shutting down — the restart policy (docker / systemd / the HA add-on's Watchdog) brings the service back",
+                note = "shutting down: the restart policy (docker / systemd / the HA add-on's Watchdog) brings the service back",
             });
         });
 
-        // Email notifications (admin only). The SMTP password is never returned —
+        // Email notifications (admin only). The SMTP password is never returned:
         // GET reports only whether one is stored; PUT takes it write-only.
         if (o.Notifier is { } notifier)
         {
@@ -1928,7 +1928,7 @@ public static class WebApi
                     _ => fallback,
                 };
 
-            // Free-text fields are bounded here — notifications.json is echoed
+            // Free-text fields are bounded here: notifications.json is echoed
             // on every GET and nothing legitimate approaches these sizes.
             static string Cap(string v, int max) => v.Length > max ? v[..max] : v;
 
@@ -2018,7 +2018,7 @@ public static class WebApi
             });
         }
 
-        // AI event descriptions (admin only) — same contract as notifications:
+        // AI event descriptions (admin only): same contract as notifications:
         // the API key is never returned, GET reports only whether one is stored.
         if (o.Ai is { } aiStore)
         {
@@ -2111,7 +2111,7 @@ public static class WebApi
             {
                 if (AdminOnly(ctx) is { } denied) return denied;
                 // Test with the posted (possibly unsaved) settings so the user can
-                // verify before saving; key null = use the stored one — whichever
+                // verify before saving; key null = use the stored one: whichever
                 // key belongs to the backend being tested.
                 var mergedForTest = MergedAi(req);
                 var testKey = mergedForTest.UsesAnthropic
@@ -2149,7 +2149,7 @@ public static class WebApi
                     // Detections come from the event recorder; without one there is
                     // nothing for emergency mode to forward.
                     detectionsAvailable = events != null,
-                    // Cameras whose siren/light could not be set — an armed siren
+                    // Cameras whose siren/light could not be set: an armed siren
                     // that never sounded must not read as success.
                     issues = emergency.Issues.Select(i => new { camera = i.Camera, reason = i.Reason }).ToList(),
                     overrides = e.Cameras.ToDictionary(kv => kv.Key, kv => new
@@ -2274,8 +2274,8 @@ public static class WebApi
 
             // Deliberately NOT under /api: the page loads these with <script> and the
             // runtime fetches its own .wasm, neither of which can carry a session
-            // token. They are fixed public files — the pinned ONNX Runtime build and
-            // the published model — so they hold nothing a session would protect.
+            // token. They are fixed public files, the pinned ONNX Runtime build and
+            // the published model, so they hold nothing a session would protect.
             app.MapGet("/detect/asset/{file}", (string file, HttpContext ctx) =>
             {
                 if (detect.Assets.Locate(file) is not { } path)
@@ -2322,7 +2322,7 @@ public static class WebApi
         });
 
         // Per-page variant: each page keeps its own blob (e.g. "timeline"), so
-        // pages never read-modify-write — and thus never clobber — each other.
+        // pages never read-modify-write, and thus never clobber, each other.
         static bool ValidPageKey(string page) =>
             page.Length is > 0 and <= 32 && page.All(c => char.IsAsciiLetterLower(c) || c == '-');
 
@@ -2353,7 +2353,7 @@ public static class WebApi
         });
 
         // Storage shape cached briefly: every open dashboard polls features every
-        // 10 s, and a fresh sample stats every tier's volume — a network round
+        // 10 s, and a fresh sample stats every tier's volume, a network round
         // trip per tier on NAS mounts. Capacity moves far slower than that.
         // Locked because concurrent polls race the stamp, and a torn DateTime
         // read (32-bit hosts) could otherwise wedge the cache stale.
@@ -2365,7 +2365,7 @@ public static class WebApi
         app.MapGet("/api/features", () =>
         {
             // Every page load reads this endpoint, so it doubles as the "check
-            // for updates now" moment (throttled inside — see UpdateChecker.Nudge).
+            // for updates now" moment (throttled inside, see UpdateChecker.Nudge).
             o.Updates?.Nudge();
             object? storage;
             lock (storageShapeGate)
@@ -2388,7 +2388,7 @@ public static class WebApi
             version = o.Version,
             latestVersion = o.Updates?.Latest,
             repoUrl = UpdateChecker.RepoUrl,
-            // Footage encryption active on this server — the UI swaps the brand
+            // Footage encryption active on this server: the UI swaps the brand
             // dot for a padlock so anyone signed in can see recordings are
             // protected at rest.
             encrypted = Recording.FootageVault.EncryptingNew,
@@ -2406,7 +2406,7 @@ public static class WebApi
         });
 
         // Background jobs the admin should know about (footage archiving, ...),
-        // with progress — feeds the web UI's background-process strip. Admin only
+        // with progress: feeds the web UI's background-process strip. Admin only
         // once accounts exist; open on a no-auth server, like the other admin
         // surfaces there.
         app.MapGet("/api/background", (HttpContext ctx) =>
@@ -2452,13 +2452,13 @@ public static class WebApi
         {
             // How this camera is attached to the network, for the sidebar icon:
             // { kind: "wifi", level 0-4, label } or { kind: "wired" }. Null only when
-            // the camera has said nothing either way — a blank space is honest there,
+            // the camera has said nothing either way: a blank space is honest there,
             // but a Wi-Fi-capable camera sitting on a cable must NOT read as "no
             // signal", which is what showing nothing implied before.
             //
             // The Wi-Fi reading is the actively refreshed value (HTTP API, else the
-            // Baichuan query), with the camera's unsolicited NetInfo push as fallback
-            // — one order for every consumer, so the sidebar and the camera page
+            // Baichuan query), with the camera's unsolicited NetInfo push as fallback:
+            // one order for every consumer, so the sidebar and the camera page
             // cannot disagree. Suppressed while the camera is unreachable: a reading
             // from a camera that hasn't answered in hours is worse than none. A
             // dozing battery camera keeps its last one (asleep on purpose, not lost).
@@ -2483,19 +2483,19 @@ public static class WebApi
             {
                 name = c.Name,
                 online = c.Control.Online,
-                // The configured host (for the settings identity strip) — already
+                // The configured host (for the settings identity strip): already
                 // known to anyone who can reach this API; not sensitive on a LAN.
                 address = c.Address,
                 // Set only after the camera was followed to a new IP (config.json still says `address`).
                 currentAddress = c.MovedTo,
-                // Baichuan-over-UDP transport (beta) — the UI badges these cameras.
+                // Baichuan-over-UDP transport (beta): the UI badges these cameras.
                 udp = c.Udp,
                 // 24/7 footage being written right now (drives the UI's REC badge)
                 recording = c.ContinuousActive?.Invoke() ?? false,
                 // Battery cameras: intentionally disconnected (dozing) vs offline,
                 // plus the latest battery reading when the camera reports one.
                 asleep = c.Asleep?.Invoke() ?? false,
-                // Camera dark on purpose (privacy mode) — set from this UI OR the
+                // Camera dark on purpose (privacy mode): set from this UI OR the
                 // Reolink app; the pushes keep it current either way.
                 privacy = c.PrivacyOn?.Invoke() ?? false,
                 // Suspended in Neolink (beta): no connection held, so it can't be
@@ -2506,13 +2506,13 @@ public static class WebApi
                 // tile streams and offers a keep-awake override, because every
                 // second of video costs this camera charge.
                 sleeps = c.SleepFriendly?.Invoke() ?? false,
-                // Network link: { kind, level, label } — see LinkJson above.
+                // Network link: { kind, level, label }, see LinkJson above.
                 wifiSignal = LinkJson(c),
                 battery = c.Battery?.Invoke() is { } b
                     ? new { percent = b.Percent, charging = b.Charging }
                     : null,
                 // On-demand clip capture (record button / HA switch). Null when the
-                // camera has no event recorder or its events switch is off — the
+                // camera has no event recorder or its events switch is off: the
                 // UI hides the button entirely in that case.
                 onDemand = c.EventRecorder is { } rec && rec.OnDemandAvailable
                     ? new
@@ -2569,14 +2569,14 @@ public static class WebApi
             if (mutating && CheckAuth(ctx, cam) is { } denied)
                 return denied;
             if (adminReason != null && userStore.Enabled && !IsAdmin(ctx))
-                return Results.Json(new { error = $"admin only — {adminReason}" }, statusCode: 403);
+                return Results.Json(new { error = $"admin only: {adminReason}" }, statusCode: 403);
             try
             {
                 return await action(cam.Control, ctx.RequestAborted);
             }
             catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
             {
-                // The client gave up (panel closed, page navigated, HTTP timeout) —
+                // The client gave up (panel closed, page navigated, HTTP timeout):
                 // nobody is listening for this response. Swallowing it here keeps
                 // an aborted request from surfacing as an unhandled exception.
                 return Results.StatusCode(499); // nginx's "client closed request"
@@ -2608,7 +2608,7 @@ public static class WebApi
                 // Also logged: HTTP-API rejections (wrong payload shape, unsupported
                 // command) must be diagnosable from the server log, not only from
                 // the panel's transient error banner.
-                Log.Warn($"{name}: camera HTTP API rejected the request — {ex.Message}");
+                Log.Warn($"{name}: camera HTTP API rejected the request: {ex.Message}");
                 return Results.Json(new { error = ex.Message }, statusCode: 502);
             }
             catch (TimeoutException)
@@ -2623,7 +2623,7 @@ public static class WebApi
 
         // Once a web-UI/API change has actually applied to a camera setting, nudge the
         // Home Assistant bridge to re-publish that camera's state right away
-        // (fire-and-forget) — otherwise HA only catches up on its ~20s periodic
+        // (fire-and-forget), otherwise HA only catches up on its ~20s periodic
         // refresh, and an automation could act on a stale switch in the meantime.
         // No-op when MQTT isn't configured; a failed publish heals on the next refresh.
         void NudgeHa(string cameraName) => _ = o.OnCameraChanged?.Invoke(cameraName);
@@ -2727,7 +2727,7 @@ public static class WebApi
                         privacy = caps.Features.Privacy,
                         streamSettings = control.CanSetStreamSettings,
                         // Picture settings reachable over ONVIF when the camera has no
-                        // Reolink HTTP CGI API — lets the panel fetch httpfeatures even
+                        // Reolink HTTP CGI API: lets the panel fetch httpfeatures even
                         // without http_address, so the sliders show for a Lumus.
                         imaging = control.HasImagingFallback,
                         // A non-Reolink camera reboots over ONVIF, or not at all.
@@ -2781,7 +2781,7 @@ public static class WebApi
         app.MapPost("/api/cameras/{name}/settings/stream", SetStreamSettings);
         app.MapPut("/api/cameras/{name}/settings/stream", SetStreamSettings);
 
-        // The CURRENT encode selection per stream (what the Reolink app shows) —
+        // The CURRENT encode selection per stream (what the Reolink app shows):
         // lets the UI preselect the real fps/bitrate, not the table defaults.
         app.MapGet("/api/cameras/{name}/settings/stream", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
@@ -2814,7 +2814,7 @@ public static class WebApi
             }));
 
         // A current still image, straight from the camera's own JPEG snapshot
-        // command — the NVR primitive notification thumbnails and dashboards poll.
+        // command: the NVR primitive notification thumbnails and dashboards poll.
         // Served from a short per-camera cache (default 5 s, ?maxAge= overrides)
         // with a single-flight gate, so a poll storm reaches the camera once; a
         // sleeping battery camera is NEVER woken for a poll (control commands
@@ -2832,7 +2832,7 @@ public static class WebApi
         var lastGrab = new System.Collections.Concurrent.ConcurrentDictionary<
             string, DateTime>(StringComparer.OrdinalIgnoreCase);
         // Snapshot auth: a web-UI session qualifies (the middleware validated it),
-        // and so do the RTSP user credentials over HTTP Basic — the snapshot is
+        // and so do the RTSP user credentials over HTTP Basic, the snapshot is
         // the still-image twin of the rtsp:// stream URLs: same users, same
         // per-camera permissions, so a client that already plays
         // rtsp://user:pass@host/cam can fetch http://user:pass@host/api/cameras/cam/snapshot.jpg.
@@ -2863,7 +2863,7 @@ public static class WebApi
         // The stream to take a still from when the camera has no snapshot command:
         // the sub-stream first (a small frame decodes in a fraction of the time),
         // then whatever else is carrying video. A hub is only usable if it is
-        // holding a group of pictures RIGHT NOW — VideoReady stays true after a
+        // holding a group of pictures RIGHT NOW: VideoReady stays true after a
         // source stops, and picking such a hub would mean waiting out the timeout
         // for a keyframe that is never coming.
         static IStreamHub? StillHub(WebCameraInfo cam) =>
@@ -2937,7 +2937,7 @@ public static class WebApi
                 catch (CameraOfflineException)
                 {
                     unavailable = cam.Asleep?.Invoke() == true
-                        ? "camera is asleep (battery) — a snapshot poll does not wake it"
+                        ? "camera is asleep (battery): a snapshot poll does not wake it"
                         : "camera offline (reconnecting)";
                 }
                 catch (TimeoutException) { unavailable = "camera did not reply"; }
@@ -2951,7 +2951,7 @@ public static class WebApi
                     && StillHub(cam) is { } hub)
                 {
                     // The floor is checked BEFORE the attempt and applies whether or
-                    // not a frame came of it — a grab that yields nothing is the
+                    // not a frame came of it: a grab that yields nothing is the
                     // expensive case, so throttling only the successes would throttle
                     // exactly the wrong half.
                     if (lastGrab.TryGetValue(cam.Name, out var at) && DateTime.UtcNow - at < grabFloor)
@@ -2994,7 +2994,7 @@ public static class WebApi
                     unavailable = "the camera did not return a snapshot";
                 if (unavailable == null)
                     return Results.Json(new { error = "this camera does not support snapshots" }, statusCode: 404);
-                // An old frame beats no frame for a dashboard tile — serve the last
+                // An old frame beats no frame for a dashboard tile: serve the last
                 // one we have, honestly labelled (X-Snapshot-Age / X-Snapshot-Stale).
                 if (Cached(allowStale: true) is { } stale)
                     return stale;
@@ -3073,7 +3073,7 @@ public static class WebApi
             }, adminReason: "a reboot stops recording"));
 
         // The camera's own service-port table (Baichuan msg 37). Queried LIVE on
-        // every request — the answer is the camera's actual state right now,
+        // every request: the answer is the camera's actual state right now,
         // never a stored value, which is the whole point of the PORTS tab.
         // ADMIN ONLY, read included: the table is the camera's network surface.
         static IEnumerable<object> ShapeServices(IReadOnlyList<ServicePortState> ports) =>
@@ -3097,7 +3097,7 @@ public static class WebApi
             }));
 
         // Turns one service on or off on the camera itself (msg 36,
-        // read-modify-write — what the app's Port Settings screen does). Explicit
+        // read-modify-write, what the app's Port Settings screen does). Explicit
         // admin action only; the Baichuan port is refused outright, and the reply
         // carries the fresh table so the UI reflects what the camera now reports.
         app.MapPost("/api/cameras/{name}/services/{service}/{action}", (string name, string service, string action, HttpContext ctx) =>
@@ -3194,7 +3194,7 @@ public static class WebApi
 
         // Suspend (beta): a Neolink-side "off" switch. Suspending drops Neolink's
         // connection and holds it closed, so the camera can't be VIEWED or RECORDED
-        // here — without editing the config or restarting. The camera itself is
+        // here, without editing the config or restarting. The camera itself is
         // untouched: its own SD-card/cloud recording and any other system pulling
         // its stream directly keep working. Persisted across restarts. Reads are
         // open; writing is admin-only once accounts exist (it's a server-side state
@@ -3219,7 +3219,7 @@ public static class WebApi
             if (CheckAuth(ctx, cam) is { } denied)
                 return denied;
             if (userStore.Enabled && !IsAdmin(ctx))
-                return Results.Json(new { error = "admin only — suspending stops recording, a server setting" }, statusCode: 403);
+                return Results.Json(new { error = "admin only: suspending stops recording, a server setting" }, statusCode: 403);
             if (cam.SetSuspended == null)
                 return Results.Json(new { error = "suspend is not available for this camera" }, statusCode: 404);
             if (req.Suspended is not { } s)
@@ -3233,7 +3233,7 @@ public static class WebApi
         // RIGHT NOW (a Home Assistant automation, a router webhook, an external
         // PIR) can tell the wake-capture scan to connect immediately instead of
         // waiting for the ping pattern. Harmless when the camera isn't a parked
-        // wake-capture battery camera — the hint is simply ignored, so callers
+        // wake-capture battery camera: the hint is simply ignored, so callers
         // never need to check state first. The built-in syslog listener
         // (wake_hints.syslog_port) feeds the same path.
         app.MapPost("/api/cameras/{name}/wake-hint", (string name, HttpContext ctx) =>
@@ -3251,7 +3251,7 @@ public static class WebApi
 
         // Floodlight behavior (cameras with a spotlight): brightness and the
         // "turn on with motion at night" switch. Read-modify-write of the
-        // camera's own FloodlightTask XML — unknown fields ride along verbatim.
+        // camera's own FloodlightTask XML: unknown fields ride along verbatim.
         app.MapGet("/api/cameras/{name}/floodlight", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
             {
@@ -3318,7 +3318,7 @@ public static class WebApi
                 var f = await control.GetHttpFeaturesAsync(reqCt);
                 if (f == null)
                     return Results.Json(new { error = "this camera has no HTTP API" }, statusCode: 404);
-                // Cache which AI types the per-type alarm probe answered for — the
+                // Cache which AI types the per-type alarm probe answered for: the
                 // recording tab's chip filter reads it back before the next probe.
                 if (f.AiSensitivities is { Count: > 0 } ai)
                     o.CameraState?.SetDetectionCaps(name, aiTypes: ai.Select(a => a.Type).ToList());
@@ -3395,7 +3395,7 @@ public static class WebApi
                 return Results.Json(new { ok = true });
             }));
 
-        // Speaker volume (0-100) — also what two-way talk comes out at.
+        // Speaker volume (0-100), also what two-way talk comes out at.
         app.MapPost("/api/cameras/{name}/volume", (string name, VolumeRequest req, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: true, async (control, reqCt) =>
             {
@@ -3408,7 +3408,7 @@ public static class WebApi
 
         // Camera-side audio settings beyond the speaker volume: the record-audio
         // switch (encode settings' audio flag) and the extra AudioCfg volumes some
-        // models expose. Which of them exist varies per camera — the GET features
+        // models expose. Which of them exist varies per camera: the GET features
         // reply is the menu, and posting one the camera lacks earns the camera's
         // own refusal.
         app.MapPost("/api/cameras/{name}/audio", (string name, AudioRequest req, HttpContext ctx) =>
@@ -3527,8 +3527,8 @@ public static class WebApi
         // Detection zone: the grid of watched ('1') vs ignored ('0') cells, row by
         // row from the top-left. ?type= is "md" (default) or an AI type.
         //
-        // EVERY camera has a zone. A camera that keeps one itself — a Reolink with
-        // its HTTP API — owns it, at whatever dimensions its firmware reports, and
+        // EVERY camera has a zone. A camera that keeps one itself, a Reolink with
+        // its HTTP API, owns it, at whatever dimensions its firmware reports, and
         // the grid is read from and written to the camera exactly as before. A
         // camera that keeps none (generic RTSP, or a Baichuan model whose firmware
         // carries no grid) gets one stored HERE instead: it cannot shape what the
@@ -3538,11 +3538,11 @@ public static class WebApi
         //
         // The distinction is only ever drawn when the camera has actually ANSWERED.
         // A camera that could not be asked (asleep, or its HTTP API backing off)
-        // still gets 503 — quietly storing a zone on Neolink because the camera was
+        // still gets 503: quietly storing a zone on Neolink because the camera was
         // briefly unreachable would silently detach it from the camera it belongs to.
 
         // The grid to offer a camera that has none of its own, sized from whatever
-        // stream is carrying video. Only ever used until something is stored — a
+        // stream is carrying video. Only ever used until something is stored: a
         // stored grid keeps its own dimensions for life, so a stream that changes
         // shape cannot scramble a zone already drawn.
         static (int Cols, int Rows) DefaultZoneGrid(WebCameraInfo? cam)
@@ -3553,7 +3553,7 @@ public static class WebApi
 
         // Whether a zone this camera did not answer for belongs to Neolink rather
         // than being absent. Two things must BOTH hold. The camera must provably
-        // hold no zone of its own — a lasting fact (CameraHoldsZone), never "this
+        // hold no zone of its own: a lasting fact (CameraHoldsZone), never "this
         // read came back empty", because a Reolink whose HTTP API hiccups must not
         // have its zone quietly moved onto the server. And only the shared "md"
         // grid is ever kept here: a camera with per-type grids is answering about
@@ -3575,7 +3575,7 @@ public static class WebApi
                     return Results.Json(new { error = $"provide type: md, {string.Join(", ", CameraControl.AiAlarmTypes)}" },
                         statusCode: 400);
                 // A camera that holds its own zone is asked for it, exactly as before.
-                // One that provably holds none is not asked at all — there is nothing
+                // One that provably holds none is not asked at all: there is nothing
                 // to ask, and the round trip only costs it.
                 // A Reolink is asked on every read, exactly as it always was: whether
                 // its zone is Neolink's is only ever what its latest read said. An
@@ -3650,12 +3650,12 @@ public static class WebApi
                 // Which side owns this zone is a property of the camera, not of this
                 // request: anything but a provable "it holds none" goes to the camera,
                 // through exactly the call it always used. No extra read, so a write
-                // that worked before still works — including on the types whose grid
+                // that worked before still works, including on the types whose grid
                 // only SetDetectionZoneAsync knows how to find.
                 var store = o.CameraState;
                 // A camera surface that has never been asked cannot be routed yet.
                 // ONVIF cameras are asked here (the editor always reads before it
-                // saves, but an API caller need not); a Reolink is not — its write
+                // saves, but an API caller need not); a Reolink is not: its write
                 // has always gone straight to the camera, and an extra read before
                 // it is what used to arm the backoff.
                 if (control.OnvifOnly && t == "md" && control.CameraHoldsZone == null)
@@ -3666,14 +3666,14 @@ public static class WebApi
                 if (local && !control.OnvifOnly && req.Storage != "neolink" && !control.ZoneNeverOnCamera)
                     local = false;
                 // The editor says where it believed the zone lived. If that changed
-                // while it was open — a camera answering for the first time — the grid
+                // while it was open, a camera answering for the first time, the grid
                 // it drew is the wrong one for where the save would now go, so it is
                 // saved nowhere; the editor reloads. A caller that does not say
                 // (anything but the editor) is routed as always.
                 if (req.Storage is "camera" or "neolink" && (req.Storage == "neolink") != local)
                     return Results.Json(new
                     {
-                        error = "where this zone is kept changed while the editor was open — reopen it",
+                        error = "where this zone is kept changed while the editor was open: reopen it",
                         storage = local ? "neolink" : "camera",
                     }, statusCode: 409);
                 if (!local || store == null)
@@ -3686,11 +3686,11 @@ public static class WebApi
                 var stored = store.Zone(name, t);
                 // The grid's shape comes from the editor that drew it. Neolink is the
                 // only authority on a zone it keeps itself, so there is no camera-side
-                // grid for a stale editor to scramble — and deriving the shape here
+                // grid for a stale editor to scramble, and deriving the shape here
                 // instead would reject the very first save whenever the stream became
                 // ready between opening the editor and pressing save.
                 // Bounded before it is multiplied: cols*rows in 32 bits wraps, and a
-                // wrapped product can equal the table length — 65536 x 65537 does —
+                // wrapped product can equal the table length, 65536 x 65537 does,
                 // which would persist a grid no browser could draw.
                 var (cols, rows) = req.Cols is { } rc && req.Rows is { } rr
                                    && rc is > 0 and <= MaxZoneSide && rr is > 0 and <= MaxZoneSide
@@ -3734,7 +3734,7 @@ public static class WebApi
                 return Results.Json(new { ok = true });
             }));
 
-        // Firmware-update check (read-only — nothing is ever installed from here).
+        // Firmware-update check (read-only, nothing is ever installed from here).
         // The camera itself asks Reolink's servers; the verdict is cached hours.
         app.MapGet("/api/cameras/{name}/firmware", (string name, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
@@ -3862,7 +3862,7 @@ public static class WebApi
             }));
 
         // ------------------------------------------------- camera SD-card recordings
-        // Footage the CAMERA recorded onto its own SD card — including anything from
+        // Footage the CAMERA recorded onto its own SD card, including anything from
         // when neolink was down and battery-camera clips that never streamed.
 
         // Which days of a month have recordings (the calendar of the day picker).
@@ -3945,7 +3945,7 @@ public static class WebApi
         // Inline for the <video> player; ?dl=1 turns it into a download. The
         // camera serves the file sequentially, so there is no seeking/ranges.
         // "dl" binds as a STRING on purpose: the UI sends ?dl=1, and ASP.NET's
-        // bool binding rejects "1" with an empty 400 BEFORE the handler runs —
+        // bool binding rejects "1" with an empty 400 BEFORE the handler runs:
         // invisible in our logs (field report: every SD download failed 400).
         app.MapGet("/api/cameras/{name}/sdcard/download", (string name, string? file, string? dl, string? probe, string? repair, string? status, HttpContext ctx) =>
             ExecAsync(name, ctx, mutating: false, async (control, reqCt) =>
@@ -3971,7 +3971,7 @@ public static class WebApi
                 // RANGE support: the camera only streams sequentially and its MP4s
                 // keep the moov index at the END, so direct pass-through never
                 // played in a browser (see SdSpool). The browser's range probes all
-                // hit the same spooled file — one camera fetch per recording.
+                // hit the same spooled file: one camera fetch per recording.
                 // repair=1: the browser could not decode the clip (damaged as recorded); serve a
                 // re-encode with the damage concealed, the way VLC and the Reolink app play it.
                 bool repairing = repair == "1";
@@ -4016,7 +4016,7 @@ public static class WebApi
                             enableRangeProcessing: true);
                     }
                     // Oversized (long continuous segments) or unknown length: stream
-                    // straight through like before — playable only after download.
+                    // straight through like before, playable only after download.
                     ctx.Response.RegisterForDispose(download);
                     return Results.Stream(download.Stream, contentType, fileDownloadName: downloadName);
                 }
@@ -4114,7 +4114,7 @@ public static class WebApi
                     .Select(Shape));
             });
 
-            // Days that hold any footage (events or continuous) — the timeline's
+            // Days that hold any footage (events or continuous): the timeline's
             // calendar highlights these. Literal "days" beats the {id} routes.
             app.MapGet("/api/events/days", (HttpContext ctx) =>
                 Results.Json(events.ListContentDays(CameraLimit(ctx))));
@@ -4157,7 +4157,7 @@ public static class WebApi
                 plan.Bound(Local(from), Local(to), Csv(cams).Where(names.Contains).ToList(),
                     unreviewed == true, Csv(levels));
                 // Descriptive queries with AI: the model reads the candidates'
-                // actual descriptions and picks the matches — keyword scoring is
+                // actual descriptions and picks the matches, keyword scoring is
                 // only the fallback (no AI, or the model's reply was unusable).
                 // A limited account searches its own cameras only; the plan stays as understood.
                 var scope = only == null ? plan : plan.ScopedTo(only);
@@ -4203,7 +4203,7 @@ public static class WebApi
                             usedAi = true;
                             kwMatched = picked.Count > 0;
                             // Nothing fit: fall back to the structural hits so the
-                            // page is never silently empty — the note explains.
+                            // page is never silently empty, the note explains.
                             hits = picked.Count > 0
                                 ? picked.OrderByDescending(e => e.StartUtc).Take(cap).ToList()
                                 : Neolink.Recording.EventSearch.Execute(scope.StructuralOnly(), events, cap);
@@ -4248,7 +4248,7 @@ public static class WebApi
             });
 
             // Event footage follows the snapshot rule: the RTSP users may fetch it
-            // over HTTP Basic — an HA notification shows an event's thumbnail with
+            // over HTTP Basic, an HA notification shows an event's thumbnail with
             // the credentials its camera entities already hold, no session token to
             // mint or renew. permitted_users applies through the event's camera; an
             // event whose camera left the config falls back to any valid RTSP user
@@ -4341,7 +4341,7 @@ public static class WebApi
                 var cam = cameras.FirstOrDefault(c => string.Equals(c.Name, rec.Camera, StringComparison.OrdinalIgnoreCase));
                 if (userStore.Enabled)
                 {
-                    // authenticated by the middleware — allowed
+                    // authenticated by the middleware: allowed
                 }
                 else if (cam != null)
                 {
@@ -4503,13 +4503,13 @@ public static class WebApi
                     events = s.Events,
                     eventsAvailable = cam.EventsAvailableNow,
                     // A battery camera Neolink lets doze (no always_on) never tapes
-                    // 24/7 — taping would hold it awake until the battery dies. The
+                    // 24/7: taping would hold it awake until the battery dies. The
                     // panel shows the toggle disabled with this reason.
                     continuous = RecordingConfig.ContinuousEnabled && s.Continuous
                                  && cam.SleepFriendly?.Invoke() != true,
                     continuousAvailable = RecordingConfig.ContinuousEnabled,
                     continuousBlockedBySleep = cam.SleepFriendly?.Invoke() == true,
-                    // The passive wake tap that replaces 24/7 on those cameras —
+                    // The passive wake tap that replaces 24/7 on those cameras:
                     // self-wake footage lands on the timeline at zero battery cost.
                     wakeTimeline = s.WakeTimeline,
                     // The camera's own copy of each event from its SD card: off until
@@ -4517,14 +4517,14 @@ public static class WebApi
                     sdFillAvailable = cam.SleepFriendly?.Invoke() == true || s.SdFill == true,
                     sdFill = s.SdFill ?? false,
                     // Always the EFFECTIVE list (never null): unset means the default
-                    // set, which excludes the opt-in perimeter labels — the UI chips
+                    // set, which excludes the opt-in perimeter labels, the UI chips
                     // must show those as off until the user ticks them.
                     eventTypes = (IEnumerable<string>?)s.EventTypes ?? CameraRecordingSettings.DefaultLabels,
                     knownTypes = CameraRecordingSettings.KnownLabels,
                     // Cached capability signals from the last live probe (null = never
                     // probed): the panel filters its event-type chips with these
                     // IMMEDIATELY instead of showing everything and pruning once the
-                    // camera answers — the list only shifts on a firmware change.
+                    // camera answers, the list only shifts on a firmware change.
                     supportedAiTypes = o.CameraState?.DetectionCaps(cam.Name).AiTypes,
                     supportedDoorbell = o.CameraState?.DetectionCaps(cam.Name).Doorbell,
                     // Per-camera retention overrides (null = default) + the server defaults
@@ -4583,17 +4583,17 @@ public static class WebApi
                 if (CheckAuth(ctx, cam) is { } denied)
                     return denied;
                 // These persist SERVER-side (retention, schedules, archive routing,
-                // what gets recorded) — once accounts exist, changing them is admin
+                // what gets recorded), once accounts exist, changing them is admin
                 // work, like every other server setting.
                 if (userStore.Enabled && !IsAdmin(ctx))
-                    return Results.Json(new { error = "admin only — recording settings are server settings" }, statusCode: 403);
+                    return Results.Json(new { error = "admin only: recording settings are server settings" }, statusCode: 403);
                 // The UI disables the 24/7 toggle for these cameras; this catches
                 // direct API callers with the same reason.
                 if (req.Continuous == true && cam.SleepFriendly?.Invoke() == true)
                     return Results.Json(new
                     {
                         error = "24/7 recording is unavailable while this battery camera is allowed " +
-                                "to sleep — taping around the clock would hold it awake until the " +
+                                "to sleep: taping around the clock would hold it awake until the " +
                                 "battery dies; set always_on = true for this camera first"
                     }, statusCode: 400);
 
@@ -4606,7 +4606,7 @@ public static class WebApi
                 // The continuous switch is inert while the feature is disabled.
                 var continuous = RecordingConfig.ContinuousEnabled ? req.Continuous : null;
                 // Retention: negative = clear the override (use the server default).
-                // Capped at 100 years — beyond that is "forever", and unbounded values
+                // Capped at 100 years: beyond that is "forever", and unbounded values
                 // would overflow the cleanup pass's date arithmetic.
                 static int? Retention(int? v) => v switch
                 {
@@ -4622,7 +4622,7 @@ public static class WebApi
                     }, statusCode: 400);
                 // Capture schedule: unknown day tokens are dropped; an empty or
                 // complete day list stores as null (= every day). Times must be
-                // HH:mm — anything else (including "") clears to midnight.
+                // HH:mm, anything else (including "") clears to midnight.
                 List<string>? schedDays = null;
                 if (req.ScheduleDays != null)
                 {
@@ -4633,7 +4633,7 @@ public static class WebApi
                 }
                 static string? SchedTime(string? v) =>
                     v != null && CameraRecordingSettings.ParseMinutes(v) is int m && m > 0 ? v : null;
-                // Archiving is inert without the server-side archive tier — the
+                // Archiving is inert without the server-side archive tier: the
                 // switches can't be turned on for a destination that doesn't exist.
                 var archiveEvents = o.ArchiveAvailable ? req.ArchiveEvents : null;
                 var archiveContinuous = o.ArchiveAvailable ? req.ArchiveContinuous : null;
@@ -4641,7 +4641,7 @@ public static class WebApi
                     return Results.Json(new
                     {
                         error = "archiving requires \"archive_path\" in the server recording config " +
-                                "(ideally a different drive — in Docker, map a second volume)",
+                                "(ideally a different drive, in Docker, map a second volume)",
                     }, statusCode: 409);
                 // The camera opt-in can only be switched ON while the feature is
                 // globally enabled (an endpoint exists to send to). Switching OFF
@@ -4651,7 +4651,7 @@ public static class WebApi
                     return Results.Json(new
                     {
                         error = "enable AI event descriptions globally first " +
-                                "(Settings → AI) — that's where the LLM endpoint lives",
+                                "(Settings → AI): that's where the LLM endpoint lives",
                     }, statusCode: 409);
                 // Same shape for event emails: turning the camera ON needs a
                 // configured, enabled mail setup to send through; OFF always works.
@@ -4661,7 +4661,7 @@ public static class WebApi
                     return Results.Json(new
                     {
                         error = "set up email notifications first (Server settings → " +
-                                "Notifications) — recipient and mail server live there",
+                                "Notifications): recipient and mail server live there",
                     }, statusCode: 409);
                 if (req.WebhookEvents == true
                     && (o.Notifier?.Store.Snapshot() is not { } hook
@@ -4669,7 +4669,7 @@ public static class WebApi
                     return Results.Json(new
                     {
                         error = "set up the webhook first (Server settings → " +
-                                "Notifications) — URL and format live there",
+                                "Notifications): URL and format live there",
                     }, statusCode: 409);
                 var updated = recordingSettings.Update(cam.Name, req.Events, continuous,
                     types, setEventTypes: req.EventTypes != null,
@@ -4690,7 +4690,7 @@ public static class WebApi
                     wakeTimeline: req.WakeTimeline,
                     sdFill: req.SdFill, setSdFill: req.SdFill != null,
                     aiDescribe: req.AiDescribe,
-                    // Scene notes ride the prompt on every event — bound them so a
+                    // Scene notes ride the prompt on every event: bound them so a
                     // paste-happy admin can't balloon each request. "" clears.
                     aiContext: req.AiContext is { } noteRaw
                                && noteRaw.Trim() is { Length: > 0 } note
@@ -4734,10 +4734,10 @@ public static class WebApi
             });
 
             // Bulk export: every segment overlapping [from, to] of one day (so at
-            // most 24 h by construction), streamed as a STORED zip — video doesn't
+            // most 24 h by construction), streamed as a STORED zip, video doesn't
             // compress, and store-level means no CPU and no temp files. Segments
             // ship as-is (lossless, each named by its start time and playable on
-            // its own); the one still being written is skipped — it would be an
+            // its own); the one still being written is skipped: it would be an
             // unfinalized, unplayable file. ?estimate=1 returns {files, bytes} so
             // the UI can show the damage before the user commits to gigabytes.
             app.MapGet("/api/recordings/{camera}/{date}/export", (string camera, string date,
@@ -4749,7 +4749,7 @@ public static class WebApi
                 if (!TimeSpan.TryParse(from, System.Globalization.CultureInfo.InvariantCulture, out var fromT)
                     || !TimeSpan.TryParse(to, System.Globalization.CultureInfo.InvariantCulture, out var toT)
                     || fromT < TimeSpan.Zero || toT > TimeSpan.FromDays(1) || toT <= fromT)
-                    return Results.Json(new { error = "invalid range — need from=HH:mm[:ss] < to=HH:mm[:ss] within the day" }, statusCode: 400);
+                    return Results.Json(new { error = "invalid range: need from=HH:mm[:ss] < to=HH:mm[:ss] within the day" }, statusCode: 400);
 
                 var active = cam.ActiveSegment?.Invoke();
                 var picked = PickExportSegments(events.ListSegments(cam.Name, date),
@@ -4767,7 +4767,7 @@ public static class WebApi
 
                 if (estimate is "1" or "true")
                 {
-                    // Also answer "can this range become ONE file?" — the planner
+                    // Also answer "can this range become ONE file?": the planner
                     // reads only each segment's index, so this stays cheap.
                     Mp4Export.Plan? est = null;
                     string? mp4Reason = null;
@@ -4790,7 +4790,7 @@ public static class WebApi
                 // One export at a time: bulk sequential reads compete with the
                 // recorders' writes for the same disk; a second stream doubles it.
                 if (!ExportGate.Wait(0))
-                    return Results.Json(new { error = "another export is already running — try again when it finishes" }, statusCode: 503);
+                    return Results.Json(new { error = "another export is already running: try again when it finishes" }, statusCode: 503);
 
                 var baseName = $"{cam.Name} {date} {fromT:hh\\-mm\\-ss}-{toT:hh\\-mm\\-ss}";
                 if (format == "mp4")
@@ -4805,7 +4805,7 @@ public static class WebApi
                     if (plan == null)
                     {
                         ExportGate.Release();
-                        return Results.Json(new { error = $"cannot combine into one file: {reason} — export as zip instead" },
+                        return Results.Json(new { error = $"cannot combine into one file: {reason}, export as zip instead" },
                             statusCode: 409);
                     }
                     return Results.Stream(async body =>
@@ -4828,7 +4828,7 @@ public static class WebApi
                         // ZipArchive writes entry headers and the central directory
                         // with SYNCHRONOUS stream writes, which Kestrel rejects by
                         // default (aborting the download mid-stream). Allow them for
-                        // this response — the gate above caps it to one busy thread.
+                        // this response: the gate above caps it to one busy thread.
                         if (ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpBodyControlFeature>() is { } bodyCtl)
                             bodyCtl.AllowSynchronousIO = true;
                         using var zip = new System.IO.Compression.ZipArchive(
@@ -4915,7 +4915,7 @@ public static class WebApi
         {
             // Live server log tail over WebSocket: the backlog as one JSON array,
             // then one JSON entry per line. Logs reveal paths, camera names and
-            // usernames, so this is strictly admin — and with authentication off
+            // usernames, so this is strictly admin, and with authentication off
             // there IS no admin, matching the other admin-only endpoints.
             app.Map("/api/system/logs", async ctx =>
             {
@@ -4997,7 +4997,7 @@ public static class WebApi
                 ctx.Response.StatusCode = 403;
                 await ctx.Response.WriteAsJsonAsync(new
                 {
-                    error = "two-way talk is disabled — enable it in Server settings (ui.talk)",
+                    error = "two-way talk is disabled: enable it in Server settings (ui.talk)",
                 });
                 return;
             }
@@ -5067,7 +5067,7 @@ public static class WebApi
     /// The segment files a [from, to] seconds-of-day export should contain: every
     /// file whose footage overlaps the range, oldest first, with the total byte
     /// count for the pre-flight estimate. The file still being written is excluded
-    /// (it has no moov yet — an unplayable torso); it exports once it closes.
+    /// (it has no moov yet, an unplayable torso); it exports once it closes.
     /// A file with an unknown duration (exotic filesystems) counts as at least a
     /// second long so it is still caught when the range crosses its start.
     /// </summary>
@@ -5095,7 +5095,7 @@ public static class WebApi
     /// <summary>
     /// Overlays the recorder's in-memory truth for the segment being written right
     /// now onto a filesystem day listing. While a file is held open its directory
-    /// mtime — the listing's duration source — can be minutes stale (NTFS updates
+    /// mtime, the listing's duration source, can be minutes stale (NTFS updates
     /// it lazily on close; FUSE and network mounts cache attributes), which made a
     /// recording camera's lane trail "now" by up to a whole segment and look
     /// stopped, worst on high-bitrate cameras whose big segments stay open longest.
@@ -5139,7 +5139,7 @@ public static class WebApi
         return null;
     }
 
-    /// <summary>True for /api/cameras/{name}/snapshot[.jpg] — the paths whose auth
+    /// <summary>True for /api/cameras/{name}/snapshot[.jpg]: the paths whose auth
     /// additionally accepts RTSP Basic credentials (see the session middleware).</summary>
     private static bool IsSnapshotPath(PathString path) =>
         path.StartsWithSegments("/api/cameras")
@@ -5162,7 +5162,7 @@ public static class WebApi
         return null;
     }
 
-    /// <summary>True for /api/events/{id}/clip|thumb|preview — event footage, whose
+    /// <summary>True for /api/events/{id}/clip|thumb|preview: event footage, whose
     /// auth (like snapshots') additionally accepts RTSP Basic credentials.</summary>
     private static bool IsEventMediaPath(PathString path) =>
         path.StartsWithSegments("/api/events")
@@ -5173,7 +5173,7 @@ public static class WebApi
     /// <summary>Offers the Basic challenge only where it helps: headerless clients
     /// (HA, scripts) and address-bar navigations. A browser answering 401+Basic on
     /// a page subresource (img, fetch) pops its native credential dialog over the
-    /// web UI's own login form. Such loads carry a non-navigate Sec-Fetch-Mode —
+    /// web UI's own login form. Such loads carry a non-navigate Sec-Fetch-Mode,
     /// but only on https/localhost origins (browsers withhold Sec-Fetch elsewhere),
     /// so on plain http the web UI's fingerprints stand in: its browser-made
     /// requests authenticate via a token query parameter, and subresource loads
@@ -5337,7 +5337,7 @@ public static class WebApi
         }
 
         // AAC audio rides along as MP4 track 2. ADPCM cameras stay video-only in
-        // the browser (MSE can't play raw PCM) — their audio is RTSP-only.
+        // the browser (MSE can't play raw PCM): their audio is RTSP-only.
         var audio = hub.Audio is { IsAac: true, AudioSpecificConfig: not null } a ? a : null;
 
         string codecString = FMp4.CodecString(codec, sps);
@@ -5418,7 +5418,7 @@ public static class WebApi
             await foreach (var packet in reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
                 // The hub index is global across video AND audio packets, so it must be
-                // tracked for every packet — otherwise interleaved audio makes every
+                // tracked for every packet, otherwise interleaved audio makes every
                 // video packet look like a drop (which would discard all P-frames).
                 bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                 lastIndex = packet.Index;

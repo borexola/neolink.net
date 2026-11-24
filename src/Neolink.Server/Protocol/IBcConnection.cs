@@ -11,7 +11,7 @@ namespace Neolink.Protocol;
 /// messages by id, send a message, the negotiated encryption state, and disposal.
 /// Both the TCP <see cref="BcConnection"/> and the UDP <c>BcUdpConnection</c>
 /// implement it, so every camera operation (login, streaming, control) is written
-/// once and runs unchanged over either transport — the BC messages are identical;
+/// once and runs unchanged over either transport: the BC messages are identical;
 /// only the bytes-on-the-wire carrier differs.
 /// </summary>
 public interface IBcConnection : IAsyncDisposable
@@ -23,7 +23,7 @@ public interface IBcConnection : IAsyncDisposable
     /// <summary>Completes when the transport is dead (with the reason); later subscriptions fail at once.</summary>
     Task<string> Closed { get; }
 
-    /// <summary>The camera's resolved IP once connected — used for the non-waking
+    /// <summary>The camera's resolved IP once connected: used for the non-waking
     /// liveness scan (ICMP), which a UID-only camera has no address for otherwise.
     /// Null before the endpoint is known.</summary>
     IPEndPoint? RemoteEndpoint { get; }

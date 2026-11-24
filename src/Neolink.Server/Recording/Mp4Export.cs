@@ -7,7 +7,7 @@ using Neolink.Media;
 namespace Neolink.Recording;
 
 /// <summary>
-/// Combines several continuous-recording segments into ONE classic MP4 — pure
+/// Combines several continuous-recording segments into ONE classic MP4: pure
 /// concatenation, no re-encoding: each input's sample tables are read from its
 /// classic index, the timelines are butt-joined (a real gap between segments
 /// becomes a hard cut, like any NVR export), and the media bytes are
@@ -18,7 +18,7 @@ namespace Neolink.Recording;
 /// recordings combine just like finalized ones. The catch with a single
 /// container: every segment must carry the SAME stream configuration. A mid-day
 /// record-stream switch (main → sub) changes resolution, and a single MP4 track
-/// cannot change resolution mid-stream — <see cref="TryPlan"/> detects that and
+/// cannot change resolution mid-stream: <see cref="TryPlan"/> detects that and
 /// reports why, so callers can fall back to the zip-of-segments export.
 /// </summary>
 public static class Mp4Export
@@ -43,11 +43,11 @@ public static class Mp4Export
     /// Reads every input's classic index and lays out the combined file, trimmed
     /// to [<paramref name="fromSec"/>, <paramref name="toSec"/>] seconds-of-day
     /// (each input carries its own start-of-day offset). The start snaps to the
-    /// nearest video keyframe AT OR BEFORE the requested time — decoding can only
+    /// nearest video keyframe AT OR BEFORE the requested time: decoding can only
     /// begin on one, so the file starts at most one GOP (a few seconds) early
     /// instead of a whole segment; the end cuts exactly. Null (with a
     /// human-readable <paramref name="reason"/>) when the inputs cannot share one
-    /// container — callers fall back to the zip export.
+    /// container: callers fall back to the zip export.
     /// </summary>
     public static Plan? TryPlan(IReadOnlyList<(string Path, double StartSeconds)> inputs,
         double fromSec, double toSec, out string? reason)
@@ -87,7 +87,7 @@ public static class Mp4Export
                 if (!StsdBytes(first.Head, first.Layout.Traks[t]).SequenceEqual(StsdBytes(s.Head, s.Layout.Traks[t])))
                 {
                     reason = t == 0
-                        ? "video format changes mid-range (resolution or codec switched — e.g. the record stream was changed)"
+                        ? "video format changes mid-range (resolution or codec switched, e.g. the record stream was changed)"
                         : "audio format changes mid-range";
                     return null;
                 }
@@ -97,7 +97,7 @@ public static class Mp4Export
         // Trim each segment to the range, then butt-join the timelines. Both
         // tracks of a segment start on the same instant (the writer gates audio
         // on the first video keyframe), so each segment shifts by the VIDEO time
-        // accumulated so far — audio follows the same wall clock instead of its
+        // accumulated so far: audio follows the same wall clock instead of its
         // own length, keeping A/V in sync across every joint.
         var merged = new List<ClipWriter.SampleRec>(scans.Sum(s => s.Samples.Count));
         var plan = new Plan();
@@ -127,7 +127,7 @@ public static class Mp4Export
         }
 
         // The moov must precede the data (fast start), but chunk offsets depend
-        // on the moov's size — which depends on the offsets' width (stco/co64).
+        // on the moov's size, which depends on the offsets' width (stco/co64).
         // Iterate to the fixed point; widths only ever grow, so it settles fast.
         var ftyp = FtypBytes(first.Head);
         long payload = merged.Sum(m => (long)m.Size);
@@ -175,7 +175,7 @@ public static class Mp4Export
         if (toOff <= 0) return new List<ClipWriter.SampleRec>();
         ulong toTicks = (ulong)(toOff * FMp4.Timescale);
 
-        // The cut-in: the last keyframe at or before fromOff — or the very start
+        // The cut-in: the last keyframe at or before fromOff, or the very start
         // when the range begins at/behind the segment's own beginning.
         ulong cutIn = 0;
         if (fromOff > 0)
@@ -230,7 +230,7 @@ public static class Mp4Export
                 {
                     int n = await src.ReadAsync(buf.AsMemory(0, (int)Math.Min(buf.Length, left)), ct)
                         .ConfigureAwait(false);
-                    if (n <= 0) throw new IOException($"{Path.GetFileName(path)} ended early — changed during export?");
+                    if (n <= 0) throw new IOException($"{Path.GetFileName(path)} ended early: changed during export?");
                     await output.WriteAsync(buf.AsMemory(0, n), ct).ConfigureAwait(false);
                     left -= n;
                 }
@@ -241,7 +241,7 @@ public static class Mp4Export
     // ------------------------------------------------------------------ input scanning
 
     /// <summary>Reads one segment's classic index into the same per-sample records
-    /// the live writer tracks — via <see cref="VirtualMp4"/>, so old fragmented
+    /// the live writer tracks, via <see cref="VirtualMp4"/>, so old fragmented
     /// files parse exactly like finalized ones.</summary>
     private static SegmentScan Scan(string path)
     {
@@ -281,7 +281,7 @@ public static class Mp4Export
             ParseTrackTables(head, layout.Traks[t], t == 0 ? (byte)1 : (byte)FMp4.AudioTrackId, samples);
         if (!samples.Any(x => x.Track == 1))
             throw new InvalidOperationException("no video samples");
-        // File order — the interleave the writer chose — so the output keeps it
+        // File order, the interleave the writer chose, so the output keeps it
         // and the copy phase reads each input strictly forward.
         samples.Sort((a, b) => a.Offset.CompareTo(b.Offset));
         return new SegmentScan(path, head, layout, samples, audioRate);
@@ -380,7 +380,7 @@ public static class Mp4Export
         return head.AsSpan(0, (int)len).ToArray();
     }
 
-    /// <summary>The stsd box bytes of one track — codec, dimensions and parameter
+    /// <summary>The stsd box bytes of one track: codec, dimensions and parameter
     /// sets. Byte-equality across segments is the "same stream config" gate.</summary>
     private static ReadOnlySpan<byte> StsdBytes(byte[] head, ClipWriter.TrakLayout t)
     {

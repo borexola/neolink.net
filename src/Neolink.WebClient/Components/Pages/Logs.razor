@@ -8,7 +8,7 @@
 @implements IAsyncDisposable
 
 @* Full-page live tail of the server log (admin only). The lines are appended
-   straight into the DOM by neolink.js — see logsAttach — so a chatty server
+   straight into the DOM by neolink.js, see logsAttach, so a chatty server
    never churns the Blazor circuit. *@
 
 <PageTitle>@T["Neolink.NET · Logs"]</PageTitle>
@@ -90,7 +90,7 @@
             if (_admin && !_attached)
             {
                 _attached = true;
-                // This URL is fetched by the BROWSER (neolink.js), not the circuit —
+                // This URL is fetched by the BROWSER (neolink.js), not the circuit:
                 // it keeps the page origin so it flows through any reverse proxy.
                 var url = $"{_server.TrimEnd('/')}/api/system/logs" +
                           (string.IsNullOrEmpty(_token) ? "" : $"?token={Uri.EscapeDataString(_token)}");

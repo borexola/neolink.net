@@ -19,7 +19,7 @@ public sealed class CameraOfflineException : Exception
 
 /// <summary>Features a camera was found to support, discovered by probing.</summary>
 /// <param name="SpotlightTasks">A spotlight camera whose brightness and auto mode answer over
-/// Baichuan (FloodlightTask, msg 289) — the path for spotlights with no HTTP API.</param>
+/// Baichuan (FloodlightTask, msg 289): the path for spotlights with no HTTP API.</param>
 public sealed record CameraFeatures(bool Ptz, bool Led, bool Pir, bool Battery, bool Talk,
     bool Zoom = false, bool Siren = false, bool Floodlight = false, bool Privacy = false,
     bool WhiteLed = false, bool Spotlight = false, bool Doorbell = false, bool SpotlightTasks = false);
@@ -34,7 +34,7 @@ public sealed record StreamEncSetting(string Stream, uint Width, uint Height, ui
 /// <summary>One camera-side service from the live port table (Baichuan msg 37).
 /// Service is "server" (Baichuan itself), "http", "https", "rtsp", "rtmp" or
 /// "onvif"; Enabled is null when the firmware reports no enable flag for it
-/// (it cannot be toggled — typically it is simply always on).</summary>
+/// (it cannot be toggled, typically it is simply always on).</summary>
 public sealed record ServicePortState(string Service, int? Port, bool? Enabled);
 
 /// <summary>Picture settings read over the HTTP API. The five adjustments are
@@ -65,12 +65,12 @@ public sealed record AutoReplyState(int FileId, int TimeoutSeconds);
 public sealed record SdCardInfo(int Id, long TotalMb, long FreeMb, bool Formatted, bool Mounted);
 
 /// <summary>One AI detection type's alarm tuning (HTTP API). Sensitivity is 0-100
-/// (higher = more sensitive); StayTime — seconds a target must linger before the
-/// alarm fires — is null when the firmware doesn't report one for the type.</summary>
+/// (higher = more sensitive); StayTime, seconds a target must linger before the
+/// alarm fires, is null when the firmware doesn't report one for the type.</summary>
 public sealed record AiSensitivity(string Type, int Sensitivity, int? StayTime);
 
 /// <summary>One detection type's zone grid (the HTTP API's "scope"): Table is
-/// Cols*Rows characters, row by row from the top-left — '1' = the camera watches
+/// Cols*Rows characters, row by row from the top-left, '1' = the camera watches
 /// that cell, '0' = detections there are ignored. Type is "md" (motion) or an
 /// <see cref="CameraControl.AiAlarmTypes"/> entry.</summary>
 public sealed record DetectionZone(string Type, int Cols, int Rows, string Table);
@@ -81,7 +81,7 @@ public sealed record DetectionZone(string Type, int Cols, int Rows, string Table
 public sealed record OsdSettings(bool ShowName, string? Name, string? NamePos,
     bool ShowTime, string? TimePos, bool? Watermark, IReadOnlyList<string> PosOptions);
 
-/// <summary>A firmware-update check verdict (read-only — nothing is ever installed).</summary>
+/// <summary>A firmware-update check verdict (read-only, nothing is ever installed).</summary>
 public sealed record FirmwareStatus(bool UpdateAvailable, string? NewVersion);
 
 /// <summary>One recording stored on the camera's own SD card, as listed by the HTTP
@@ -115,7 +115,7 @@ public sealed record DeviceExtras(bool? SdRecording, AutoRebootState? AutoReboot
 /// <summary>The scale a camera reported its Wi-Fi strength in.</summary>
 public enum WifiUnit
 {
-    /// <summary>RSSI in dBm — always negative (Baichuan, and some HTTP firmwares).</summary>
+    /// <summary>RSSI in dBm, always negative (Baichuan, and some HTTP firmwares).</summary>
     Dbm,
     /// <summary>Signal bars, 0-4 (what the Reolink HTTP API normally answers).</summary>
     Bars,
@@ -129,14 +129,14 @@ public enum WifiUnit
 /// same integer means different things per source (a 3 is three bars from the
 /// HTTP API but 3% from a percentage firmware, and a 5 is full signal on a 0-5
 /// scale yet nearly nothing as a percentage), so range-guessing at render time
-/// produced badly wrong icons — including full signal drawn as empty.
+/// produced badly wrong icons, including full signal drawn as empty.
 /// </summary>
 /// <param name="Raw">The number the camera reported, unmodified.</param>
 /// <param name="Unit">The scale <paramref name="Raw"/> is expressed in.</param>
 public sealed record WifiReading(int Raw, WifiUnit Unit)
 {
     /// <summary>The 0-4 level the icon draws. dBm bands follow Reolink's own
-    /// wording (better than -60 excellent, -70 good, -80 fair, then poor) — the
+    /// wording (better than -60 excellent, -70 good, -80 fair, then poor): the
     /// old bands were stricter and made every camera look worse than in the app.</summary>
     public int Level => Unit switch
     {
@@ -153,7 +153,7 @@ public sealed record WifiReading(int Raw, WifiUnit Unit)
         _ => $"{Raw}%",
     };
 
-    /// <summary>A Baichuan reading — that protocol always answers in dBm.</summary>
+    /// <summary>A Baichuan reading, that protocol always answers in dBm.</summary>
     public static WifiReading FromDbm(int raw) => new(raw, WifiUnit.Dbm);
 
     /// <summary>Classifies a reading from the Reolink HTTP API, whose firmwares
@@ -163,7 +163,7 @@ public sealed record WifiReading(int Raw, WifiUnit Unit)
         new(raw, raw < 0 ? WifiUnit.Dbm : raw <= 4 ? WifiUnit.Bars : WifiUnit.Percent);
 }
 
-/// <summary>Camera-side audio settings beyond the speaker volume — every member
+/// <summary>Camera-side audio settings beyond the speaker volume: every member
 /// is null when that particular camera doesn't expose it (they vary per model).
 /// RecordAudio is the encode settings' audio flag: whether the microphone goes
 /// into the streams (and thus recordings) at all. TalkVolume is AudioCfg's
@@ -207,7 +207,7 @@ public interface ICameraControl
     /// that have no ONVIF path (generic RTSP cameras, test doubles).</summary>
     bool HasImagingFallback => false;
 
-    /// <summary>Whether EVERY setting this camera offers comes from ONVIF — a
+    /// <summary>Whether EVERY setting this camera offers comes from ONVIF: a
     /// non-Reolink camera. The standard covers less than Reolink's own API does, so
     /// the panel uses this to leave out controls ONVIF cannot honour (switching an
     /// overlay off rather than moving it) and to say where a setting is going.</summary>
@@ -219,7 +219,7 @@ public interface ICameraControl
 
     /// <summary>
     /// The CURRENT encode selection of each stream (what the Reolink app shows),
-    /// read via the camera's HTTP API — null when no http_address is configured.
+    /// read via the camera's HTTP API: null when no http_address is configured.
     /// </summary>
     Task<IReadOnlyList<StreamEncSetting>?> GetStreamSettingsAsync(CancellationToken ct);
 
@@ -236,14 +236,14 @@ public interface ICameraControl
     Task<byte[]?> SnapshotAsync(CancellationToken ct);
 
     /// <summary>Whether the camera has a snapshot command of its own. False means
-    /// the ONLY still it can have is one decoded from the stream it is sending —
+    /// the ONLY still it can have is one decoded from the stream it is sending,
     /// which is worth the decode. True means a failed snapshot is a camera that is
     /// offline, asleep or busy, and the answer to that is the same as it always was
     /// (serve the last frame, or say so), NOT an ffmpeg process per poll.</summary>
     bool HasSnapshot => true;
 
     /// <summary>A SMALL JPEG snapshot for size-limited consumers (the MQTT camera
-    /// entity — brokers cap packet size and disconnect over it). Cameras with an
+    /// entity, brokers cap packet size and disconnect over it). Cameras with an
     /// HTTP API scale the image themselves; everything else falls back to the
     /// regular snapshot, so the caller must still bound the size.</summary>
     Task<byte[]?> SnapshotSmallAsync(CancellationToken ct) => SnapshotAsync(ct);
@@ -275,8 +275,8 @@ public interface ICameraControl
 
     Task RebootAsync(CancellationToken ct);
 
-    /// <summary>The camera's own service-port table — Baichuan, HTTP, HTTPS, RTSP,
-    /// RTMP, ONVIF — asked of the camera LIVE (Baichuan msg 37) on every call.
+    /// <summary>The camera's own service-port table, Baichuan, HTTP, HTTPS, RTSP,
+    /// RTMP, ONVIF, asked of the camera LIVE (Baichuan msg 37) on every call.
     /// Deliberately never cached: the UI shows the camera's actual state, not a
     /// remembered one. Null when the camera has no Baichuan channel (generic
     /// RTSP) or doesn't answer the query.</summary>
@@ -284,7 +284,7 @@ public interface ICameraControl
         => Task.FromResult<IReadOnlyList<ServicePortState>?>(null);
 
     /// <summary>Turns one camera-side service ("http", "https", "onvif", "rtsp",
-    /// "rtmp") on or off via Baichuan msg 36 — the same read-modify-write the
+    /// "rtmp") on or off via Baichuan msg 36: the same read-modify-write the
     /// Reolink app's Port Settings screen performs. NEVER touches the Baichuan
     /// server port itself (port 9000 carries this very connection); that request
     /// is refused no matter who asks.</summary>
@@ -358,7 +358,7 @@ public interface ICameraControl
     Task<WifiReading?> GetWifiSignalAsync(CancellationToken ct);
 
     /// <summary>The last Wi-Fi signal read, or null. A CHEAP cached accessor for the
-    /// camera-list sidebar — never does I/O.</summary>
+    /// camera-list sidebar, never does I/O.</summary>
     WifiReading? CachedWifiSignal => null;
 
     /// <summary>Refreshes <see cref="CachedWifiSignal"/>, throttled so it is safe to
@@ -371,7 +371,7 @@ public interface ICameraControl
 
     /// <summary>True when the camera reports it is running on a CABLE, false when it
     /// reports Wi-Fi, null when it hasn't said. A Wi-Fi-capable camera on ethernet
-    /// answers "wired" — it has no signal to report, and asking for one is pointless.</summary>
+    /// answers "wired": it has no signal to report, and asking for one is pointless.</summary>
     bool? CachedWired => null;
 
     /// <summary>The camera's PTZ preset slots, or null when unsupported.</summary>
@@ -423,7 +423,7 @@ public interface ICameraControl
     Task SetAiSensitivityAsync(string aiType, int sensitivity, CancellationToken ct) =>
         throw new NotSupportedException("AI sensitivity is not available for this camera");
 
-    /// <summary>The camera's HTTP API cannot be asked at this moment — the transport
+    /// <summary>The camera's HTTP API cannot be asked at this moment: the transport
     /// backoff is armed after a failure, or the camera is parked asleep. Distinguishes
     /// "this camera has no such feature" (a lasting answer) from "ask again shortly".</summary>
     bool HttpPaused => false;
@@ -433,7 +433,7 @@ public interface ICameraControl
     /// grids lists those too.</summary>
     IReadOnlyList<string> ZoneTypes() => new[] { "md" };
 
-    /// <summary>Whether the CAMERA holds its own detection zone — the question that
+    /// <summary>Whether the CAMERA holds its own detection zone: the question that
     /// decides whether a zone is written to the camera or kept by Neolink on its
     /// behalf. True = it has answered with a grid; false = it provably has none;
     /// null = not yet known, so nobody may assume either way.
@@ -520,7 +520,7 @@ public interface ICameraControl
         NotHere("auto-reboot");
 
     /// <summary>Guard position: return-to-guard on/off and its idle timeout (seconds), or an
-    /// action — "set" saves the current position, "go" drives there.</summary>
+    /// action, "set" saves the current position, "go" drives there.</summary>
     Task SetGuardAsync(bool? enabled, int? timeout, string? action, CancellationToken ct) => NotHere("PTZ guard");
 
     /// <summary>Starts or stops a saved patrol.</summary>
@@ -579,7 +579,7 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>Which transport last served picture settings: true = the Reolink HTTP
     /// API answered, false = it didn't and ONVIF stood in, null = not read yet. A
-    /// WRITE routes the same way — the Lumus has a (dead) HTTP API derived from its
+    /// WRITE routes the same way: the Lumus has a (dead) HTTP API derived from its
     /// host, so "_httpApi != null" alone can't decide where a write should go.</summary>
     private bool? _httpImagingWorks;
 
@@ -591,7 +591,7 @@ public sealed class CameraControl : ICameraControl
 
     /// <param name="allSources">Every stream service of this camera. The camera is
     /// ONE device with up to three connections (main/sub/extern): it is online if
-    /// ANY of them is live, and commands ride whichever session exists — otherwise
+    /// ANY of them is live, and commands ride whichever session exists, otherwise
     /// a viewer watching only the sub stream leaves the "camera" reading offline
     /// (and HA unavailable) while its video plays. Commands still prefer
     /// <paramref name="source"/> (the primary) when it is connected.</param>
@@ -615,7 +615,7 @@ public sealed class CameraControl : ICameraControl
     /// <summary>The camera is deliberately offline so its battery can sleep (every
     /// stream parked, sleep-friendly). Background HTTP/ONVIF traffic is suppressed
     /// while this holds: nothing can answer, and the packets themselves keep the
-    /// camera's radio out of power-save — which the wake scan then misreads as the
+    /// camera's radio out of power-save, which the wake scan then misreads as the
     /// camera waking (seen live, 2026-07-22: ONVIF retries and HTTP feature reads
     /// against a parked Argus Solar faked its ping pattern flat).</summary>
     private bool SleepingOnPurpose => _sources.All(s => s.NetworkQuiet);
@@ -664,7 +664,7 @@ public sealed class CameraControl : ICameraControl
         WithCameraAsync(async camera =>
         {
             // Fresh session, cached caps: re-discover for wired cameras (cheap, and
-            // it picks up firmware/config changes), but NOT for battery cameras —
+            // it picks up firmware/config changes), but NOT for battery cameras,
             // they reconnect on every wake-capture event, and re-running the probe
             // fan-out each time held the camera awake for extra seconds per event.
             // Hardware features don't change between naps; a restart rediscovers.
@@ -678,14 +678,14 @@ public sealed class CameraControl : ICameraControl
             var version = await TryAsync(() => camera.GetVersionAsync(ProbeTimeout, ct)).ConfigureAwait(false);
 
             // Feature discovery. PTZ is advertised in the Support xml; the rest are
-            // probed with their harmless "get" command — a camera without the feature
+            // probed with their harmless "get" command: a camera without the feature
             // rejects it (non-200) or stays silent. The probes run IN PARALLEL:
             // each uses a distinct message id (the connection routes replies per id,
             // and the command gate is held, so nothing else interleaves), and run
-            // sequentially the silent ones stack up to 4s each — long enough for the
+            // sequentially the silent ones stack up to 4s each, long enough for the
             // UI's HTTP timeout to abort the first panel open after a reconnect.
             bool ptz = SupportFlag(support, "ptzMode") || SupportFlag(support, "ptzCfg");
-            // Siren comes from the Support flags alone — its only "probe" command
+            // Siren comes from the Support flags alone: its only "probe" command
             // PLAYS the siren, which is not something discovery may ever do.
             bool siren = SupportFlag(support, "supportAudioAlarm")
                          || SupportFlag(support, "audioAlarm")
@@ -704,7 +704,7 @@ public sealed class CameraControl : ICameraControl
                 ? TryAsync(() => camera.GetFloodlightTasksAsync(ProbeTimeout, ct, BcConstants.MsgIdFloodlightTasksGet))
                 : Task.FromResult<XElement?>(null);
             var floodTask = TryAsync(() => camera.GetFloodlightTasksAsync(ProbeTimeout, ct, BcConstants.MsgIdFloodlightTasksRead));
-            // White-LED / spotlight over the HTTP API (Lumus, Elite, ... — cameras
+            // White-LED / spotlight over the HTTP API (Lumus, Elite, ... cameras
             // that don't answer the Baichuan FloodlightTask). Runs in parallel with
             // the BC probes and shares their timeout, so an unreachable HTTP port
             // (port 80 closed) doesn't slow discovery.
@@ -717,7 +717,7 @@ public sealed class CameraControl : ICameraControl
             //   2. this channel's Support flags carry remoteAbility > 0.
             // Either alone over-detects: some non-battery firmwares (e.g. the
             // RLC "Elite" WiFi line) include <sleep> in DeviceInfo as a status
-            // field and answer the 574 state query — but ignore writes. Only
+            // field and answer the 574 state query, but ignore writes. Only
             // cameras passing both gates get the (beta) privacy section.
             bool sleepAd = camera.DeviceInfo?.HasSleep == true;
             bool remoteAbility = ChannelSupportFlag(support, camera.ChannelId, "remoteAbility");
@@ -739,7 +739,7 @@ public sealed class CameraControl : ICameraControl
                 ClassifyFloodlight(floodTask.Result != null, HasLightRange(floodGetTask.Result), spotlightBit);
             _floodlightReadId = floodReadId;
             bool privacy = privacyTask.Result != null; // camera answered the sleep query
-            // A physical white spotlight is advertised by ledCtrl bit 2 in Support —
+            // A physical white spotlight is advertised by ledCtrl bit 2 in Support:
             // this picks out the Lumus/Elite lines and leaves status-LED-only models
             // (E1 Pro) and the doorbell out. Its ON/OFF rides the Baichuan lightState
             // toggle; brightness rides HTTP when it answers, else FloodlightTask 289.
@@ -771,7 +771,7 @@ public sealed class CameraControl : ICameraControl
                      $"{(floodlight || spotlightTasks ? $", floodlightTaskId={floodReadId}" : "")}" +
                      $"{(version != null && version.Model.Length > 0 ? $", model={version.Model}" : "")})");
             if (sleepAd != remoteAbility)
-                Log.Debug($"{CameraName}: privacy gate — DeviceInfo<sleep>={sleepAd}, " +
+                Log.Debug($"{CameraName}: privacy gate: DeviceInfo<sleep>={sleepAd}, " +
                           $"remoteAbility={remoteAbility} (both required; mismatch means privacy stays off)");
             return _caps;
         }, ct);
@@ -843,7 +843,7 @@ public sealed class CameraControl : ICameraControl
                  $"{(width != null ? $" to {width}x{height}" : "")}" +
                  $"{(framerate != null ? $" @{framerate}fps" : "")}" +
                  $"{(bitrate != null ? $" {bitrate}kbps" : "")}" +
-                 " — the camera restarts the stream to apply");
+                 ": the camera restarts the stream to apply");
     }
 
     public Task<XElement?> GetBatteryInfoAsync(CancellationToken ct) =>
@@ -879,11 +879,11 @@ public sealed class CameraControl : ICameraControl
         WithCameraAsync<object?>(async camera =>
         {
             // NON-NEGOTIABLE: the Baichuan port (9000) carries this very
-            // connection — it is never enabled, disabled or changed from here,
+            // connection, it is never enabled, disabled or changed from here,
             // regardless of what any caller asks for.
             if (service.Equals("server", StringComparison.OrdinalIgnoreCase))
                 throw new NotSupportedException(
-                    "refusing to touch the Baichuan port — it carries this very connection");
+                    "refusing to touch the Baichuan port: it carries this very connection");
             string verb = on ? "enabl" : "disabl";
             var els = await camera.GetServicePortsAsync(ct: ct).ConfigureAwait(false)
                 ?? throw new NotSupportedException($"{CameraName} did not answer the service-port query");
@@ -894,12 +894,12 @@ public sealed class CameraControl : ICameraControl
                 ?? throw new NotSupportedException(
                     $"{CameraName}'s firmware does not allow toggling {service}");
             string want = on ? "1" : "0";
-            if (enable.Value == want) return null; // already there — nothing to write
+            if (enable.Value == want) return null; // already there, nothing to write
             Log.Info($"{CameraName}: {verb}ing the {service} service on the camera " +
-                     "(admin request — the same switch as the app's Port Settings)");
+                     "(admin request, the same switch as the app's Port Settings)");
             enable.Value = want;
             await camera.SetServicePortAsync(el, ct).ConfigureAwait(false);
-            // Some firmwares accept the set silently — the re-read is the truth,
+            // Some firmwares accept the set silently: the re-read is the truth,
             // and it keeps the UI honest about the camera's ACTUAL state.
             var after = await camera.GetServicePortsAsync(ct: ct).ConfigureAwait(false);
             var check = after?.FirstOrDefault(e =>
@@ -907,7 +907,7 @@ public sealed class CameraControl : ICameraControl
             if (check?.Element("enable")?.Value != want)
             {
                 Log.Warn($"{CameraName}: the {service} {verb}e was sent but the camera still " +
-                         $"reports it {(on ? "disabled" : "enabled")} — firmware may not accept " +
+                         $"reports it {(on ? "disabled" : "enabled")}: firmware may not accept " +
                          "msg 36 from third-party clients; use the Reolink app's Port Settings " +
                          "screen instead");
                 throw new InvalidOperationException(
@@ -924,7 +924,7 @@ public sealed class CameraControl : ICameraControl
         WithCameraAsync(camera => camera.SnapAsync(ct), ct);
 
     /// <summary>The Baichuan snap requests subStream, but some firmwares (dual-lens
-    /// Duos among them) ignore that and return the full panorama — megabytes of
+    /// Duos among them) ignore that and return the full panorama: megabytes of
     /// JPEG. The HTTP API's Snap honors explicit scaling, so prefer it here.</summary>
     public async Task<byte[]?> SnapshotSmallAsync(CancellationToken ct)
     {
@@ -944,7 +944,7 @@ public sealed class CameraControl : ICameraControl
                 }
             }
         }
-        Log.Debug($"{CameraName}: HTTP small snapshot unavailable — using the Baichuan snap");
+        Log.Debug($"{CameraName}: HTTP small snapshot unavailable: using the Baichuan snap");
         return await SnapshotAsync(ct).ConfigureAwait(false);
     }
 
@@ -1084,7 +1084,7 @@ public sealed class CameraControl : ICameraControl
         WithCameraAsync<object?>(async camera =>
         {
             await camera.SetPrivacyModeAsync(on, ct).ConfigureAwait(false);
-            Log.Info($"{CameraName}: privacy mode {(on ? "ON — camera going dark" : "off")}");
+            Log.Info($"{CameraName}: privacy mode {(on ? "ON: camera going dark" : "off")}");
             return null;
         }, ct);
 
@@ -1153,7 +1153,7 @@ public sealed class CameraControl : ICameraControl
     // ------------------------------------------------- HTTP-API extras (beta)
     // Everything below rides the camera's Reolink HTTP API. Reads are best-effort:
     // an unsupported command (the API answered but rejected it) or an unreachable
-    // API turns into null, never an error — the UI simply hides that section.
+    // API turns into null, never an error, the UI simply hides that section.
     // Writes go direct and let failures surface.
 
     /// <summary>Cap for best-effort HTTP reads, so one dead HTTP port can't stall a
@@ -1161,11 +1161,11 @@ public sealed class CameraControl : ICameraControl
     private static readonly TimeSpan HttpCallTimeout = TimeSpan.FromSeconds(6);
 
     /// <summary>Roomier cap for the snapshot fetch: it pays for a login AND an image
-    /// download over the camera's Wi-Fi — 6s cancels perfectly healthy cameras.</summary>
+    /// download over the camera's Wi-Fi, 6s cancels perfectly healthy cameras.</summary>
     private static readonly TimeSpan HttpSnapTimeout = TimeSpan.FromSeconds(20);
 
     /// <summary>After a transport-level failure, HTTP reads are skipped until this
-    /// time — a camera with port 80 closed shouldn't be re-probed on every panel open.</summary>
+    /// time: a camera with port 80 closed shouldn't be re-probed on every panel open.</summary>
     private DateTime _httpRetryAt;
 
     /// <summary>The HTTP API has answered this run, so it is used and its zones win over Baichuan's.</summary>
@@ -1210,7 +1210,7 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>Whether the one-time "HTTP API unreachable" warning fired for the
     /// current outage. Reset on the first successful call, so a later outage warns
-    /// again — users otherwise never learn WHY HTTP-backed features are missing
+    /// again: users otherwise never learn WHY HTTP-backed features are missing
     /// (a Duo shipped with its HTTP port disabled cost hours of MQTT debugging).</summary>
     private bool _httpUnreachableWarned;
 
@@ -1230,7 +1230,7 @@ public sealed class CameraControl : ICameraControl
         TimeSpan? timeout = null, bool force = false, bool probe = false)
     {
         // force = an explicit user action (SD-card browse): it gets its try even
-        // while the transport backoff is armed — the user pressed refresh NOW,
+        // while the transport backoff is armed, the user pressed refresh NOW,
         // and a no-op that quietly returns "nothing" reads as data loss.
         // A camera sleeping on purpose is left in radio silence: best-effort reads
         // return "nothing" without sending a packet (see SleepingOnPurpose).
@@ -1244,7 +1244,7 @@ public sealed class CameraControl : ICameraControl
         }
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // A call without a live session token pays for a LOGIN round-trip before
-        // the command — on a Wi-Fi camera under streaming load (dual-lens Duos)
+        // the command, on a Wi-Fi camera under streaming load (dual-lens Duos)
         // that alone can eat most of the 6s config budget, so every first read
         // timed out, armed the backoff, and HTTP features "vanished" while the
         // camera's API was actually fine. Give login-bearing calls the roomy
@@ -1286,7 +1286,7 @@ public sealed class CameraControl : ICameraControl
             _httpRetryAt = DateTime.UtcNow + TimeSpan.FromSeconds(60);
             _httpFailStreak++;
             // A slow/stalling server and a closed port are different stories and
-            // deserve different advice — telling someone with HTTP enabled to
+            // deserve different advice: telling someone with HTTP enabled to
             // enable HTTP just gaslights them.
             bool slow = ex is OperationCanceledException or TimeoutException;
             var reason = ex is OperationCanceledException
@@ -1299,12 +1299,12 @@ public sealed class CameraControl : ICameraControl
                 if (_sources.Any(s => s.SleepFriendly))
                 {
                     // A battery model (Argus family) usually exposes no HTTP API at
-                    // all — for it, silence is the normal state, not an outage, and
+                    // all, for it, silence is the normal state, not an outage, and
                     // the overload/firewall advice below would just mislead. Say it
                     // once per run, informationally, and stop asking the model to
                     // be something it isn't.
                     _httpWarnCooldownUntil = DateTime.MaxValue;
-                    Log.Info($"{CameraName}: no HTTP API answered ({reason}) — battery models usually " +
+                    Log.Info($"{CameraName}: no HTTP API answered ({reason}): battery models usually " +
                              "don't have one, so this is expected. Picture settings, Wi-Fi detail and " +
                              "scaled snapshots stay unavailable; streams, events, PIR, battery readings, " +
                              "volume, presets, the on-screen display and record audio (Baichuan) are " +
@@ -1317,18 +1317,18 @@ public sealed class CameraControl : ICameraControl
                          "does (volume, PTZ presets, AI sensitivity, the on-screen display and record audio " +
                          "fall back to Baichuan). " + (slow
                              // A no-reply timeout can't tell a slow camera from silently
-                             // dropped packets — don't claim "the port is open".
+                             // dropped packets: don't claim "the port is open".
                              ? "Either the camera is overloaded (Wi-Fi camera under streaming load), or " +
                                "something between Neolink and the camera is dropping HTTP traffic " +
                                "(firewall/VLAN rules, Docker networking). Reads resume automatically " +
                                "when it recovers."
-                             : "Many cameras ship with HTTP disabled — enable it in the Reolink app " +
+                             : "Many cameras ship with HTTP disabled: enable it in the Reolink app " +
                                "(Settings > Network > Advanced > Port Settings), or set 'http_address' " +
                                "if the API lives on another host/port."));
             }
             else
             {
-                Log.Debug($"{CameraName}: HTTP API not answering ({reason}) — skipping HTTP reads for 60s");
+                Log.Debug($"{CameraName}: HTTP API not answering ({reason}): skipping HTTP reads for 60s");
             }
             return default;
         }
@@ -1340,7 +1340,7 @@ public sealed class CameraControl : ICameraControl
         _httpAnswered = true;
         _httpLoginWarned = false;
         _httpFailStreak = 0;
-        // An answer proves this camera HAS an HTTP API — undo the "battery models
+        // An answer proves this camera HAS an HTTP API: undo the "battery models
         // don't have one" PERMANENT quiet, so a real later outage warns properly.
         // The ordinary 30-minute flap cooldown stays: a marginal Wi-Fi camera
         // bouncing between working and stalled must not re-warn on every flap.
@@ -1348,7 +1348,7 @@ public sealed class CameraControl : ICameraControl
         if (_httpUnreachableWarned)
         {
             _httpUnreachableWarned = false;
-            Log.Info($"{CameraName}: the camera's HTTP API is reachable again — HTTP-backed features restored");
+            Log.Info($"{CameraName}: the camera's HTTP API is reachable again: HTTP-backed features restored");
         }
     }
 
@@ -1371,12 +1371,12 @@ public sealed class CameraControl : ICameraControl
             return bare is { Image: null, Volume: null, PtzPresets: null, AiSensitivities: null, Osd: null, Audio: null }
                 ? null : bare;
         }
-        // Sequential on purpose (the HTTP client serializes requests anyway) —
+        // Sequential on purpose (the HTTP client serializes requests anyway),
         // but ONE slow answer must not blank the rest of the panel. A mid-sweep
         // transport failure arms the 60s backoff to protect unrelated callers;
         // within THIS sweep the first two failures are forgiven (the pre-step
         // backoff is restored so the remaining sections still get their try).
-        // The third strike leaves it armed and the rest no-op — and forgiveness
+        // The third strike leaves it armed and the rest no-op, and forgiveness
         // needs a PROVEN API (a login has succeeded): on a camera with no HTTP
         // at all, retrying just stacks login timeouts until the panel's own
         // request gives up.
@@ -1396,7 +1396,7 @@ public sealed class CameraControl : ICameraControl
                 var v = await read(budget.Token).ConfigureAwait(false);
                 if (_httpRetryAt > before)
                 {
-                    // This step armed the transport backoff — a real reach failure.
+                    // This step armed the transport backoff: a real reach failure.
                     anyTransportFail = true;
                     if (forgiven < 2 && _httpApi!.HasLiveToken)
                     {
@@ -1409,7 +1409,7 @@ public sealed class CameraControl : ICameraControl
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 anyTransportFail = true;
-                return default; // sweep budget spent — the cache stands in
+                return default; // sweep budget spent: the cache stands in
             }
         }
         // HTTP plainly absent: Baichuan goes first, since the picture's ONVIF probe below can spend most of the budget.
@@ -1430,7 +1430,7 @@ public sealed class CameraControl : ICameraControl
         var audio = await Step<AudioState>(HttpAudioStateAsync).ConfigureAwait(false);
         var fresh = new HttpFeatures(image, volume, wifi, presets, replies, autoTrack, sdCards, mdSens, aiSens, osd, audio);
 
-        // Fill the holes from the last good sweep — live values always win; the
+        // Fill the holes from the last good sweep: live values always win; the
         // cache only stands in for sections this sweep couldn't read (including
         // ALL of them, when the backoff was already armed by an earlier failure
         // and every read no-opped: the panel then shows the last-known state
@@ -1454,19 +1454,19 @@ public sealed class CameraControl : ICameraControl
         if (freshContent) _httpFeaturesCache = merged;
 
         // Never fail silently. The panel shows every HTTP-backed section (picture,
-        // volume, OSD, sensitivity…) blank when the sweep reads nothing — and with
+        // volume, OSD, sensitivity…) blank when the sweep reads nothing, and with
         // fail-fast (backoff armed on the first step, the rest no-op) the streak
         // that HttpTryAsync warns on never climbs, so the user gets "no settings,
         // no error" and no idea why. If the whole sweep came back empty on a real
         // transport failure and no more specific warning already fired (a rejected
         // login explains itself; the streak warning covers slow flapping), say so
-        // once — with the same cooldown, so a flapping camera doesn't spam.
+        // once, with the same cooldown, so a flapping camera doesn't spam.
         if (!freshContent && anyTransportFail && !_httpLoginWarned && !_httpUnreachableWarned
             && DateTime.UtcNow >= _httpWarnCooldownUntil)
         {
             _httpUnreachableWarned = true;
             _httpWarnCooldownUntil = DateTime.UtcNow + TimeSpan.FromMinutes(30);
-            Log.Warn($"{CameraName}: none of the camera's HTTP-API features answered — picture settings, " +
+            Log.Warn($"{CameraName}: none of the camera's HTTP-API features answered: picture settings, " +
                      "Wi-Fi signal and motion sensitivity stay unavailable (volume, PTZ presets, AI sensitivity, " +
                      "the on-screen display and record audio fall back to Baichuan). " +
                      "The camera streams fine over Baichuan, so this is the HTTP API specifically: it may be " +
@@ -1474,7 +1474,7 @@ public sealed class CameraControl : ICameraControl
                      "something between Neolink and the camera is dropping HTTP traffic " +
                      "(firewall/VLAN rules, Docker networking). Reads resume automatically when it recovers." +
                      (_onvif != null
-                         ? " (A separate ONVIF imaging fallback was also tried for the picture settings — " +
+                         ? " (A separate ONVIF imaging fallback was also tried for the picture settings, " +
                            "see this camera's ONVIF log line for whether that route is available.)"
                          : ""));
         }
@@ -1523,7 +1523,7 @@ public sealed class CameraControl : ICameraControl
     {
         var img = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetImageAsync(c).ConfigureAwait(false), ct)
             .ConfigureAwait(false);
-        // HTTP had nothing (no CGI API, or it failed) — fall back to ONVIF, the
+        // HTTP had nothing (no CGI API, or it failed): fall back to ONVIF, the
         // only picture-settings path on models like the Lumus. A healthy HTTP
         // camera never reaches this: img is non-null and ONVIF stays untouched.
         if (img == null)
@@ -1550,13 +1550,13 @@ public sealed class CameraControl : ICameraControl
         }
         _httpImagingWorks = true;
         _imageViaBc = false;
-        // The ISP half (day/night, flip, ...) is optional — picture sliders alone
+        // The ISP half (day/night, flip, ...) is optional: picture sliders alone
         // are still worth showing if a firmware rejects GetIsp.
         var isp = await HttpTryAsync<JsonObject?>(async c => await _httpApi!.GetIspAsync(c).ConfigureAwait(false), ct)
             .ConfigureAwait(false);
         // The (one-time, cached) range read is the camera's own capability list
         // for ISP fields: it decides whether HDR is 2- or 3-state, and whether
-        // flip/mirror exist at all — firmwares echo rotation/mirroring VALUES in
+        // flip/mirror exist at all, firmwares echo rotation/mirroring VALUES in
         // the config even on models that don't support them (Elite WiFi), so key
         // presence alone shows dead toggles.
         JsonObject? ispRange = isp != null
@@ -1578,10 +1578,10 @@ public sealed class CameraControl : ICameraControl
     /// produces. ONVIF's imaging service covers brightness/contrast/saturation/
     /// sharpness, the IR-cut (day/night) filter and wide-dynamic-range; it has no hue,
     /// anti-flicker or flip/mirror, so those stay null (the panel hides absent
-    /// fields). Never throws — null just means ONVIF had nothing.</summary>
+    /// fields). Never throws: null just means ONVIF had nothing.</summary>
     private async Task<ImageSettings?> GetOnvifImageSettingsAsync(CancellationToken ct)
     {
-        // Radio silence for a camera sleeping on purpose — an ONVIF discovery
+        // Radio silence for a camera sleeping on purpose: an ONVIF discovery
         // retry against a parked battery camera is exactly the traffic that
         // faked its wake pattern (2026-07-22).
         if (SleepingOnPurpose) return null;
@@ -1644,10 +1644,10 @@ public sealed class CameraControl : ICameraControl
         HdrMax: HdrRangeMax(ispRange));
 
     /// <summary>An optional on/off ISP field, gated by capability. The ability
-    /// table's verdict (ispFlip/ispMirror) is final when it answered — false hides
+    /// table's verdict (ispFlip/ispMirror) is final when it answered: false hides
     /// the toggle no matter what the config echoes, true shows it. Without an
     /// ability verdict, the range table decides: when it was read, the field must
-    /// appear IN it — firmwares echo rotation and mirroring values in the config
+    /// appear IN it, firmwares echo rotation and mirroring values in the config
     /// on models that can't actually flip, and a toggle that silently no-ops is
     /// worse than none. Without either (older firmware, reads failed) value
     /// presence decides, as before.</summary>
@@ -1674,9 +1674,9 @@ public sealed class CameraControl : ICameraControl
     {
         // Route the write down whichever transport served the read. ONVIF when the
         // camera has no HTTP API OR its HTTP API isn't answering imaging (the Lumus
-        // has a dead HTTP API derived from its host) — provided ONVIF is available.
+        // has a dead HTTP API derived from its host): provided ONVIF is available.
         bool useOnvif = _onvif != null && (_httpApi == null || _httpImagingWorks == false);
-        // The write is CONFIRMED — fold it into the cache: flip/mirror restart
+        // The write is CONFIRMED: fold it into the cache: flip/mirror restart
         // the camera's video pipeline, and a re-read racing that restart can
         // still echo the OLD value; the cache must not resurrect pre-write state
         // when the next sweep's fresh read fails.
@@ -1764,7 +1764,7 @@ public sealed class CameraControl : ICameraControl
     /// <summary>The audio settings BEYOND the speaker volume, which models expose
     /// unevenly: the encode settings' record-audio flag, and whichever extra
     /// AudioCfg volumes this firmware carries. Absent members read as null and the
-    /// UI simply doesn't draw them — the camera decides what's on offer.</summary>
+    /// UI simply doesn't draw them: the camera decides what's on offer.</summary>
     public async Task<AudioState?> GetAudioStateAsync(CancellationToken ct)
     {
         var http = await HttpAudioStateAsync(ct).ConfigureAwait(false);
@@ -1794,7 +1794,7 @@ public sealed class CameraControl : ICameraControl
         }, ct);
 
     /// <summary>The record-audio state from the encode settings. The flag lives at
-    /// the TOP of the Enc object (one switch for the camera — what the app shows);
+    /// the TOP of the Enc object (one switch for the camera, what the app shows);
     /// a per-stream fallback covers firmwares that nest it instead. Null = this
     /// firmware has no audio flag at all.</summary>
     internal static bool? EncRecordAudio(JsonObject enc)
@@ -1810,7 +1810,7 @@ public sealed class CameraControl : ICameraControl
     }
 
     /// <summary>Camera-side record-audio switch: puts the microphone into (or
-    /// strips it from) every stream the camera encodes — which is what lands in
+    /// strips it from) every stream the camera encodes, which is what lands in
     /// recordings here, in the Reolink app and on the SD card alike.</summary>
     public async Task SetRecordAudioAsync(bool on, CancellationToken ct)
     {
@@ -1840,12 +1840,12 @@ public sealed class CameraControl : ICameraControl
         await _httpApi.SetEncAsync(enc, ct).ConfigureAwait(false);
         if (_httpFeaturesCache?.Audio is { } ca)
             _httpFeaturesCache = _httpFeaturesCache with { Audio = ca with { RecordAudio = on } };
-        Log.Info($"{CameraName}: record audio {(on ? "enabled" : "disabled")} on every stream — " +
+        Log.Info($"{CameraName}: record audio {(on ? "enabled" : "disabled")} on every stream: " +
                  "the camera may briefly restart its streams to apply");
     }
 
     /// <summary>Writes whichever extra AudioCfg volumes were staged (0–100 each);
-    /// minimal payload like the picture writes — see SetImageSettingsAsync.</summary>
+    /// minimal payload like the picture writes: see SetImageSettingsAsync.</summary>
     public async Task SetAudioVolumesAsync(int? talkVolume, int? visitorVolume, CancellationToken ct)
     {
         if (_httpApi == null)
@@ -1875,7 +1875,7 @@ public sealed class CameraControl : ICameraControl
                 $"speaker volume set to {vol}", ct).ConfigureAwait(false);
             return;
         }
-        // Minimal payload, like the picture writes — see SetImageSettingsAsync.
+        // Minimal payload, like the picture writes: see SetImageSettingsAsync.
         var cfg = new JsonObject { ["channel"] = _httpApi.ChannelId, ["volume"] = vol };
         await _httpApi.SetAudioCfgAsync(cfg, ct).ConfigureAwait(false);
         Log.Info($"{CameraName}: speaker volume set to {vol}");
@@ -1888,10 +1888,10 @@ public sealed class CameraControl : ICameraControl
                 .ConfigureAwait(false) is { } viaHttp)
         {
             var http = WifiReading.FromHttp(viaHttp);
-            Log.Debug($"{CameraName}: Wi-Fi via HTTP API — raw {viaHttp} read as {http.Unit} ({http.Label}), level {http.Level}/4");
+            Log.Debug($"{CameraName}: Wi-Fi via HTTP API: raw {viaHttp} read as {http.Unit} ({http.Label}), level {http.Level}/4");
             return http;
         }
-        // Baichuan msg 115 <WifiSignal>: the protocol's own query, always in dBm —
+        // Baichuan msg 115 <WifiSignal>: the protocol's own query, always in dBm,
         // the source for cameras without the HTTP API. Rides the live connection
         // only; a parked battery camera reads as offline and is never woken for it.
         // Wired-ethernet cameras answer with nothing, so the query retires after a
@@ -1919,31 +1919,31 @@ public sealed class CameraControl : ICameraControl
             {
                 _bcWifiMisses = 0;
                 var bc = WifiReading.FromDbm(dbm);
-                Log.Debug($"{CameraName}: Wi-Fi via Baichuan msg 115 — {bc.Label}, level {bc.Level}/4");
+                Log.Debug($"{CameraName}: Wi-Fi via Baichuan msg 115: {bc.Label}, level {bc.Level}/4");
                 return bc;
             }
             // The camera answered, just not with a signal: if it named its link
-            // type, that settles it — a wired camera is not a Wi-Fi camera with a
+            // type, that settles it, a wired camera is not a Wi-Fi camera with a
             // missing reading, and it should never be asked again.
             if (kind != 0)
             {
                 _linkKind = kind;
-                Log.Debug($"{CameraName}: link type from Baichuan msg 115 — '{push!.NetType}'");
+                Log.Debug($"{CameraName}: link type from Baichuan msg 115: '{push!.NetType}'");
                 return null;
             }
             _bcWifiMisses++;
-            Log.Debug($"{CameraName}: Wi-Fi — Baichuan msg 115 returned no signal " +
+            Log.Debug($"{CameraName}: Wi-Fi: Baichuan msg 115 returned no signal " +
                       $"({_bcWifiMisses}/{BcWifiGiveUp} before this session stops asking)");
             return null;
         }
         catch (CameraOfflineException)
         {
-            return null; // parked/reconnecting — not evidence the query is unsupported
+            return null; // parked/reconnecting, not evidence the query is unsupported
         }
         catch (Exception ex) when (ex is CameraCommandException or TimeoutException or IOException)
         {
             _bcWifiMisses++;
-            Log.Debug($"{CameraName}: Wi-Fi — Baichuan msg 115 failed: {ex.Message} " +
+            Log.Debug($"{CameraName}: Wi-Fi: Baichuan msg 115 failed: {ex.Message} " +
                       $"({_bcWifiMisses}/{BcWifiGiveUp})");
             return null;
         }
@@ -1957,8 +1957,8 @@ public sealed class CameraControl : ICameraControl
     private const int BcWifiGiveUp = 3;
 
     // Cheap Wi-Fi cache for the camera-list sidebar. The list poll must not do a
-    // per-camera round-trip, so it reads _cachedWifi — falling back to whatever the
-    // last full HTTP-features sweep saw — and fires a throttled background refresh.
+    // per-camera round-trip, so it reads _cachedWifi, falling back to whatever the
+    // last full HTTP-features sweep saw, and fires a throttled background refresh.
     private volatile WifiReading? _cachedWifi;
     private DateTime _wifiWarmedAt;
     private static readonly TimeSpan WifiWarmInterval = TimeSpan.FromSeconds(30);
@@ -1970,7 +1970,7 @@ public sealed class CameraControl : ICameraControl
     private volatile int _linkKind;
     public bool? CachedWired => _linkKind == 0 ? null : _linkKind == 1;
 
-    /// <summary>Drops the cached reading — called when the camera's session ends, so
+    /// <summary>Drops the cached reading: called when the camera's session ends, so
     /// an unreachable camera can't keep showing hours-old signal as if it were live.
     /// The link TYPE survives: a camera doesn't change cable for Wi-Fi while offline,
     /// and re-learning it costs a round-trip.</summary>
@@ -1982,7 +1982,7 @@ public sealed class CameraControl : ICameraControl
 
     public async Task WarmWifiSignalAsync(CancellationToken ct)
     {
-        // A dozing battery camera keeps its last reading — warming it would put
+        // A dozing battery camera keeps its last reading: warming it would put
         // packets on the air at the exact moment the wake scan needs radio quiet.
         if (SleepingOnPurpose) return;
         // Throttle: one read per interval regardless of how often the list is polled.
@@ -2008,7 +2008,7 @@ public sealed class CameraControl : ICameraControl
                 _linkKind = 2; // it answered with a signal: it is on Wi-Fi
             }
         }
-        catch { /* best-effort UI value — a failed read just leaves the last one */ }
+        catch { /* best-effort UI value: a failed read just leaves the last one */ }
     }
 
     /// <summary>Maps a camera's link wording to 1 (wired) or 2 (Wi-Fi); 0 when it is
@@ -2019,7 +2019,7 @@ public sealed class CameraControl : ICameraControl
         // Matched as PREFIXES of the whole value, not substrings: these fields are
         // enum-like ("LAN", "Wifi", "eth0", "wlan0"), and a loose contains-match
         // reads "eth" out of ordinary words and would label a camera wired on the
-        // strength of a coincidence. Wi-Fi is tested first — "wlan" contains "lan".
+        // strength of a coincidence. Wi-Fi is tested first: "wlan" contains "lan".
         var v = s?.Trim();
         if (string.IsNullOrEmpty(v)) return 0;
         bool Starts(params string[] prefixes) =>
@@ -2114,7 +2114,7 @@ public sealed class CameraControl : ICameraControl
         Log.Info($"{CameraName}: auto-reply set (fileId={fileId}, timeout={timeoutSeconds}s)");
     }
 
-    /// <summary>The camera's GetAbility table, fetched once per camera lifetime —
+    /// <summary>The camera's GetAbility table, fetched once per camera lifetime:
     /// it is static per device+account, and it is the authoritative "does this
     /// model actually have the feature" source. Config reads are NOT trusted for
     /// capability: firmwares echo fields (aiTrack, rotation, mirroring) on models
@@ -2141,7 +2141,7 @@ public sealed class CameraControl : ICameraControl
     }
 
     /// <summary>supportAITrack ver &gt; 0 in the channel's ability block (falling back
-    /// to the first block — standalone cameras have exactly one).</summary>
+    /// to the first block, standalone cameras have exactly one).</summary>
     internal static bool SupportsAiTrack(JsonObject ability, int channel)
     {
         return (int?)AbilityChannel(ability, channel)?["supportAITrack"]?["ver"] is > 0;
@@ -2158,7 +2158,7 @@ public sealed class CameraControl : ICameraControl
     }
 
     /// <summary>A tri-state feature verdict from the ability table: true/false when
-    /// the channel's block answered (a missing key means "not this model" — the
+    /// the channel's block answered (a missing key means "not this model": the
     /// table lists every feature the firmware knows), null when there is no table
     /// to ask (ability read failed) and the caller must fall back to heuristics.</summary>
     internal static bool? AbilityFlag(JsonObject? ability, int channel, string key) =>
@@ -2174,7 +2174,7 @@ public sealed class CameraControl : ICameraControl
             return AutoTrackValue(cfg);
         }, ct);
 
-    /// <summary>The auto-track flag from an AiCfg — firmwares name it "aiTrack"
+    /// <summary>The auto-track flag from an AiCfg: firmwares name it "aiTrack"
     /// or "bSmartTrack"; null when the config carries neither (no tracking).</summary>
     internal static bool? AutoTrackValue(JsonObject cfg) =>
         (int?)cfg["aiTrack"] is { } v1 ? v1 != 0
@@ -2270,7 +2270,7 @@ public sealed class CameraControl : ICameraControl
                     // written back whole (the Video Doorbell line answers "param
                     // error"; others cannot re-parse it, likely over the zone
                     // table's size). The Reolink app writes a PARTIAL object.
-                    Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}) — trying the app-style minimal object");
+                    Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}): trying the app-style minimal object");
                 }
             }
             try
@@ -2283,7 +2283,7 @@ public sealed class CameraControl : ICameraControl
             }
             catch (ReolinkApiException ex)
             {
-                Log.Info($"{CameraName}: minimal SetMdAlarm rejected too ({ex.Message}) — trying the legacy Alarm dialect");
+                Log.Info($"{CameraName}: minimal SetMdAlarm rejected too ({ex.Message}): trying the legacy Alarm dialect");
             }
         }
         var legacy = await _httpApi.TryGetLegacyMdConfigAsync(ct).ConfigureAwait(false)
@@ -2297,7 +2297,7 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>The app-style partial write: channel plus only the named sections,
     /// deep-cloned from the (modified) full config. Firmwares that reject their own
-    /// config round-tripped whole accept this shape — it is what the app sends.</summary>
+    /// config round-tripped whole accept this shape: it is what the app sends.</summary>
     internal static JsonObject MinimalMdWrite(JsonObject cfg, params string[] sections)
     {
         var o = new JsonObject();
@@ -2327,7 +2327,7 @@ public sealed class CameraControl : ICameraControl
     /// <summary>Every ai_type any firmware is known to answer GetAiAlarm for.</summary>
     internal static readonly string[] AiAlarmTypes = { "people", "vehicle", "dog_cat", "face", "package" };
 
-    /// <summary>Types THIS camera answered for, discovered on the first full sweep —
+    /// <summary>Types THIS camera answered for, discovered on the first full sweep:
     /// later reads skip the rejected ones instead of re-asking every panel open.</summary>
     private IReadOnlyList<string>? _aiAlarmTypes;
 
@@ -2344,14 +2344,14 @@ public sealed class CameraControl : ICameraControl
             {
                 var cfg = await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false);
                 // The same reply says whether this type carries its OWN grid. Most
-                // cameras keep one zone for everything, so noting it here — free,
-                // in a sweep that already ran — is what stops the editor offering
+                // cameras keep one zone for everything, so noting it here, free,
+                // in a sweep that already ran, is what stops the editor offering
                 // a per-type tab that would only ever report "no zone".
                 NoteAiZoneSupport(type, ParseZone(type, cfg) != null);
                 return ParseAiSensitivity(type, cfg);
             }, ct).ConfigureAwait(false);
             if (one != null) list.Add(one);
-            // Transport backoff armed mid-sweep — the rest would no-op anyway.
+            // Transport backoff armed mid-sweep: the rest would no-op anyway.
             if (DateTime.UtcNow < _httpRetryAt) return list.Count > 0 ? list : null;
         }
         if (list.Count == 0) return null;
@@ -2874,7 +2874,7 @@ public sealed class CameraControl : ICameraControl
     /// <summary>The last grid read for each type. A zone is near-static config, and
     /// the panel re-reads it on every tab click: without this, one slow answer arms
     /// the 60s transport backoff and a grid the user was looking at a second ago
-    /// reads back as "this camera has no zone" — the same trap the HTTP feature
+    /// reads back as "this camera has no zone": the same trap the HTTP feature
     /// sweep already keeps a cache for.</summary>
     private readonly Dictionary<string, DetectionZone> _zoneCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -2885,7 +2885,7 @@ public sealed class CameraControl : ICameraControl
     /// <summary>How this camera's firmware accepts motion-config writes, learned
     /// from its rejections: the full object as read (preserves every sibling
     /// field), the app-style minimal object (channel + changed section only), or
-    /// the legacy SetAlarm dialect. Separate from the zone-read flag — reads and
+    /// the legacy SetAlarm dialect. Separate from the zone-read flag: reads and
     /// writes can split differently.</summary>
     private enum MdWriteMode { Unknown, Full, Minimal, Legacy }
 
@@ -2893,7 +2893,7 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>AI types this camera reports a zone of their OWN for. Most cameras
     /// keep a single zone that governs every detection type, and answer per-type
-    /// alarm queries with sensitivities but no grid — for those this stays empty and
+    /// alarm queries with sensitivities but no grid, for those this stays empty and
     /// the editor offers one zone rather than a tab per type.</summary>
     private readonly HashSet<string> _aiZoneTypes = new(StringComparer.OrdinalIgnoreCase);
 
@@ -2931,7 +2931,7 @@ public sealed class CameraControl : ICameraControl
         if (ZonesPerTypeOnly)
             return type == "md" ? null : await BcZoneAsync(type, ct).ConfigureAwait(false);
         // Opening the editor is the user asking NOW, so an armed transport backoff
-        // must not silently answer "nothing" — but a battery camera parked asleep
+        // must not silently answer "nothing", but a battery camera parked asleep
         // still gets radio silence: forcing packets at it would fake a wake edge.
         var answeredWithoutGrid = false;
         var fresh = await HttpTryAsync<DetectionZone?>(async c =>
@@ -2939,8 +2939,8 @@ public sealed class CameraControl : ICameraControl
             if (type != "md")
                 return ParseZone(type, await _httpApi!.GetAiAlarmAsync(type, c).ConfigureAwait(false));
             // Newer firmware (the Video Doorbell line) answers GetMdAlarm for
-            // sensitivity but keeps the zone grid — ONE grid, shared by every
-            // detection type — only in the legacy Alarm object. Which object holds
+            // sensitivity but keeps the zone grid, ONE grid, shared by every
+            // detection type, only in the legacy Alarm object. Which object holds
             // it is remembered, so this costs one round trip after the first read.
             if (_mdZoneIsLegacy == true)
                 return await _httpApi!.TryGetLegacyMdConfigAsync(c).ConfigureAwait(false) is { } known
@@ -2981,7 +2981,7 @@ public sealed class CameraControl : ICameraControl
             return fresh;
         }
         // Nothing came back. While the camera cannot be asked at all, the last
-        // known grid beats claiming it has none — the caller reports staleness.
+        // known grid beats claiming it has none: the caller reports staleness.
         if (HttpPaused)
             lock (_zoneCache)
                 if (_zoneCache.TryGetValue(type, out var cached)) return cached;
@@ -3011,7 +3011,7 @@ public sealed class CameraControl : ICameraControl
     }
 
     /// <summary>The speculative look for a zone in the legacy Alarm object. It runs
-    /// only after GetMdAlarm already answered, so the API is known reachable — and a
+    /// only after GetMdAlarm already answered, so the API is known reachable, and a
     /// firmware that stalls on this ONE command must not arm the transport backoff
     /// that would then blank every other HTTP-backed panel section for a minute.</summary>
     private async Task<(JsonObject? Alarm, bool Rejected)> ProbeLegacyMdAsync(CancellationToken ct)
@@ -3034,10 +3034,10 @@ public sealed class CameraControl : ICameraControl
     /// instead of dead-ending at "no zone".</summary>
     private bool _zoneShapeLogged;
 
-    /// <summary>_zoneSeen: the camera has produced a grid this run — kept, because
+    /// <summary>_zoneSeen: the camera has produced a grid this run, kept, because
     /// a camera that showed its zone has one, whatever a later read says.
     /// _zoneAbsent: the LATEST md read reached the camera and it answered with no
-    /// grid — re-decided on every read, never kept.</summary>
+    /// grid, re-decided on every read, never kept.</summary>
     private volatile bool _zoneSeen, _zoneAbsent;
 
     /// <inheritdoc/>
@@ -3059,7 +3059,7 @@ public sealed class CameraControl : ICameraControl
         if (_zoneShapeLogged) return;
         _zoneShapeLogged = true;
         static string Keys(JsonObject? o) => o == null ? "(rejected)" : string.Join(",", o.Select(kv => kv.Key));
-        Log.Info($"{CameraName}: no zone grid in the motion config — MdAlarm carries [{Keys(cfg)}], " +
+        Log.Info($"{CameraName}: no zone grid in the motion config: MdAlarm carries [{Keys(cfg)}], " +
                  $"legacy Alarm carries [{Keys(legacy)}]. If the Reolink app shows a detection zone " +
                  "for this camera, report these field names so the dialect can be added.");
     }
@@ -3095,7 +3095,7 @@ public sealed class CameraControl : ICameraControl
         {
             // Read-modify-write like the sensitivity paths: the surrounding config
             // (schedules, sensitivities, target sizes) goes back untouched. The
-            // write goes out the same dialect the grid was READ from — a doorbell
+            // write goes out the same dialect the grid was READ from: a doorbell
             // keeps it only in the legacy Alarm object (see GetDetectionZoneAsync).
             var (cfg, isMdAlarm) = _mdZoneIsLegacy == true
                 ? (null, true)
@@ -3114,11 +3114,11 @@ public sealed class CameraControl : ICameraControl
                 {
                     // Same firmware split as the sensitivity write: a grid READ from
                     // MdAlarm can still be refused on write. Step down the same
-                    // ladder — the app-style minimal object first, the legacy Alarm
+                    // ladder: the app-style minimal object first, the legacy Alarm
                     // object (when it carries the grid) after that.
                     try
                     {
-                        Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}) — trying the app-style minimal object");
+                        Log.Info($"{CameraName}: SetMdAlarm rejected ({ex.Message}): trying the app-style minimal object");
                         await _httpApi.SetMdConfigAsync(MinimalMdWrite(cfg, "scope"), isMdAlarm: true, ct).ConfigureAwait(false);
                         if (_mdWriteMode != MdWriteMode.Legacy) _mdWriteMode = MdWriteMode.Minimal;
                     }
@@ -3131,10 +3131,10 @@ public sealed class CameraControl : ICameraControl
                             // in the log from code that never tried one.
                             Log.Info($"{CameraName}: minimal SetMdAlarm rejected too ({ex2.Message}) and the legacy Alarm object " +
                                 (lg == null ? "was refused" : $"has no grid (carries [{string.Join(",", lg.Select(kv => kv.Key))}])") +
-                                " — every dialect exhausted");
+                                ": every dialect exhausted");
                             throw;
                         }
-                        Log.Info($"{CameraName}: minimal SetMdAlarm rejected too ({ex2.Message}) — writing the zone through the legacy Alarm dialect");
+                        Log.Info($"{CameraName}: minimal SetMdAlarm rejected too ({ex2.Message}): writing the zone through the legacy Alarm dialect");
                         ApplyZoneChecked(type, lg, table);
                         await _httpApi.SetMdConfigAsync(lg, isMdAlarm: false, ct).ConfigureAwait(false);
                         _mdZoneIsLegacy = true;
@@ -3171,7 +3171,7 @@ public sealed class CameraControl : ICameraControl
     {
         if (ParseZone(type, cfg) is not { } zone)
             throw new NotSupportedException($"{CameraName} reports no {type} detection zone");
-        // Dimensions come from the camera, never the client — a stale editor
+        // Dimensions come from the camera, never the client: a stale editor
         // (resolution change, firmware update) must fail, not scramble the grid.
         if (!ApplyZone(cfg, table))
             throw new ArgumentException(
@@ -3241,7 +3241,7 @@ public sealed class CameraControl : ICameraControl
                 .ConfigureAwait(false);
             return;
         }
-        // Read-modify-write of the whole Osd object — SetOsd expects the complete
+        // Read-modify-write of the whole Osd object: SetOsd expects the complete
         // structure (both overlay blocks) back, unlike the flat Image/Isp writes.
         var (osd, _) = await _httpApi.GetOsdAsync(ct).ConfigureAwait(false);
         if (showName != null || namePos != null)
@@ -3270,7 +3270,7 @@ public sealed class CameraControl : ICameraControl
 
     // ------------------------------------------------- firmware check (HTTP, beta)
 
-    /// <summary>CheckFirmware makes the CAMERA call Reolink's servers — cache the
+    /// <summary>CheckFirmware makes the CAMERA call Reolink's servers: cache the
     /// verdict so panel opens don't turn into cloud traffic.</summary>
     private FirmwareStatus? _fwStatus;
     private DateTime _fwCheckedAt;
@@ -3286,7 +3286,7 @@ public sealed class CameraControl : ICameraControl
         {
             if (status.UpdateAvailable && _fwStatus?.UpdateAvailable != true)
                 Log.Info($"{CameraName}: a newer camera firmware is available" +
-                         $"{(status.NewVersion != null ? $" ({status.NewVersion})" : "")} — " +
+                         $"{(status.NewVersion != null ? $" ({status.NewVersion})" : "")}: " +
                          "update it from the Reolink app/web page when convenient");
             _fwStatus = status;
             _fwCheckedAt = DateTime.UtcNow;
@@ -3618,7 +3618,7 @@ public sealed class CameraControl : ICameraControl
     }
 
     /// <summary>The write for one rule: the firmware applies a top-level op (modify or delete)
-    /// to the items sent, matched by index — so only the edited item goes. Null = no such rule.</summary>
+    /// to the items sent, matched by index, so only the edited item goes. Null = no such rule.</summary>
     internal static XElement? BuildSmartRuleEdit(XElement current, string itemName, string? secondsField, int index,
         int? sensitivity, int? seconds, bool delete)
     {
@@ -3655,7 +3655,7 @@ public sealed class CameraControl : ICameraControl
 
     // -------------------------------------------- SD-card recordings (HTTP, beta)
 
-    /// <summary>SD searches walk the card's file table — give them the roomy
+    /// <summary>SD searches walk the card's file table: give them the roomy
     /// snapshot budget, not the 6s config-read cap.</summary>
     public async Task<IReadOnlyList<int>?> GetSdRecordingDaysAsync(int year, int month, CancellationToken ct)
     {
@@ -3688,7 +3688,7 @@ public sealed class CameraControl : ICameraControl
         return days;
     }
 
-    /// <summary>Overall budget for one SD FILE search (all windows, both streams) —
+    /// <summary>Overall budget for one SD FILE search (all windows, both streams):
     /// kept UNDER the UI's own 95s wait so a slow day answers (partial or the
     /// error banner) instead of the client cancelling first.</summary>
     private static readonly TimeSpan SdSearchTimeout = TimeSpan.FromSeconds(90);
@@ -3726,9 +3726,9 @@ public sealed class CameraControl : ICameraControl
     private Task<IReadOnlyList<SdRecording>?> HttpSdRecordingsAsync(DateOnly day, CancellationToken ct, string? stream = null) =>
         HttpTryAsync<IReadOnlyList<SdRecording>?>(async c =>
         {
-            // The camera records whichever stream its own settings say — usually
+            // The camera records whichever stream its own settings say, usually
             // main; older/battery firmwares list sub. Ask main first, sub when
-            // main has nothing — and a stream the firmware REJECTS searching
+            // main has nothing, and a stream the firmware REJECTS searching
             // must not abort the other one.
             bool anyWindowFailed = false, anyWindowWorked = false;
             foreach (var streamType in stream == null ? new[] { "main", "sub" } : new[] { stream })
@@ -3762,7 +3762,7 @@ public sealed class CameraControl : ICameraControl
                     }
                     catch (ReolinkApiException ex)
                     {
-                        // The firmware doesn't do this stream's search — next stream.
+                        // The firmware doesn't do this stream's search: next stream.
                         Log.Debug($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) rejected: {ex.Message}");
                         rejected = true;
                         break;
@@ -3771,13 +3771,13 @@ public sealed class CameraControl : ICameraControl
                     {
                         // A slow or dropped window (camera busy streaming): keep what
                         // we have, try the rest, give up on this stream after two
-                        // misses in a row. Info, not Debug — the UI's error banner
+                        // misses in a row. Info, not Debug: the UI's error banner
                         // sends people to this log expecting details.
                         anyWindowFailed = true;
                         Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd} " +
                                  $"{h:00}:00-{Math.Min(h + 6, 24):00}:00) failed: {Log.Flatten(ex)}");
                         // No session token and nothing answered yet: there is no
-                        // working HTTP API here (some models simply have none) —
+                        // working HTTP API here (some models simply have none),
                         // one failed login says it all, and walking the remaining
                         // windows would stack more of the same timeout.
                         if (!_httpApi!.HasLiveToken && !anyWindowWorked) return null;
@@ -3788,7 +3788,7 @@ public sealed class CameraControl : ICameraControl
                 {
                     if (anyWindowFailed)
                         Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) shows a PARTIAL " +
-                                 $"day ({files.Count} recordings) — some windows failed; refresh fills the gaps");
+                                 $"day ({files.Count} recordings): some windows failed; refresh fills the gaps");
                     if (_httpSdFiles.Count > 5000) _httpSdFiles.Clear();
                     foreach (var f in files) _httpSdFiles[f.Name] = f;
                     return files;
@@ -3796,15 +3796,15 @@ public sealed class CameraControl : ICameraControl
                 if (rejected || lastResult == null) continue;
                 // Zero usable files answers the "the app shows footage but neolink
                 // doesn't" question ONLY if we can see what the camera actually
-                // said — log the raw shape (dropped entries mean an unmapped
+                // said: log the raw shape (dropped entries mean an unmapped
                 // firmware dialect; an absent File[] means a genuinely empty day).
                 Log.Info($"{CameraName}: SD file search ({streamType}, {day:yyyy-MM-dd}) returned " +
                          (rawTotal <= 0 ? $"no File list (keys: {string.Join(",", lastResult.Select(k => k.Key))})"
-                                        : $"{rawTotal} entries but none usable — first entry: " +
+                                        : $"{rawTotal} entries but none usable: first entry: " +
                                           Truncate((lastResult["File"] as JsonArray)?[0]?.ToJsonString() ?? "?", 400)));
             }
             // Nothing usable. An empty day the camera confirmed is an empty list;
-            // any failed window with zero results is null — the UI's error banner —
+            // any failed window with zero results is null, the UI's error banner,
             // returned WITHOUT arming the transport backoff, so the refresh the
             // banner suggests actually reaches the camera instead of no-opping
             // for 60 s.
@@ -3820,7 +3820,7 @@ public sealed class CameraControl : ICameraControl
                 Start: SearchTime(f["StartTime"] as JsonObject),
                 End: SearchTime(f["EndTime"] as JsonObject),
                 // "size" comes back as a NUMBER on most firmwares but a quoted STRING
-                // on some (the Video Doorbell WiFi) — a bare (long?) cast throws on the
+                // on some (the Video Doorbell WiFi): a bare (long?) cast throws on the
                 // string, which failed the ENTIRE day's parse and read as "none usable".
                 SizeBytes: AsLong(f["size"]),
                 StreamType: (string?)f["type"] ?? streamType))
@@ -4292,7 +4292,7 @@ public sealed class CameraControl : ICameraControl
 
     /// <summary>
     /// Interprets a Support flag. Values vary by model/firmware: numeric (0 = off),
-    /// or strings like "none" vs. "pt"/"ptz" — e.g. the E1 Pro reports ptzMode="pt".
+    /// or strings like "none" vs. "pt"/"ptz": e.g. the E1 Pro reports ptzMode="pt".
     /// </summary>
     internal static bool SupportFlag(XElement? support, string name)
     {

@@ -14,7 +14,7 @@ using Neolink.Web;
 // Single source of truth: <Version> in Neolink.Server.csproj. Release builds
 // override it with the git tag (docker.yml passes -p:Version), so the reported
 // version increments with every release without touching code. The build may
-// append "+<commit>" to the informational version — not for human eyes.
+// append "+<commit>" to the informational version, not for human eyes.
 string Version = Assembly.GetExecutingAssembly()
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
     .InformationalVersion.Split('+')[0] ?? "0.0.0";
@@ -78,7 +78,7 @@ if (logPath != null && !Log.AttachFile(logPath, out var logError))
 
 // A Windows service must check in with the Service Control Manager promptly
 // after launch, so this runs before the config is even read. From a console the
-// dispatcher reports "no SCM here" and the flag downgrades to a no-op — the same
+// dispatcher reports "no SCM here" and the flag downgrades to a no-op: the same
 // installed command line works at a prompt for testing.
 bool runningAsService = false;
 if (serviceMode && command == "rtsp")
@@ -91,14 +91,14 @@ if (serviceMode && command == "rtsp")
 if (command == "selftest")
     return SelfTest.Run(configPath) ? 0 : 1;
 
-// Demo mode builds its whole world — synthetic footage, seeded history, a
-// throwaway config — under one temp root, wiped at the next demo start. The
+// Demo mode builds its whole world, synthetic footage, seeded history, a
+// throwaway config, under one temp root, wiped at the next demo start. The
 // scratch config file exists only so the admin editor has something to edit.
 Neolink.Demo.DemoRig? demoRig = null;
 if (demoMode && command == "rtsp")
 {
     if (Neolink.Media.Ffmpeg.ExePath == null)
-        return Fail("--demo draws its synthetic cameras with ffmpeg — install ffmpeg on PATH (or set NEOLINK_FFMPEG)");
+        return Fail("--demo draws its synthetic cameras with ffmpeg: install ffmpeg on PATH (or set NEOLINK_FFMPEG)");
     Log.Info("Demo mode: generating synthetic cameras (a few seconds of ffmpeg)...");
     try
     {
@@ -109,7 +109,7 @@ if (demoMode && command == "rtsp")
         return Fail($"demo setup failed: {ex.Message}");
     }
     configPath = demoRig.ConfigPath;
-    Log.Info($"Demo mode: nothing is saved — everything lives under {demoRig.Root} and is wiped at the next start");
+    Log.Info($"Demo mode: nothing is saved, everything lives under {demoRig.Root} and is wiped at the next start");
 }
 
 if (configPath == null)
@@ -131,7 +131,7 @@ if (configPath == null)
 // Unraid / add-on case): write a commented starter config so the container boots
 // straight to the web UI instead of crash-looping on a missing file. The user
 // edits it to add cameras and restarts. Only reached with an explicit --config
-// path — the working-directory search above returns only files that exist.
+// path: the working-directory search above returns only files that exist.
 if (!File.Exists(configPath))
 {
     try
@@ -140,13 +140,13 @@ if (!File.Exists(configPath))
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         // A service install has no volume to map later: give it a working
         // recording setup out of the box, next to the config, changeable in the
-        // web UI's admin settings. Container starters keep the commented hint —
+        // web UI's admin settings. Container starters keep the commented hint:
         // there the path only means something once a volume backs it.
         var recDefault = runningAsService
             ? Path.Combine(Path.GetDirectoryName(full)!, "recordings")
             : null;
         File.WriteAllText(full, StarterConfig(recDefault));
-        Log.Info($"No config file found — wrote a starter config to {full}. " +
+        Log.Info($"No config file found: wrote a starter config to {full}. " +
                  "Edit it to add your cameras (see the comments inside), then restart.");
     }
     catch (Exception ex)
@@ -173,7 +173,7 @@ else
 }
 
 // On-demand camera-discovery diagnostic: run the sweep once, now, for every
-// Baichuan camera, then exit. This is the way to probe a battery camera —
+// Baichuan camera, then exit. This is the way to probe a battery camera:
 // wake it (motion or the Reolink app), run this immediately, and the report
 // lands while it is awake, instead of waiting for the background sweep's next
 // 15-minute window to happen to coincide with a wake. Add --verbose for the
@@ -194,7 +194,7 @@ if (command == "probe")
     return 0;
 }
 
-// Capture log lines from here on for the web UI's admin log stream — created
+// Capture log lines from here on for the web UI's admin log stream: created
 // before anything interesting happens so startup lines are in the backlog.
 var logBuffer = new Neolink.Web.LogBuffer();
 Log.Tap = logBuffer.Publish;
@@ -202,10 +202,10 @@ Log.Tap = logBuffer.Publish;
 Log.Info($"Neolink.NET {Version} starting");
 var tzOffset = DateTimeOffset.Now.Offset;
 Log.Info($"Local time: {DateTime.Now:yyyy-MM-dd HH:mm:ss} " +
-         $"({TimeZoneInfo.Local.Id}, UTC{(tzOffset < TimeSpan.Zero ? "-" : "+")}{tzOffset:hh\\:mm}) — " +
+         $"({TimeZoneInfo.Local.Id}, UTC{(tzOffset < TimeSpan.Zero ? "-" : "+")}{tzOffset:hh\\:mm}), " +
          "set the TZ env var to change it");
 
-// Server-side UI state (accounts, runtime settings) lives in state_dir — the
+// Server-side UI state (accounts, runtime settings) lives in state_dir: the
 // config directory unless relocated (e.g. because the config mount is read-only).
 var configDir = Path.GetDirectoryName(Path.GetFullPath(configPath))!;
 var stateDir = config.Ui.StateDir ?? configDir;
@@ -226,7 +226,7 @@ using var shutdown = new CancellationTokenSource();
 if (runningAsService)
     WindowsService.OnStop = () =>
     {
-        Log.Info("Service stop requested — shutting down...");
+        Log.Info("Service stop requested: shutting down...");
         try { shutdown.Cancel(); } catch (ObjectDisposedException) { }
     };
 Console.CancelKeyPress += (_, e) =>
@@ -239,7 +239,7 @@ Console.CancelKeyPress += (_, e) =>
     }
 };
 // ProcessExit also fires on exits WE initiated (Ctrl+C, the UI's restart
-// button) — by then Main has finished and the `using` has disposed the CTS,
+// button), by then Main has finished and the `using` has disposed the CTS,
 // so Cancel would throw ObjectDisposedException into the exit handler.
 AppDomain.CurrentDomain.ProcessExit += (_, _) =>
 {
@@ -248,11 +248,11 @@ AppDomain.CurrentDomain.ProcessExit += (_, _) =>
 
 // The demo world has a lifespan: continuous recording accrues gigabytes per
 // hour, and a hosted demo accumulates visitors' fiddling. A clean exit every
-// six hours bounds both — the supervisor (docker --restart, systemd) starts a
+// six hours bounds both: the supervisor (docker --restart, systemd) starts a
 // fresh world; the wipe-on-start does the cleaning. A console run just ends.
 if (demoRig != null)
 {
-    Log.Info("Demo mode: the world resets every 6 hours (clean exit — run under " +
+    Log.Info("Demo mode: the world resets every 6 hours (clean exit, run under " +
              "a restart policy such as docker --restart when hosting this)");
     var demoShutdown = shutdown;
     _ = Task.Run(async () =>
@@ -260,7 +260,7 @@ if (demoRig != null)
         try
         {
             await Task.Delay(TimeSpan.FromHours(6), demoShutdown.Token);
-            Log.Info("Demo reset: six hours are up — exiting so the supervisor can start a fresh world");
+            Log.Info("Demo reset: six hours are up, exiting so the supervisor can start a fresh world");
             demoShutdown.Cancel();
         }
         catch (OperationCanceledException) { }
@@ -308,13 +308,13 @@ if (config.Recording is { } recCfg)
         // recordings root) are checked once for migration.
         recordingSettings = new RecordingSettings(stateDir, configDir, eventStore.Root);
         Log.Info($"Recording to {eventStore.Root} " +
-                 $"(default retention — events: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")}, " +
+                 $"(default retention, events: {(recCfg.RetentionDays > 0 ? $"{recCfg.RetentionDays} days" : "forever")}, " +
                  $"continuous: {(recCfg.EffectiveContinuousRetentionDays > 0 ? $"{recCfg.EffectiveContinuousRetentionDays} days" : "forever")}; " +
                  "per-camera overrides apply)");
         if (storage.HasClipsTier)
             Log.Info($"Recording: event clips go to the fast tier at {storage.ClipsRoot}");
         if (storage.ArchiveRoot is { } archRoot)
-            Log.Info($"Recording: archive tier at {archRoot} — cameras opt in from the web UI");
+            Log.Info($"Recording: archive tier at {archRoot}, cameras opt in from the web UI");
         // Catch the common Docker footgun where separate tier paths silently land
         // on the same (root) filesystem because their bind mounts never attached.
         foreach (var warn in storage.SharedVolumeWarnings())
@@ -394,7 +394,7 @@ Neolink.Streaming.CameraClock.Store = cameraClockStore;
 var detectAssets = new Neolink.Detect.DetectAssets(stateDir);
 // Housekeeping, on the hour like the recordings' own: a feature switched off
 // should not go on holding 35 MB of state dir. Not done the moment it is switched
-// off — turning it off and straight back on is a normal thing to do, and that
+// off: turning it off and straight back on is a normal thing to do, and that
 // would cost the download twice.
 tasks.Add(Task.Run(async () =>
 {
@@ -411,8 +411,8 @@ tasks.Add(Task.Run(() => notifier.RunAsync(shutdown.Token)));
 
 // AI event descriptions (opt-in, configured in the web UI): completed detection
 // events send a 1 fps low-res frame burst to an OpenAI-style LLM (LM Studio and
-// friends) and store its answer on the event. Isolated exactly like the notifier
-// — a bounded queue and one worker task, so a slow or dead model can never
+// friends) and store its answer on the event. Isolated exactly like the notifier:
+// a bounded queue and one worker task, so a slow or dead model can never
 // affect recording, streaming or MQTT. The API key is encrypted at rest.
 var aiStore = new Neolink.Ai.AiStore(stateDir, secretProtector);
 Neolink.Ai.AiDescriber? aiDescriber = null;
@@ -424,11 +424,11 @@ if (eventStore != null && recordingSettings != null)
         cam => recSettingsForAi.Get(cam).AiContext);
     var describer = aiDescriber;
     tasks.Add(Task.Run(() => describer.RunAsync(shutdown.Token)));
-    // Say up front which frame pipeline this install has — "why no ffmpeg in
+    // Say up front which frame pipeline this install has: "why no ffmpeg in
     // my logs" should be answerable from the startup banner, not archaeology.
     Log.Info(Neolink.Ai.AiPreroll.FfmpegPath is { } ffPath
-        ? $"AI describe: ffmpeg at {ffPath} — stream frame sampling, pre-trigger frames and downscaling active"
-        : "AI describe: no ffmpeg found — frames come from camera snapshots only " +
+        ? $"AI describe: ffmpeg at {ffPath}, stream frame sampling, pre-trigger frames and downscaling active"
+        : "AI describe: no ffmpeg found, frames come from camera snapshots only " +
           "(install ffmpeg or set NEOLINK_FFMPEG to add stream sampling, pre-trigger frames and downscaling)");
 }
 else if (Neolink.Media.Ffmpeg.ExePath == null)
@@ -436,14 +436,14 @@ else if (Neolink.Media.Ffmpeg.ExePath == null)
     // Same banner for installs without AI: event emails sample their snapshots
     // with ffmpeg too, and "I asked for 3 snapshots and got 1" must not require
     // reading the source to explain.
-    Log.Info("No ffmpeg found — features that sample video frames fall back to single " +
+    Log.Info("No ffmpeg found: features that sample video frames fall back to single " +
              "snapshots (event emails attach the thumbnail only). Install ffmpeg or set " +
              "NEOLINK_FFMPEG; the Docker image ships one.");
 }
 
 // Footage encryption (opt-in via recording.encrypt): new clips, segments
 // and thumbnails are written as chunked AES-256-GCM. The vault gets the key
-// whenever recording exists AT ALL — even with the switch off — so footage
+// whenever recording exists AT ALL, even with the switch off, so footage
 // recorded while it WAS on stays playable after toggling back. Reads sniff the
 // format, so plaintext and encrypted footage live side by side forever.
 if (config.Recording != null)
@@ -452,21 +452,21 @@ if (config.Recording != null)
         encryptNew: config.Recording.Encrypt);
     if (config.Recording.Encrypt)
     {
-        Log.Info("Recording: footage encryption is ON — new footage is written " +
+        Log.Info("Recording: footage encryption is ON, new footage is written " +
                  "AES-256-GCM; earlier plaintext footage keeps playing. Back up the key " +
                  $"({Neolink.Notifications.SecretProtector.KeyEnvVar} or the state dir's " +
-                 $"{Neolink.Notifications.SecretProtector.KeyFileName}) — without it the footage is gone. " +
+                 $"{Neolink.Notifications.SecretProtector.KeyFileName}), without it the footage is gone. " +
                  $"Key in use: {secretProtector.KeySource}, fingerprint {secretProtector.Fingerprint}.");
         // Encrypting footage with a key that lives ON the footage disk protects
-        // nothing against that disk being stolen — say so where it will be seen.
+        // nothing against that disk being stolen: say so where it will be seen.
         if (secretProtector is { KeySource: "file", KeyFile: { } keyFile }
             && storage != null && storage.SharesVolumeWith(keyFile, out var keyTier))
             Log.Warn($"Footage encryption: the key file ({keyFile}) sits on the SAME disk as the " +
-                     $"{keyTier} storage — a stolen disk would carry its own key. Move ui.state_dir " +
+                     $"{keyTier} storage: a stolen disk would carry its own key. Move ui.state_dir " +
                      $"to a different disk, or provide the key via " +
                      $"{Neolink.Notifications.SecretProtector.KeyEnvVar} so it never touches disk.");
         if (secretProtector.KeySource == "ephemeral")
-            Log.Warn("Footage encryption: the key is EPHEMERAL (unwritable state dir) — footage " +
+            Log.Warn("Footage encryption: the key is EPHEMERAL (unwritable state dir), footage " +
                      "encrypted this run becomes UNREADABLE after a restart. Fix the state dir now.");
     }
 }
@@ -479,7 +479,7 @@ var motionTargets = new List<(IReadOnlyList<CameraService> Services, string Name
 // not exist until the camera list is built.
 var onvifEventTargets = new List<(OnvifEventService Events, string Name, Action<MotionPush>? RecorderSink)>();
 
-// Per-camera runtime state that survives restarts (today: the SUSPEND flag —
+// Per-camera runtime state that survives restarts (today: the SUSPEND flag,
 // Neolink holds no connection to the camera, so it can't be viewed or recorded).
 // Shared by the web API / MQTT bridge (which toggle it) and applied at startup.
 var cameraState = new Neolink.Web.CameraStateStore(stateDir);
@@ -490,7 +490,7 @@ foreach (var cam in config.Cameras)
     var permitted = config.PermittedUsersFor(cam);
 
     // Each RTSP client picks its audio codec on the URL: ?audio=opus asks for
-    // the transcoded track, ?audio=original for the camera's own — the NVR can
+    // the transcoded track, ?audio=original for the camera's own, the NVR can
     // record the camera's AAC while the WebRTC gateway pulls Opus from the same
     // hub. A bare URL serves the camera's audio_transcode default. Unsupported
     // formats (and Opus without a usable ffmpeg) are refused at DESCRIBE with a
@@ -498,7 +498,7 @@ foreach (var cam in config.Cameras)
     bool ffmpegPresent = Neolink.Media.Ffmpeg.ExePath != null;
     bool defaultOpus = cam.AudioTranscode == "opus" && ffmpegPresent;
     if (cam.AudioTranscode == "opus" && !ffmpegPresent)
-        Log.Warn($"{cam.Name}: audio_transcode \"opus\" needs ffmpeg — none was found, serving original " +
+        Log.Warn($"{cam.Name}: audio_transcode \"opus\" needs ffmpeg: none was found, serving original " +
                  "audio (install ffmpeg on PATH or point NEOLINK_FFMPEG at one)");
     RtspMount Mount(string path, IStreamHub hub)
     {
@@ -519,7 +519,7 @@ foreach (var cam in config.Cameras)
 
     if (cam.Demo)
     {
-        // Demo camera: the same hub, mounts and recorders as a real one — only
+        // Demo camera: the same hub, mounts and recorders as a real one, only
         // the source differs (a pump looping generated footage instead of a
         // camera connection). No Baichuan control surface; snapshots come from
         // the synthetic frames so events still get thumbnails.
@@ -625,10 +625,10 @@ foreach (var cam in config.Cameras)
         }
 
         // Control commands (capabilities, PTZ, LED, ...) ride the primary stream's
-        // connection — cameras have session limits, so no extra login is spent.
+        // connection: cameras have session limits, so no extra login is spent.
         // Some controls (stream encode writes, white-LED brightness) go over the
         // camera's HTTP API. Use an explicit http_address when set, otherwise derive
-        // it from the Baichuan host (same box, port 80) — UID-only cameras have no
+        // it from the Baichuan host (same box, port 80): UID-only cameras have no
         // host and get none. Unreachable HTTP just fails those calls gracefully.
         var httpAddr = cam.HttpAddress
             ?? (string.IsNullOrWhiteSpace(cam.Host) ? null : cam.Host);
@@ -667,7 +667,7 @@ foreach (var cam in config.Cameras)
         cameraLogins.Add(cam, camServices, reolink, httpApi, onvif);
 
         // Two-way talk is opt-in (ui.talk). When on, this camera's RTSP mounts can
-        // serve an ONVIF audio backchannel (go2rtc / HA WebRTC) — DESCRIBE still
+        // serve an ONVIF audio backchannel (go2rtc / HA WebRTC): DESCRIBE still
         // gates the SDP track on the camera actually having a speaker.
         if (config.Ui.Talk)
             foreach (var m in camMounts) m.Talk = control;
@@ -698,7 +698,7 @@ foreach (var cam in config.Cameras)
         else
         {
             // A camera with no way to detect anything can never trigger an event
-            // clip — only continuous (24/7) applies to it. A non-Reolink camera CAN
+            // clip, only continuous (24/7) applies to it. A non-Reolink camera CAN
             // detect, through its ONVIF event service, so it is seeded like any
             // other; if it turns out to have none, the switch simply never fires.
             recordingSettings.Seed(cam.Name,
@@ -751,7 +751,7 @@ foreach (var cam in config.Cameras)
                 tasks.Add(Task.Run(() => recorder.RunAsync(shutdown.Token)));
             }
 
-            // Continuous (24/7) recording is temporarily disabled — see
+            // Continuous (24/7) recording is temporarily disabled: see
             // RecordingConfig.ContinuousEnabled.
             if (RecordingConfig.ContinuousEnabled)
             {
@@ -760,7 +760,7 @@ foreach (var cam in config.Cameras)
                     hasRoom: storage == null ? null : () => storage.HasRoom(StorageRole.Main),
                     onWriteError: recordingHealth.MarkWriteError,
                     // Sleep veto, evaluated live (battery status can heal in after
-                    // connect): a dozing battery camera never tapes 24/7 — the
+                    // connect): a dozing battery camera never tapes 24/7, the
                     // recorder's frame demand would hold it awake until it dies.
                     blocked: () => camServices.Any(s => s.SleepFriendly));
                 continuousRecorder = continuous;
@@ -770,7 +770,7 @@ foreach (var cam in config.Cameras)
     }
 
     // Wake-capture: exactly ONE stream service probes the sleeping camera and
-    // connects on its self-wake — the stream that records the event, falling back
+    // connects on its self-wake, the stream that records the event, falling back
     // to the primary. Siblings park until a viewer asks. Before this, every
     // served stream probed and connected independently: double discovery traffic
     // at the camera and two full sessions per wake, for a battery camera that
@@ -787,13 +787,13 @@ foreach (var cam in config.Cameras)
                         ?? camServices[0];
         foreach (var s in camServices) s.WakeProbeOwner = ReferenceEquals(s, wakeOwner);
     }
-    // Router wake hints go to the probe owner — the stream whose park loop
+    // Router wake hints go to the probe owner: the stream whose park loop
     // watches for self-wakes. Harmless for cameras that never park.
     wakeHintTargets.AddRange(camServices.Where(s => s.WakeProbeOwner));
 
     // On-demand video: while nothing consumes this camera's frames the stream
     // services hold control-only connections and subscribe video only on demand.
-    // "Consumes" is evaluated LIVE — the per-camera recording switches count, so
+    // "Consumes" is evaluated LIVE: the per-camera recording switches count, so
     // a camera whose events/24-7 toggles are off idles even though a recorder
     // object is wired, and flipping a switch on wakes the video within a moment.
     // Sensors, detections and controls ride the control channel and stay live
@@ -814,7 +814,7 @@ foreach (var cam in config.Cameras)
     }
 
     // Registered after the recorders so the web API can report live REC state.
-    // Battery/siren/privacy readings scan every stream service (primary first —
+    // Battery/siren/privacy readings scan every stream service (primary first,
     // camServices[0]): each session probes and receives pushes on its own, so a
     // viewer watching only the sub stream still gets fresh readings.
     var battery = primaryService;
@@ -861,10 +861,10 @@ foreach (var cam in config.Cameras)
         PrivacyOn: battery == null ? null : () => readers.Select(s => s.PrivacyOn).FirstOrDefault(v => v != null),
         Suspended: suspendables.Count == 0 ? null : IsCamSuspended,
         SetSuspended: suspendables.Count == 0 ? null : SetCamSuspended,
-        // The open segment from the recorder's memory — the day listing trusts
+        // The open segment from the recorder's memory: the day listing trusts
         // this over the file's mtime, which is stale while the handle is open.
         ActiveSegment: continuousRecorder == null ? null : () => continuousRecorder.ActiveSegment,
-        // 24/7 recording on/off — the same persisted setting the web UI toggles;
+        // 24/7 recording on/off: the same persisted setting the web UI toggles;
         // the recorder reads it live, so flipping it starts/stops taping at once.
         // Offered (Baichuan and generic RTSP alike) whenever a continuous recorder
         // runs. Reported EFFECTIVE (setting minus the sleep veto) so the HA switch
@@ -876,7 +876,7 @@ foreach (var cam in config.Cameras)
             {
                 if (v && camServices.Any(s => s.SleepFriendly))
                 {
-                    Log.Warn($"{cam.Name}: 24/7 recording refused — this battery camera is " +
+                    Log.Warn($"{cam.Name}: 24/7 recording refused: this battery camera is " +
                              "allowed to sleep, and taping around the clock would hold it awake " +
                              "until the battery dies; set always_on = true to enable it");
                     return;
@@ -942,7 +942,7 @@ foreach (var cam in config.Cameras)
 
     // Demo cameras have no camera to push detections, so a pulse task plays the
     // camera's part: a labelled push every minute or three, straight into the
-    // same recorder sink a Baichuan push lands in. 24/7 recording defaults ON —
+    // same recorder sink a Baichuan push lands in. 24/7 recording defaults ON:
     // the timeline page is half the show.
     if (cam.Demo)
     {
@@ -973,16 +973,16 @@ void StartPtzEndpoint(string tag, int port, IReadOnlyList<Neolink.Onvif.OnvifPtz
 
 // Router wake hints: instant, event-grade wake signals for battery cameras from
 // the camera's own "call the Reolink push service" moment. Two independent
-// sources share one dispatcher — OPNsense/pfSense remote syslog (the router sees
-// the call — WakeHintListener) and the decoy push service (a DNS override steers
-// the call to us — PushSinkListener). Each restarts itself on unexpected errors
+// sources share one dispatcher, OPNsense/pfSense remote syslog (the router sees
+// the call, WakeHintListener) and the decoy push service (a DNS override steers
+// the call to us, PushSinkListener). Each restarts itself on unexpected errors
 // so a transient socket failure can't silently kill the feature.
 if (config.WakeHints is { } wakeHintCfg &&
     (wakeHintCfg.SyslogPort > 0 || wakeHintCfg.PushPorts.Count > 0))
 {
     Action<System.Net.IPAddress, string> dispatchHint = (ip, detail) =>
     {
-        // Battery cameras ONLY — checked per hint, not at wiring, because
+        // Battery cameras ONLY: checked per hint, not at wiring, because
         // battery detection is learned from the camera at runtime. A mains
         // camera calls the same push service on every event, so routing its
         // hints spammed an INF line per connection for a camera that hints
@@ -991,12 +991,12 @@ if (config.WakeHints is { } wakeHintCfg &&
         foreach (var s in wakeHintTargets)
             if (s.SleepFriendly && s.MatchesAddress(ip)) { s.NotifyWakeHint(detail); matched = true; }
         // Matched hints are rare (one per camera event) and worth seeing even
-        // when the camera isn't parked. Everything else — unknown LAN devices
-        // and non-battery cameras — is Debug only.
+        // when the camera isn't parked. Everything else, unknown LAN devices
+        // and non-battery cameras, is Debug only.
         if (matched)
             Log.Info($"Wake hints: {detail}");
         else
-            Log.Debug($"Wake hints: {detail} — not a battery camera's address, ignored");
+            Log.Debug($"Wake hints: {detail}, not a battery camera's address, ignored");
     };
     if (wakeHintCfg.SyslogPort > 0)
     {
@@ -1019,8 +1019,8 @@ if (config.WakeHints is { } wakeHintCfg &&
 }
 
 // Resource sampler: feeds the UI's monitor page AND the server's own Home
-// Assistant device — created whenever either consumer runs. ViewerCount
-// deliberately excludes the server's own recorder subscriptions — "viewers"
+// Assistant device, created whenever either consumer runs. ViewerCount
+// deliberately excludes the server's own recorder subscriptions: "viewers"
 // means humans/externals watching, not us taping.
 SystemMonitor? monitor = null;
 if (config.WebPort > 0 || config.Mqtt is { StatsIntervalSeconds: > 0 })
@@ -1041,8 +1041,8 @@ var alertMonitor = new Neolink.Notifications.AlertMonitor(
     notifier, Environment.MachineName, storage, monitor,
     cameras: () => webCameras.Select(c => new Neolink.Notifications.CameraHealth(
         c.Name, c.Control.Online,
-        // "Intentionally offline" — a dozing battery camera OR one the user
-        // suspended — must not raise a camera-offline alert.
+        // "Intentionally offline", a dozing battery camera OR one the user
+        // suspended, must not raise a camera-offline alert.
         (c.Asleep?.Invoke() ?? false) || (c.Suspended?.Invoke() ?? false))),
     recording: recordingHealth);
 if (eventEmailer != null)
@@ -1050,7 +1050,7 @@ if (eventEmailer != null)
 tasks.Add(Task.Run(() => alertMonitor.RunAsync(shutdown.Token)));
 // A restart that came back armed re-latches the sirens and lights once the
 // cameras have had a chance to connect, then keeps retrying the ones it could
-// not reach — a camera that was asleep when the alarm was raised still gets its
+// not reach: a camera that was asleep when the alarm was raised still gets its
 // siren when it wakes.
 tasks.Add(Task.Run(async () =>
 {
@@ -1087,7 +1087,7 @@ foreach (var (events, name, recorderSink) in onvifEventTargets)
     var bridge = mqtt;
     if (recorderSink == null && bridge == null) continue;
     // One subscription per camera, so there are no cross-session duplicates to
-    // suppress — the de-duplication below exists for Baichuan cameras that push the
+    // suppress: the de-duplication below exists for Baichuan cameras that push the
     // same alarm on every live session, which has no ONVIF equivalent.
     events.MotionSink = push =>
     {
@@ -1106,7 +1106,7 @@ foreach (var (services, name, recorderSink) in motionTargets)
     // session may forward: cameras deliver alarm pushes on ONE or ALL of their
     // live sessions depending on model/firmware, so gating to a chosen session
     // can go deaf. The cost is that a camera pushing on all sessions delivers
-    // duplicates — suppressed by a short identical-push window: cross-session
+    // duplicates: suppressed by a short identical-push window: cross-session
     // copies of one event arrive within milliseconds of each other, while a
     // camera's own re-pushes of ongoing motion are seconds apart (and a doorbell
     // cannot physically be pressed twice in 400 ms).
@@ -1138,9 +1138,9 @@ foreach (var (services, name, recorderSink) in motionTargets)
             svc.StatusSink = push => bridge.OnStatus(name, push);
     }
 }
-// The reverse direction — HA's "Record" switch starting an on-demand recording —
+// The reverse direction: HA's "Record" switch starting an on-demand recording:
 // needs no wiring here: the bridge reaches the recorder via WebCameraInfo.
-// AI descriptions land AFTER the event closes, on the describer's own worker —
+// AI descriptions land AFTER the event closes, on the describer's own worker:
 // mirror them onto the camera's HA sensors as they arrive.
 if (aiDescriber != null && mqtt is { } aiBridge)
     aiDescriber.Described += rec => aiBridge.OnAiDescribed(rec);
@@ -1154,7 +1154,7 @@ if (config.WebPort > 0)
     // first account (the admin) is created from the UI itself.
     var userStore = new UserStore(stateDir, legacyDir: configDir);
     if (!userStore.Enabled)
-        Log.Info("Web UI authentication is off — create the admin account from the UI to enable it");
+        Log.Info("Web UI authentication is off: create the admin account from the UI to enable it");
     if (config.EffectiveResetAdminPassword)
         Log.Warn("reset_admin_password is TRUE: anyone on the LAN reaching the login page can set a new admin " +
                  "password. The flag turns itself off after one reset.");
@@ -1201,7 +1201,7 @@ if (config.WebPort > 0)
         Logs = logBuffer,
         // Graceful shutdown; docker's restart policy (systemd, or the HA
         // add-on's Watchdog toggle) starts us again. As a Windows service the
-        // exit must LOOK like a failure — the SCM's recovery actions (set up by
+        // exit must LOOK like a failure: the SCM's recovery actions (set up by
         // the installer) are the only thing that restarts a service, and they
         // never fire on a clean stop.
         RestartRequested = () =>
@@ -1353,11 +1353,11 @@ static int Fail(string message)
 {
     Console.Error.WriteLine($"error: {message}");
     Console.Error.WriteLine("Run with --help for usage.");
-    // Everything above went to stderr, which a service discards — the file log
+    // Everything above went to stderr, which a service discards: the file log
     // exists precisely for the run where nobody saw this.
     if (Log.HasFile) Log.Error(message);
     // Also into Environment: as a service, the SCM learns of an early exit from
-    // a ProcessExit hook that reads this — Main's return value alone would
+    // a ProcessExit hook that reads this, Main's return value alone would
     // report a refused start as a CLEAN stop.
     Environment.ExitCode = 2;
     return 2;
@@ -1368,7 +1368,7 @@ static int Fail(string message)
 // empty (the app runs, the wall is empty); the user fills in a block and restarts.
 // The loader accepts // comments and trailing commas, so this stays valid as-is.
 // recordingPath (the Windows-service install) turns the commented recording hint
-// into a live block — retention defaults keep it bounded (7 days).
+// into a live block: retention defaults keep it bounded (7 days).
 static string StarterConfig(string? recordingPath = null)
 {
     var starter =
@@ -1427,7 +1427,7 @@ static void PrintHelp()
             --service             Run as a Windows service (what the installed
                                   service uses; harmless from a console)
             --demo                Showroom mode: four synthetic cameras with live
-                                  motion, events and recordings — no hardware, no
+                                  motion, events and recordings, no hardware, no
                                   config, nothing saved (needs ffmpeg on PATH)
 
         Streams are served at rtsp://<bind>:<port>/<camera-name>[/mainStream|/subStream]

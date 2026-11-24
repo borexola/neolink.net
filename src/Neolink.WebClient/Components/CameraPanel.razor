@@ -22,7 +22,7 @@
                     title="@T["Copy this camera's RTSP stream link"]"
                     @onclick="ToggleRtspAsync">@UiIcon.Render("link", 11) @T["rtsp"]</button>
         }
-        @* Suspend lives here, right-aligned — one always-reachable control instead
+        @* Suspend lives here, right-aligned: one always-reachable control instead
            of a whole section. The privacy warning moved into its confirm card. *@
         @if (Camera?.CanSuspend == true)
         {
@@ -154,7 +154,7 @@
     @if (_retentionConfirm is { } rc)
     {
         @* Same pinned placement as the suspend card: a typed-in retention cut is
-           armed but inert until confirmed here — Cancel snaps the field back. *@
+           armed but inert until confirmed here, Cancel snaps the field back. *@
         <div class="suspend-confirm" role="alertdialog" aria-label="@T["Shrink the retention window?"]">
             <div class="campanel-section-title">@UiIcon.Render("clock", 13) @T["SHRINK THE RETENTION WINDOW?"]</div>
             <div class="notice warn small">⚠ @rc.Message</div>
@@ -176,7 +176,7 @@
     }
     else if (_suspended == true)
     {
-        @* A suspended camera reads offline — this mini-panel replaces the offline
+        @* A suspended camera reads offline: this mini-panel replaces the offline
            notice and explains the state. The ONE resume control is the header
            chip above (a second button here just duplicated it). *@
         <div class="campanel-section">
@@ -231,7 +231,7 @@
         }
 
         @* While the camera is still answering, the wait is shown ON the Camera
-           settings tab (a spinner in its label) rather than as a banner here —
+           settings tab (a spinner in its label) rather than as a banner here:
            the tab stays selectable throughout, and the explanatory line appears
            inside it for whoever actually opens it. *@
         @if (!_probing && !_loading && _caps is { Online: false })
@@ -250,8 +250,8 @@
                 <button class="settings-tab @(_camTab == "recording" ? "active" : "")" role="tab"
                         @onclick='() => _camTab = "recording"'>@UiIcon.Render("rec", 13) @T["Recording"]</button>
             }
-            @* Offered from the start — including while the camera is still being
-               queried, with a spinner in the label — so it can be opened right
+            @* Offered from the start, including while the camera is still being
+               queried, with a spinner in the label, so it can be opened right
                away instead of appearing under the pointer once the probe lands.
                Afterwards it stays only if there is something to show: a generic
                RTSP camera has no device controls, so its tab drops away. *@
@@ -269,12 +269,12 @@
                         <span class="tab-dot" title="@T["Unsaved changes"]">●</span>
                     }
                 </button>
-                @* Live view of the camera's own service ports (msg 37) — always
+                @* Live view of the camera's own service ports (msg 37), always
                    read from the camera when opened, never a stored value.
                    ADMIN ONLY: the table is the camera's network surface. Baichuan
                    only: there is no ONVIF equivalent, so it drops away once the
                    probe says the camera is not a Reolink. Offered from the start
-                   until then, exactly as it always was — holding it back would
+                   until then, exactly as it always was: holding it back would
                    delay it for every Reolink admin to tidy one case away. *@
                 @if (IsAdmin && !OnvifOnly)
                 {
@@ -285,7 +285,7 @@
         </div>
 
         @* Masonry body: sections flow into two columns on wide screens (one on
-           mobile) — each card keeps its grouping and never splits across columns.
+           mobile), each card keeps its grouping and never splits across columns.
            The columns live on the inner wrapper so the body can scroll; the
            Recording tab is one big card and gets the full width. *@
         <div class="campanel-body">
@@ -300,7 +300,7 @@
         }
 
         @* PORTS: the camera's own service table, queried live on every visit.
-           Toggling is an explicit two-step (confirm card) — it flips the same
+           Toggling is an explicit two-step (confirm card): it flips the same
            switch as the Reolink app's Port Settings screen. Admin-gated here
            AND at the API; the Baichuan port is never toggleable anywhere. *@
         @if (_camTab == "ports" && IsAdmin)
@@ -343,7 +343,7 @@
                             }
                             else
                             {
-                                @* The same on/off toggle chip as every other row —
+                                @* The same on/off toggle chip as every other row:
                                    clicking opens the confirm card below the row. *@
                                 <button class="chip @(p.Enabled == true ? "" : "chip-off")"
                                         @onclick="() => { _confirmService = p.Service; _confirmOn = p.Enabled != true; }">
@@ -372,7 +372,7 @@
         }
 
         @* The controls body reads capabilities/features, so it only renders once
-           the camera has answered (_caps != null) — the hint above covers the wait.
+           the camera has answered (_caps != null): the hint above covers the wait.
            Two EXPLICIT columns (not flowed): sections lazy-load as their probes
            answer, and with flowed columns every arrival reshuffled the layout.
            SUSPEND leads the right column so it has a fixed, findable home. *@
@@ -572,7 +572,7 @@
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("zoom", 13) @T["ZOOM / FOCUS"]</div>
                 @* Live controls like PTZ: the lens moves when you let go of the
-                   slider — an absolute position, so there is nothing to stage. *@
+                   slider, an absolute position, so there is nothing to stage. *@
                 <div class="control-row">
                     <span>@T["Optical zoom"]</span>
                     <input class="zf-slider" type="range" min="@zr.Min" max="@zr.Max" step="1"
@@ -603,7 +603,7 @@
                 @* LedState semantics (per the BC protocol): "state" drives the IR
                    night-vision LEDs. "lightState" is the white spotlight on cameras
                    that have one (its on/off) and the little status LED on those that
-                   don't — so it's labelled by the floodlight capability below. *@
+                   don't, so it's labelled by the floodlight capability below. *@
                 @if (Str(_led, "state") is { Length: > 0 } irState)
                 {
                     <div class="control-row">
@@ -794,7 +794,7 @@
             var posOptions = osd.PosOptions ?? new List<string>();
             <div class="campanel-section">
                 <div class="campanel-section-title">@UiIcon.Render("logs", 13) @T["ON-SCREEN DISPLAY"]</div>
-                @* ONVIF can move an overlay but has no way to switch one off — an
+                @* ONVIF can move an overlay but has no way to switch one off: an
                    overlay either exists on the camera or it does not. Offering a
                    switch that always fails is worse than not offering one. *@
                 @if (!OnvifOnly)
@@ -865,8 +865,8 @@
             </div>
         }
         @* Every camera has a zone, so when there are no sensitivity sliders for it
-           to sit under — a generic RTSP camera, or a Baichuan one with no HTTP API
-           — it gets a section of its own rather than disappearing. It sits at the
+           to sit under, a generic RTSP camera, or a Baichuan one with no HTTP API,
+           it gets a section of its own rather than disappearing. It sits at the
            end of this column, where the zone row sits on a Reolink; on a camera
            with nothing else to show it is simply the only card here.
            Only where the zone can actually be edited: an ONVIF camera, or one the server
@@ -1207,7 +1207,7 @@
                     }
                     else if (_privacyBusy)
                     {
-                        @* Spinner while the write is in flight — the buttons are gone
+                        @* Spinner while the write is in flight: the buttons are gone
                            so a slow camera can't be double-toggled; caps at 10s. *@
                         <span class="chip chip-off" aria-busy="true"><span class="btn-spinner"></span>@T["Switching…"]</span>
                     }
@@ -1434,8 +1434,8 @@
                     @* Event emails: on = every finished event mails the server's
                        notification recipient, snapshots attached. The camera's
                        event-type chips above already decide what records, so they
-                       decide what mails too — one filter, not two. *@
-                    @* The switch is always VISIBLE — a feature that vanishes when
+                       decide what mails too: one filter, not two. *@
+                    @* The switch is always VISIBLE: a feature that vanishes when
                        unconfigured reads as a feature that doesn't exist. Without
                        a mail setup it sits off and disabled, and the line below
                        says exactly what to do about it. *@
@@ -1503,7 +1503,7 @@
                             @T["Sent through the configured webhook. Timing, snapshot count and cooldown follow the event notification knobs under Server settings → Notifications."]
                         </div>
                     }
-                    @* Per-camera AI opt-in — only offered while the feature is ON
+                    @* Per-camera AI opt-in, only offered while the feature is ON
                        globally (Settings → AI owns the endpoint and the budget). *@
                     @if (_recording.AiAvailable)
                     {
@@ -1556,7 +1556,7 @@
                             @((MarkupString)T["This battery camera is allowed to sleep, and taping around the clock would hold it awake until the battery dies. To record 24/7, set <b>Always on</b> to 'hold the connection' in this camera's setup (Settings → Cameras), sensible only on constant power."])
                         </div>
                         @* The battery-safe replacement: tape frames that are already
-                           flowing (self-wakes, viewing sessions) — never wakes the
+                           flowing (self-wakes, viewing sessions), never wakes the
                            camera or holds it awake, so it costs the battery nothing. *@
                         <div class="control-row">
                             <span>@T["Record wake events"]</span>
@@ -1611,7 +1611,7 @@
                 {
                     <div class="campanel-divider"></div>
                     <div class="campanel-subtitle">@UiIcon.Render("archive", 12) @T["ARCHIVE"]</div>
-                    @* Purpose up-front — visible BEFORE anything is switched on. *@
+                    @* Purpose up-front: visible BEFORE anything is switched on. *@
                     <div class="event-sub lc-explain">
                         @T["Normally footage is deleted when its retention ends. Archiving moves it to the server's archive drive instead, still playable, just off the main disk. Watch the lifecycle strip below react as you toggle."]
                     </div>
@@ -1650,7 +1650,7 @@
                 @if ((_recording.EventsAvailable && _recording.Events) || _recording.Continuous
                      || (_recording.ContinuousBlockedBySleep && _recording.WakeTimeline))
                 {
-                    @* The story of this camera's footage, told with the CURRENT settings —
+                    @* The story of this camera's footage, told with the CURRENT settings:
                        it re-renders on every toggle, so cause and effect are immediate. *@
                     <div class="lifecycle"
                          title="@T["Applied by the hourly cleanup. Blank retention = the server default; 0 = keep forever."]">
@@ -1665,7 +1665,7 @@
                         }
                         @if (_recording.ContinuousBlockedBySleep && _recording.WakeTimeline)
                         {
-                            @* Wake-tap footage is continuous footage — same retention, same archive routing. *@
+                            @* Wake-tap footage is continuous footage: same retention, same archive routing. *@
                             @LifecycleRow(T["Wake footage"], _recording.ContinuousRetentionDays ?? _recording.DefaultContinuousRetentionDays, _recording.ArchiveContinuous)
                         }
                         @if (_recording.ArchiveEvents || _recording.ArchiveContinuous)
@@ -1686,7 +1686,7 @@
             <div class="campanel-toast @(_toastError ? "toast-err" : "toast-ok")" role="status">@_toast</div>
         }
 
-        @* Detection-zone editor: its own layer above the panel — the grid wants
+        @* Detection-zone editor: its own layer above the panel, the grid wants
            all the width it can get. Painting is pure browser-side (see
            neolink.zoneInit); the circuit only sees the final table on save. *@
         @if (_zoneOpen)
@@ -1758,7 +1758,7 @@
                                 else if (OnvifOnly)
                                 {
                                     @* The camera's ONVIF cell motion grid: it decides where MOTION
-                                       counts, and nothing else — its other analytics rules keep
+                                       counts, and nothing else, its other analytics rules keep
                                        their own areas, so the Reolink wording would overclaim. *@
                                     @T["Drag a box to mark an area: in Block mode the camera's motion detection ignores it, in Watch mode it watches it again. Build any shape from a few boxes; the grid overlays the camera's latest picture. This is the camera's own motion grid: it governs its motion alarms, while any other analytics rules it runs (line crossing, intrusion and so on) keep their own areas."]
                                 }
@@ -1837,7 +1837,7 @@
     [Parameter] public string Server { get; set; } = "";
     /// <summary>The server as the BROWSER reaches it. <see cref="Server"/> is the
     /// circuit's view and may resolve to the host's loopback, which the visitor's
-    /// browser cannot fetch — URLs handed to media elements must use this one so
+    /// browser cannot fetch: URLs handed to media elements must use this one so
     /// they traverse the same proxy the page came through.</summary>
     [Parameter] public string? MediaServer { get; set; }
     [Parameter] public string CameraName { get; set; } = "";
@@ -1852,7 +1852,7 @@
     [Parameter] public bool CanEditRecording { get; set; } = true;
 
     /// <summary>Whether the signed-in user is an admin (or auth is off). Gates the
-    /// Ports tab — the camera's network surface is admin territory; the API
+    /// Ports tab: the camera's network surface is admin territory; the API
     /// enforces the same rule server-side.</summary>
     [Parameter] public bool IsAdmin { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
@@ -1958,16 +1958,16 @@
         _http?.MdSensitivity != null || _http?.AiSensitivities is { Count: > 0 };
 
     /// <summary>Whether to offer the Camera settings tab. It is present from the
-    /// start — including during the capability probe, when it carries a spinner and
-    /// its body explains the wait — so it can be opened immediately. Once the probe
+    /// start, including during the capability probe, when it carries a spinner and
+    /// its body explains the wait, so it can be opened immediately. Once the probe
     /// lands it stays for any camera that is ONLINE, because every camera now has at
     /// least a detection zone to edit.
     ///
     /// The online requirement is load-bearing: everything in this tab is read from
     /// the device, and a camera that cannot be reached has nothing to show but
     /// controls that can only fail. (For a Baichuan camera this is exactly the old
-    /// condition — its Reboot feature made the old HasDeviceControls test true
-    /// whenever it was online — so nothing changed for Reolink.)</summary>
+    /// condition, its Reboot feature made the old HasDeviceControls test true
+    /// whenever it was online, so nothing changed for Reolink.)</summary>
     private bool ShowControlsTab => _probing || _caps is { Online: true };
     private bool _loading;
     /// <summary>Phase 2 in flight: the camera is being queried for its capabilities
@@ -2004,7 +2004,7 @@
     private bool _confirmOn;          // …asking to enable (true) or disable (false)
     private string? _togglingService;
 
-    /// <summary>What breaks when this service goes off — shown in the disable
+    /// <summary>What breaks when this service goes off: shown in the disable
     /// confirm card so the choice is made with open eyes.</summary>
     private string DisableConsequence(string service) => service switch
     {
@@ -2145,7 +2145,7 @@
     private bool? _pendingFlAuto;
     private long? _pendingWlBright;      // white-LED brightness (0-100)
     private bool? _pendingWlAuto;        // white-LED "on automatically at night" (mode)
-    // HTTP-API extras (beta) — staged like the rest.
+    // HTTP-API extras (beta): staged like the rest.
     private long? _pendingBright, _pendingContrast, _pendingSaturation, _pendingHue, _pendingSharpen;
     private string? _pendingDayNight, _pendingAntiFlicker;
     private bool? _pendingFlip, _pendingMirror;
@@ -2194,7 +2194,7 @@
 
     /// <summary>A resolution change (not just fps/bitrate) makes some models fully
     /// reboot. "Same resolution" is checked against the camera's reported encode
-    /// selection first, the live stream's dimensions as fallback — unknown counts
+    /// selection first, the live stream's dimensions as fallback: unknown counts
     /// as a change, so uncertainty over-warns rather than under-warns.</summary>
     private bool PendingMayReboot =>
         _pendingStreams.Any(kv =>
@@ -2376,7 +2376,7 @@
     private ElementReference _zoneCanvas;
 
     /// <summary>The tabs to offer. Driven by what the CAMERA reports a separate grid
-    /// for — not by which types it can score, which is a different question: nearly
+    /// for, not by which types it can score, which is a different question: nearly
     /// every model tunes sensitivity per type while governing them all with one zone.</summary>
     private List<(string Key, string Label)> ZoneTypes()
     {
@@ -2498,7 +2498,7 @@
         + $"/api/cameras/{Uri.EscapeDataString(CameraName)}/snapshot.jpg?maxAge=15&maxStale=600"
         + (string.IsNullOrEmpty(Token) ? "" : $"&token={Uri.EscapeDataString(Token)}");
 
-    /// <summary>Paints every cell watched or ignored. Staged like any other edit —
+    /// <summary>Paints every cell watched or ignored. Staged like any other edit,
     /// nothing reaches the camera until Apply.</summary>
     private async Task ZoneFillAsync(bool watch)
     {
@@ -2524,7 +2524,7 @@
         {
             _zone = _zone with { Table = table, Storage = _lastPostStorage ?? _zone.Storage };
             // Where it went is what the SERVER did, not what the dialog assumed when
-            // it opened — those can differ if the camera answered differently since.
+            // it opened: those can differ if the camera answered differently since.
             ShowToast(_lastPostStorage == "neolink" ? T["Zone saved to Neolink."]
                 : _lastPostStorage == "camera" ? T["Zone saved to the camera."]
                 : _zone.StoredOnServer ? T["Zone saved to Neolink."] : T["Zone saved to the camera."]);
@@ -2792,7 +2792,7 @@
                 _http = MergeHttp(freshHttp, _http);
             // A CONFIRMED flip/mirror/day-night write outranks the camera's echo
             // for this refresh: the camera can still report the pre-write value
-            // while it applies — the panel then looked like the change didn't take.
+            // while it applies, the panel then looked like the change didn't take.
             if ((appliedFlip != null || appliedMirror != null || appliedDayNight != null) && _http?.Image is { } img)
                 _http = _http with
                 {
@@ -2812,7 +2812,7 @@
     /// <summary>Post-apply refresh guard: a camera busy applying a write (an OSD
     /// change re-renders the burned-in overlays; flip/mirror restarts the video
     /// pipeline) can time out parts of the combined httpfeatures re-read, which
-    /// then reports those features as ABSENT — and their panel sections vanish
+    /// then reports those features as ABSENT, and their panel sections vanish
     /// right after a successful apply, looking like the feature broke. Any member
     /// the fresh read couldn't get keeps its previous reading instead.</summary>
     private static ApiHttpFeatures MergeHttp(ApiHttpFeatures fresh, ApiHttpFeatures old) => new(
@@ -2840,12 +2840,12 @@
         }
         // The probe concluded "offline" but the wall's state feed now says the
         // camera is back: probe again, so an open panel grows its device tabs
-        // without a close/reopen. Rate-limited — the wall refresh drives this,
+        // without a close/reopen. Rate-limited: the wall refresh drives this,
         // and a camera the probe still calls offline shouldn't be hammered.
         // Sleep-capable cameras get a settle period first: "online" appears the
         // moment the connection is up, mid-wake, and the capability sweep's
         // round-trips would fight the stream spin-up for the battery cam's thin
-        // radio — the sweep waits until the wake has had the radio to itself.
+        // radio: the sweep waits until the wake has had the radio to itself.
         if (Camera is not { Online: true })
         {
             _onlineSince = default;
@@ -2897,7 +2897,7 @@
         // warning shows, which is the safe default.
         _ = LoadConfirmPrefsAsync();
         // Suspend state: seeded from the camera list (reachable even while the
-        // camera is offline), then confirmed against the server — the list entry
+        // camera is offline), then confirmed against the server, the list entry
         // the parent passed in can be stale, e.g. right after resuming from this
         // very panel, and it must not flip the panel back to "suspended".
         _suspended = Camera?.CanSuspend == true ? Camera.Suspended : null;
@@ -2911,7 +2911,7 @@
             _suspended = su.GetBoolean();
         }
 
-        // Phase 1 — known upfront, no camera round-trip: the recording settings are
+        // Phase 1: known upfront, no camera round-trip: the recording settings are
         // pure server state (retention, event-type filter), readable even while the
         // camera is offline. Fetch and render them FIRST so the panel is useful in a
         // few milliseconds instead of waiting on the camera's capability probe.
@@ -2921,7 +2921,7 @@
         _probing = true;
         StateHasChanged();
 
-        // Phase 2 — the slow part: capability discovery probes the camera with a
+        // Phase 2: the slow part: capability discovery probes the camera with a
         // handful of commands, and each control read is another round-trip. Runs in
         // the background behind the "querying the camera" hint; the device-controls
         // tab appears once this lands.
@@ -2948,7 +2948,7 @@
             {
                 _http = await GetAsync<ApiHttpFeatures?>("httpfeatures");
                 _quickReplyId = _http?.QuickReplies?.FirstOrDefault()?.Id ?? 0;
-                // The (server-cached) firmware-update check — display-only.
+                // The (server-cached) firmware-update check: display-only.
                 _firmware = await GetAsync<ApiFirmware?>("firmware");
             }
         }
@@ -2962,7 +2962,7 @@
             _extras = await GetAsync<ApiDeviceExtras?>("extras");
         }
         // The tab was offered during the probe; a camera that never answered it at
-        // all has no tab to return to — don't strand the reader there.
+        // all has no tab to return to: don't strand the reader there.
         if (_camTab is "controls" or "ports" && !ShowControlsTab && _recording != null)
             _camTab = "recording";
         // Ports was offered during the probe too, and drops away once the camera
@@ -3186,7 +3186,7 @@
     }
 
     /// <summary>Confirm from the warning card: persist "don't show again" only on
-    /// this path — ticking the box and then cancelling must not stick.</summary>
+    /// this path: ticking the box and then cancelling must not stick.</summary>
     private async Task ConfirmSuspendAsync()
     {
         _confirmSuspend = false;
@@ -3247,7 +3247,7 @@
     }
 
     /// <summary>Suspends/resumes the camera in Neolink (server-side; persisted). No
-    /// camera write — this only drops/keeps Neolink's own connection.</summary>
+    /// camera write: this only drops/keeps Neolink's own connection.</summary>
     private async Task SetSuspendAsync(bool suspend)
     {
         if (_suspendBusy) return;
@@ -3266,7 +3266,7 @@
                 {
                     // Repopulate now (honest offline notice while it reconnects),
                     // then keep re-querying until the camera answers so the panel
-                    // fills in by itself — no close/reopen needed.
+                    // fills in by itself, no close/reopen needed.
                     await LoadAsync();
                     _ = RequeryUntilOnlineAsync(_requerySeq, CameraName);
                 }
@@ -3288,7 +3288,7 @@
             await Task.Delay(TimeSpan.FromSeconds(2));
             if (_disposed || seq != _requerySeq || _loadedFor != camera || _suspended != false)
                 return;
-            if (_caps is { Online: true }) return; // already populated — done
+            if (_caps is { Online: true }) return; // already populated: done
             await InvokeAsync(async () =>
             {
                 // Light probe first; the full (multi-query) reload only runs once
@@ -3308,10 +3308,10 @@
     private static MarkupString TypeIcon(string label) => UiIcon.Render(UiIcon.ForLabel(label), 12);
 
     // Live probe results win; the server's cached signals (in the phase-1
-    // /recording payload) fill in until then — so the chip list renders already
+    // /recording payload) fill in until then, so the chip list renders already
     // filtered instead of showing everything and pruning when the probe lands.
     // It only visibly shifts when the camera's answers changed (firmware update,
-    // camera swapped) — rare by design.
+    // camera swapped): rare by design.
     private bool TypeChipVisible(string t) =>
         EventTypeSupported(t,
             _http?.AiSensitivities is { Count: > 0 } live
@@ -3324,7 +3324,7 @@
     /// what is DISPROVEN: the AI-alarm sweep answers per type (a camera without
     /// e.g. package detection rejects that query), and the doorbell type needs a
     /// doorbell. Types with no reliable capability signal (crying, the perimeter
-    /// trio, motion) always show — hiding on a guess would strand a camera that
+    /// trio, motion) always show: hiding on a guess would strand a camera that
     /// genuinely emits them. Null inputs mean "not probed yet": show everything.
     /// </summary>
     public static bool EventTypeSupported(string type, IReadOnlyList<string>? aiTypes, bool? doorbell) => type switch
@@ -3430,7 +3430,7 @@
     /// <summary>Blank/invalid input resets to the server default (the API takes negative = clear).
     /// Shrinking the window opens a confirm card first: retention judges EXISTING
     /// footage on the next hourly cleanup pass, so 30 → 5 deletes (or archives)
-    /// ~25 days of history within the hour — a decision, never a typo.</summary>
+    /// ~25 days of history within the hour, a decision, never a typo.</summary>
     private async Task SetRetentionAsync(bool forEvents, string? raw)
     {
         if (_recording == null) return;
@@ -3525,7 +3525,7 @@
     private Task SetScheduleTimeAsync(string? start = null, string? end = null) =>
         SetRecordingAsync(scheduleStart: Hhmm(start), scheduleEnd: Hhmm(end));
 
-    /// <summary>Browsers may report "HH:mm:ss" — the API wants strict HH:mm ("" clears).</summary>
+    /// <summary>Browsers may report "HH:mm:ss": the API wants strict HH:mm ("" clears).</summary>
     private static string? Hhmm(string? raw) =>
         raw is { Length: > 5 } ? raw[..5] : raw;
 
@@ -3631,7 +3631,7 @@
     private HttpRequestMessage NewRequest(HttpMethod method, string path) =>
         ServerRequest(method, $"api/cameras/{Uri.EscapeDataString(CameraName)}/{path}");
 
-    /// <summary>An authenticated request against the server root (not this camera) —
+    /// <summary>An authenticated request against the server root (not this camera):
     /// the per-user settings endpoints live there.</summary>
     private HttpRequestMessage ServerRequest(HttpMethod method, string path)
     {
@@ -3652,7 +3652,7 @@
     {
         try
         {
-            // The shared client's timeout is only a cap; panel reads get 30s —
+            // The shared client's timeout is only a cap; panel reads get 30s:
             // room for a slow camera sweep (the server bounds those tighter),
             // while a genuinely stuck server still fails within the panel's
             // attention span.
@@ -3673,7 +3673,7 @@
         }
     }
 
-    /// <summary>The "storage" a successful POST reported, when it reported one —
+    /// <summary>The "storage" a successful POST reported, when it reported one:
     /// the zone save is the only caller that cares. Read from the response rather
     /// than assumed, so the toast says what actually happened.</summary>
     private string? _lastPostStorage;

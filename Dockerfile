@@ -1,4 +1,4 @@
-# Neolink.NET — RTSP bridge + web UI for Reolink cameras (Baichuan protocol).
+# Neolink.NET: RTSP bridge + web UI for Reolink cameras (Baichuan protocol).
 #
 # Build:  docker build -t neolink-net .
 # Run:    docker run -d --name neolink \
@@ -17,7 +17,7 @@ WORKDIR /src
 
 # NOTE: restore must run with the FULL source tree present, not just the csproj
 # files. The SDK decides at restore time whether this is a Blazor app (by seeing
-# .razor files) and only then pulls the framework's static web assets — a staged
+# .razor files) and only then pulls the framework's static web assets: a staged
 # csproj-only restore silently drops /_framework/blazor.web.js from the output,
 # which bricks the web UI (page loads, but the interactive circuit never starts).
 COPY Neolink.sln nuget.config* ./
@@ -41,15 +41,15 @@ COPY --from=build /app .
 # future base image stop shipping it.
 RUN test -d /usr/share/zoneinfo/America
 
-# ffmpeg (static, single binary — NOT the apt package and its dependency tree):
+# ffmpeg (static, single binary, NOT the apt package and its dependency tree):
 # lets AI event descriptions decode pre-roll frames, the seconds BEFORE the
 # trigger that the live snapshot burst can never reach, and encodes Opus for
-# clients that ask for it (?audio=opus). Strictly optional at runtime — the app
-# probes PATH and skips both features when absent — so this line is what makes
+# clients that ask for it (?audio=opus). Strictly optional at runtime, the app
+# probes PATH and skips both features when absent, so this line is what makes
 # them work for Docker/HA users. Costs ~135 MB on disk (~50 MB of download);
 # nothing runs unless a described event or an Opus client asks for it.
 # Digest-pinned (the 7.1 tag could be repushed; the digest can't change under
-# us) — verified multi-arch for this workflow's amd64+arm64 targets.
+# us): verified multi-arch for this workflow's amd64+arm64 targets.
 COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 \
     /ffmpeg /usr/local/bin/ffmpeg
 

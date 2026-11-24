@@ -4,14 +4,14 @@
 namespace Neolink.Desktop;
 
 /// <summary>One event from GET /api/events. Only the fields the shell's alerting
-/// actually reads — the WebView renders the rest, and unknown JSON members are
+/// actually reads: the WebView renders the rest, and unknown JSON members are
 /// skipped by the deserializer, so these records stay minimal on purpose.</summary>
 internal sealed record ApiEvent(
     string Id, string Camera, DateTime Start, DateTime End,
     List<string> Labels, bool Reviewed = false, bool Ongoing = false, bool HasThumb = false)
 {
     /// <summary>Firmware label dialects folded into the chip vocabulary. Kept in
-    /// step with the web UI's NormAlertLabel — an alert rule saved in the browser
+    /// step with the web UI's NormAlertLabel: an alert rule saved in the browser
     /// has to match the same events here.</summary>
     public static string NormLabel(string l) => l.ToLowerInvariant() switch
     {
@@ -33,7 +33,7 @@ internal sealed record ApiEvent(
         ("external", "External"), ("motion", "Motion"),
     };
 
-    /// <summary>"Human detected", "Human + Vehicle detected" — the same sentence
+    /// <summary>"Human detected", "Human + Vehicle detected": the same sentence
     /// the web UI puts on its notifications.</summary>
     public string Title
     {
@@ -49,7 +49,7 @@ internal sealed record ApiEvent(
         }
     }
 
-    /// <summary>The alert vocabulary this event matches against — an event with no
+    /// <summary>The alert vocabulary this event matches against: an event with no
     /// labels at all is plain motion, exactly as the web UI treats it.</summary>
     public List<string> AlertLabels =>
         Labels.Count > 0
@@ -67,13 +67,13 @@ internal sealed record ApiFeatures(
 /// <summary>Worst storage tier in /api/features; null when every tier is healthy.</summary>
 internal sealed record ApiStorage(string Label = "", double UsedPercent = 0, bool Full = false);
 
-/// <summary>One camera from GET /api/cameras — the fields the offline alert needs.
+/// <summary>One camera from GET /api/cameras: the fields the offline alert needs.
 /// A dozing battery camera is <c>Asleep</c>, not offline, and a suspended one was
 /// switched off on purpose: neither is a fault.</summary>
 internal sealed record ApiCamera(
     string Name, bool Online = false, bool Asleep = false, bool Suspended = false);
 
-/// <summary>GET /api/auth/status — whether accounts exist decides if the connect
+/// <summary>GET /api/auth/status, whether accounts exist decides if the connect
 /// dialog demands credentials. SetupRequired = a fresh server with no accounts
 /// at all: the web UI will open on its "create the admin account" panel, and
 /// the dialog says so instead of leaving the person to wonder about blanks.</summary>

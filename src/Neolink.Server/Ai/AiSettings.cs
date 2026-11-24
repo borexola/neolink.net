@@ -13,7 +13,7 @@ namespace Neolink.Ai;
 /// API) that receives a burst of low-res frames from each detection event and
 /// answers with a short description. Persisted as ai.json in the state dir.
 /// The API key is stored ONLY as an AES-GCM token (<see cref="ApiKeyEnc"/>) via
-/// <see cref="SecretProtector"/> — never in plaintext, never returned to the UI.
+/// <see cref="SecretProtector"/>, never in plaintext, never returned to the UI.
 /// </summary>
 public sealed class AiSettings
 {
@@ -22,14 +22,14 @@ public sealed class AiSettings
         "surveillance camera, captured during a detection event, oldest first; each frame's " +
         "time offset from the event start is stated. " +
         "The camera itself triggered this event, and the message with the frames names what " +
-        "it detected — person, vehicle, animal, package, a doorbell press, crying, or plain " +
+        "it detected: person, vehicle, animal, package, a doorbell press, crying, or plain " +
         "motion. That subject is the reason these frames exist: find it first and make it " +
-        "the center of the description — what it looks like, where it is, and what it does " +
+        "the center of the description: what it looks like, where it is, and what it does " +
         "across the frames. Detections fire on the event's first moments, so look closest " +
         "at the earliest frames, including any marked as taken before the trigger. Then " +
-        "follow the event through to its final frames — how it ends (the subject leaves, a " +
+        "follow the event through to its final frames: how it ends (the subject leaves, a " +
         "vehicle drives off, the scene empties again) is as much the event as how it began. " +
-        "If the stated subject never appears in any frame, do not invent it — say plainly " +
+        "If the stated subject never appears in any frame, do not invent it: say plainly " +
         "that it is not visible; that is useful information. For plain motion, name what " +
         "actually moved. " +
         "In 1-3 short sentences, describe what happens across the frames: who or what is " +
@@ -40,7 +40,7 @@ public sealed class AiSettings
     /// Grounding rules appended to every event request (between the user's prompt
     /// and the threat protocol), uneditable on purpose. Born from a live failure:
     /// a person who walked away and never returned was described as "turning to
-    /// walk back toward the house" — the model completing a familiar story rather
+    /// walk back toward the house": the model completing a familiar story rather
     /// than reading the frames. Also tells the model to trust the camera's own
     /// burned-in timestamp when one is visible, the one ordering signal that
     /// survives any transport.
@@ -48,23 +48,23 @@ public sealed class AiSettings
     public const string GroundingProtocol =
         "Ground every statement in the frames themselves. State movement or direction only " +
         "when consecutive frames actually show it; if the subject leaves the view, say they " +
-        "left the view — never assume they returned, continued, or did anything that no later " +
+        "left the view, never assume they returned, continued, or did anything that no later " +
         "frame shows. Many cameras stamp the date and time onto each frame; when such a " +
         "timestamp is visible, trust it to confirm the order and timing of what you see. " +
-        "Describe through to the last frame: how an event ends — a person or vehicle leaving, " +
-        "the scene standing empty again — is part of what happened, not an afterthought. If " +
+        "Describe through to the last frame: how an event ends, a person or vehicle leaving, " +
+        "the scene standing empty again: is part of what happened, not an afterthought. If " +
         "the frames stop while something is still underway, end the description there too.";
 
     /// <summary>
     /// The threat-classification contract, appended to the (user-editable) prompt
-    /// on every event request — separate from it so a custom prompt cannot break
+    /// on every event request: separate from it so a custom prompt cannot break
     /// the parsing. The answer's first line carries the level; SplitLevel in the
     /// describer peels it off.
     /// </summary>
     public const string LevelProtocol =
-        "IMPORTANT — answer format (this overrides any earlier instruction to answer with " +
-        "the description only): the FIRST line of your answer must be exactly one word — " +
-        "GREEN, YELLOW or RED — the threat level of what the frames show. GREEN = routine, " +
+        "IMPORTANT: answer format (this overrides any earlier instruction to answer with " +
+        "the description only): the FIRST line of your answer must be exactly one word, " +
+        "GREEN, YELLOW or RED: the threat level of what the frames show. GREEN = routine, " +
         "expected activity (residents, deliveries, pets, passing vehicles). YELLOW = unusual " +
         "or suspicious activity worth reviewing (an unfamiliar person lingering or looking " +
         "into windows or car handles, a deliberately concealed face, an animal damaging " +
@@ -73,7 +73,7 @@ public sealed class AiSettings
 
     /// <summary>
     /// The object-inventory contract, appended after <see cref="LevelProtocol"/> so
-    /// the two structured lines are committed before the prose starts wandering —
+    /// the two structured lines are committed before the prose starts wandering:
     /// a small local model that is asked for a list at the END often never gets
     /// there. Kept out of the user-editable prompt for the same reason the level
     /// is: a custom prompt must not be able to break the parsing.
@@ -81,13 +81,13 @@ public sealed class AiSettings
     /// The seed words exist to make the answers COMPARABLE. Left to itself a model
     /// writes "parcel" today and "cardboard box" tomorrow, and neither is findable
     /// by someone searching for a package. Anything genuinely outside the list is
-    /// still welcome in the model's own words — an unnameable object is worth more
+    /// still welcome in the model's own words: an unnameable object is worth more
     /// than a wrong one from a fixed menu.
     /// </summary>
     public const string ObjectProtocol =
         "On the SECOND line, write \"OBJECTS:\" followed by a comma-separated inventory of the " +
         "things actually visible in the frames, most important first, at most ten. Each entry " +
-        "is one or two lowercase words, no articles, no counts, no punctuation — a plain noun, " +
+        "is one or two lowercase words, no articles, no counts, no punctuation: a plain noun, " +
         "or an adjective and a noun where the detail is worth finding later (\"white van\", " +
         "\"hi-vis jacket\"). Prefer these words whenever one fits, so that the same thing is " +
         "always called the same name: person, child, face, dog, cat, bird, wildlife, car, van, " +
@@ -102,8 +102,8 @@ public sealed class AiSettings
     public bool Enabled { get; set; }
 
     /// <summary>The active backend: "openai" (LM Studio, llama.cpp server, hosted
-    /// APIs — the /v1 chat-completions shape), "ollama" (Ollama's native
-    /// /api/chat) or "anthropic" (the Messages API — Claude, or any proxy that
+    /// APIs, the /v1 chat-completions shape), "ollama" (Ollama's native
+    /// /api/chat) or "anthropic" (the Messages API, Claude, or any proxy that
     /// speaks it). Every backend keeps its own endpoint/model settings, so
     /// switching back and forth loses nothing.</summary>
     public string Provider { get; set; } = "openai";
@@ -119,12 +119,12 @@ public sealed class AiSettings
     /// unless already present.</summary>
     public string OllamaEndpoint { get; set; } = "";
 
-    /// <summary>Ollama model name (required — Ollama has no "loaded model" default);
+    /// <summary>Ollama model name (required, Ollama has no "loaded model" default);
     /// must be a vision-capable model.</summary>
     public string OllamaModel { get; set; } = "";
 
     /// <summary>Anthropic-style base; blank = https://api.anthropic.com (the API
-    /// itself). "/v1/messages" is appended unless already present — a proxy that
+    /// itself). "/v1/messages" is appended unless already present: a proxy that
     /// speaks the Messages API works by pointing this at it.</summary>
     public string AnthropicEndpoint { get; set; } = "";
 
@@ -155,7 +155,7 @@ public sealed class AiSettings
     public bool InsecureTls { get; set; }
 
     /// <summary>Sampling density: one frame about every N seconds (1–600), AS
-    /// THE SOURCE ALLOWS — the stream tap can only keep keyframes, which arrive
+    /// THE SOURCE ALLOWS, the stream tap can only keep keyframes, which arrive
     /// at the camera's GOP cadence (typically one per 2-4s), so values below
     /// that mean "every keyframe"; snapshot polling paces to it directly. The
     /// event's first five seconds always sample at full source density. (The
@@ -164,7 +164,7 @@ public sealed class AiSettings
     public int SampleEverySeconds { get; set; } = 2;
 
     /// <summary>Save the exact JPEGs sent to the model into the event's folder
-    /// (ai-frames/) for review. Hard OFF — the switch was removed from the UI
+    /// (ai-frames/) for review. Hard OFF: the switch was removed from the UI
     /// (2026-07-26): it was a beta diagnostic, and the plain unencrypted copies
     /// it writes undercut the footage vault. The KeepFramesAsync machinery in
     /// the describer stays; turning this back into a stored setting is the
@@ -175,9 +175,9 @@ public sealed class AiSettings
     /// <summary>The cost ceiling: at most this many frames per event (≥ 1).
     /// When sampling at <see cref="SampleEverySeconds"/> would exceed it, every
     /// other kept frame is dropped and the interval doubles, so the final set
-    /// always spans the WHOLE event, however long it runs — a long event gets
+    /// always spans the WHOLE event, however long it runs: a long event gets
     /// the same bounded payload, spread thinner. (The stored JSON name is
-    /// historic — the field began life as "seconds sampled".) Default 30: at
+    /// historic, the field began life as "seconds sampled".) Default 30: at
     /// keyframe cadence that covers ~2 minutes before any thinning, and stays
     /// a single request with pre-roll riding on top. Stored settings keep
     /// whatever value they carry.</summary>
@@ -188,7 +188,7 @@ public sealed class AiSettings
     /// Local models on modest hardware can genuinely need minutes.</summary>
     public int TimeoutSeconds { get; set; } = 120;
 
-    [JsonIgnore] // derived — keep ai.json to what the user actually set
+    [JsonIgnore] // derived: keep ai.json to what the user actually set
     public string EffectivePrompt => string.IsNullOrWhiteSpace(Prompt) ? DefaultPrompt : Prompt;
 
     public AiSettings Clone() => new()
@@ -228,7 +228,7 @@ public sealed class AiSettings
         if (!e.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
         {
             // A bare host ("http://10.1.1.5:1234") means an OpenAI-style server
-            // rooted at /v1 — the universal convention (LM Studio, Ollama,
+            // rooted at /v1: the universal convention (LM Studio, Ollama,
             // llama.cpp server). LM Studio answers the UNprefixed path with a
             // 200 that is not a completion at all (seen live), so guessing
             // /v1 here is strictly better than passing the mistake through.

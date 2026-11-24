@@ -5,7 +5,7 @@
 // Live object boxes (preview): outlines what the model recognises on the camera
 // you are watching, drawn on a canvas over the tile.
 //
-// It runs HERE, in the browser, and not on the server — a Reolink camera reports
+// It runs HERE, in the browser, and not on the server: a Reolink camera reports
 // WHAT it detected and never where, so a box has to come from looking at pixels,
 // and the server deliberately never decodes video. One camera at a time: the
 // single-camera view (/cameras/{name}) is the only surface that asks for it, so
@@ -14,7 +14,7 @@
 // This file is fetched only when the feature is switched on, so an install that
 // leaves it off pays nothing. ONNX Runtime and the model come from the server's
 // own /detect/asset/ (downloaded there once, checksum-pinned), never from a CDN
-// at view time — a camera wall must keep working with no internet.
+// at view time: a camera wall must keep working with no internet.
 (function () {
     'use strict';
 
@@ -33,7 +33,7 @@
     ];
 
     // The model knows 80 everyday objects; a camera view cares about four kinds of
-    // thing. Anything unlisted falls into "other", which is off by default — a
+    // thing. Anything unlisted falls into "other", which is off by default: a
     // driveway does not need its wheelie bin outlined as a "suitcase".
     const GROUPS = {
         person: 'people',
@@ -102,7 +102,7 @@
     const MAX_TRACKS = 64;
 
     // A detection describes the frame the model was given, which by the time the
-    // box is drawn is already old — one pass of work, plus the wait until the next
+    // box is drawn is already old: one pass of work, plus the wait until the next
     // one. At a few looks a second that is most of a second's worth of walking, and
     // a box pinned to where something WAS reads as lag. Each track carries its own
     // speed instead, and the overlay redraws every animation frame from it.
@@ -157,7 +157,7 @@
         ortPromise = (async () => {
             if (!window.ort) await loadScript(base + 'ort.webgpu.min.js');
             if (!window.ort) throw new Error('ONNX Runtime did not register itself');
-            // The runtime fetches its own .mjs/.wasm — point it at the same folder.
+            // The runtime fetches its own .mjs/.wasm: point it at the same folder.
             window.ort.env.wasm.wasmPaths = base;
             // Multi-threaded wasm needs cross-origin isolation (COOP/COEP), which a
             // LAN camera server has no business demanding of its own page: one
@@ -187,7 +187,7 @@
         sessionBase = key;
         sessionPromise = (async () => {
             const ort = await loadOrt(base);
-            // WebGPU first, wasm as the fallback — the same file serves both, so a
+            // WebGPU first, wasm as the fallback: the same file serves both, so a
             // machine without WebGPU still gets boxes, just slower.
             // Asked for BEFORE the session, and reported as what the badge says:
             // navigator.gpu existing is not the same as a usable adapter, and a
@@ -297,7 +297,7 @@
         };
     }
 
-    // Output rows are [x1, y1, x2, y2, score, class] in the 640 square — undo the
+    // Output rows are [x1, y1, x2, y2, score, class] in the 640 square: undo the
     // letterbox and the crop and they are back in the camera's own pixels, which
     // is the one coordinate space everything downstream (tracking, zones, paint)
     // shares whatever the viewer has zoomed to.
@@ -326,7 +326,7 @@
     // Each pass is independent, which on its own looks like it: a box shivers on a
     // parked car, a one-frame mistake flashes up, and someone the model loses for
     // a single pass blinks out. Carrying boxes across passes fixes all three, and
-    // costs nothing — no second look at the picture.
+    // costs nothing, no second look at the picture.
 
     const cx = (b) => b.x + b.w / 2;
     const cy = (b) => b.y + b.h / 2;
@@ -354,7 +354,7 @@
             t.vy *= 0.5;
         } else {
             // Believe the measurement, and learn how fast it is going from it. The
-            // reading is averaged because a jittery speed throws the box about —
+            // reading is averaged because a jittery speed throws the box about,
             // except the first one, which is all there is to go on and would
             // otherwise leave the box trailing for the next second.
             const dt = Math.max(1, now - t.at);
@@ -456,7 +456,7 @@
     }
 
     /// The part of the frame that could hold a drawable box, as fractions of it:
-    /// every grid in play, merged. Null means nothing constrains the search — an
+    /// every grid in play, merged. Null means nothing constrains the search: an
     /// outlined group with no grid of its own may be found anywhere.
     function zoneBox(zone, groups) {
         if (!zone) return null;
@@ -473,7 +473,7 @@
     }
 
     /// What to put through the model: the watched part of the frame, narrowed to
-    /// what the viewer can see. Null when the two do not meet — a view holding no
+    /// what the viewer can see. Null when the two do not meet: a view holding no
     /// watched cells cannot produce a box, so the pass is skipped entirely.
     /// Zone-shaped rather than frame-shaped input is also free detail: a zone over
     /// a third of the view arrives at three times the size the whole frame would.
@@ -515,7 +515,7 @@
         return seen / area >= ZONE_COVER;
     }
 
-    // :scope, so this only ever finds THIS surface's overlay — a plain descendant
+    // :scope, so this only ever finds THIS surface's overlay, a plain descendant
     // search matches one belonging to any player on the page.
     const overlayIn = (host) => host && host.querySelector(':scope > .tile-detect');
 
@@ -533,7 +533,7 @@
     // overlay is a sibling, so the boxes (and every other on-video control) are
     // left behind on the page underneath. The player's own fullscreen button does
     // exactly that. Handing fullscreen to the element that holds them both keeps
-    // everything together — and is what the wall's own button already does.
+    // everything together, and is what the wall's own button already does.
     document.addEventListener('fullscreenchange', () => {
         const el = document.fullscreenElement;
         if (!el || el.tagName !== 'VIDEO') return;
@@ -676,8 +676,8 @@
 
     /// The overlay repaints on every animation frame, not on every detection: the
     /// model looks a few times a second, but the boxes have to move with the
-    /// picture in between or they read as lag. Free of the model — it is a handful
-    /// of strokes — and it stops by itself when the tab is hidden.
+    /// picture in between or they read as lag. Free of the model, it is a handful
+    /// of strokes, and it stops by itself when the tab is hidden.
     function ensurePainter(state) {
         if (state.raf != null) return;
         const frame = () => {
@@ -712,7 +712,7 @@
         state.canvas = state.canvas || overlayFor(video);
         ensurePainter(state);
         // A paused clip is one still frame and the model has already answered for
-        // it — the painter keeps the boxes on screen, and looking again would cost
+        // it: the painter keeps the boxes on screen, and looking again would cost
         // everything for nothing. Seeking moves currentTime and the work resumes.
         if (video.paused && state.drawn && state.frameTime === video.currentTime) {
             again(250);
@@ -757,7 +757,7 @@
             // anything like the asked-for rate goes back to the small one rather than
             // sit at one look a second forever.
             if (model === 'detailed' && took > 2000 / state.cfg.fps && ++tooSlow >= 3) {
-                console.warn('neolink: the detailed model is too slow here — using the standard one');
+                console.warn('neolink: the detailed model is too slow here, using the standard one');
                 sessionPromise = null;
                 sessionBase = null;
                 state.cfg = { ...state.cfg, model: 'yolov10n.onnx' };
@@ -766,7 +766,7 @@
             again(Math.max(0, (1000 / state.cfg.fps) - took));
         } catch (e) {
             state.failures = (state.failures || 0) + 1;
-            if (state.failures === 1) console.warn('neolink: object detection failed —', e);
+            if (state.failures === 1) console.warn('neolink: object detection failed,', e);
             badge(state, 'boxes unavailable');
             // Three strikes and this view gives up: an unsupported browser must not
             // sit in a retry loop for as long as the tile is open.
@@ -794,7 +794,7 @@
         },
 
         /// The single call the page makes: `cfg` names the tile to draw on, or is
-        /// null when nothing should be detected. Idempotent — it is called on every
+        /// null when nothing should be detected. Idempotent: it is called on every
         /// render, and only acts when what is wanted actually changed.
         sync(cfg) {
             const want = cfg && cfg.videoId ? cfg : null;

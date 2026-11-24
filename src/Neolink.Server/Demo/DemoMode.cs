@@ -15,8 +15,8 @@ namespace Neolink.Demo;
 
 /// <summary>
 /// --demo: the whole product with nothing real behind it. Four synthetic cameras
-/// loop ffmpeg-generated footage through the SAME pipeline a Reolink uses — the
-/// hubs, the recorders, the web streamer — so every page shows the true product,
+/// loop ffmpeg-generated footage through the SAME pipeline a Reolink uses, the
+/// hubs, the recorders, the web streamer, so every page shows the true product,
 /// not a mock. Detections are pulsed on a timer; the recorder cuts real clips
 /// from the synthetic stream and thumbnails them like any camera's.
 ///
@@ -25,7 +25,7 @@ namespace Neolink.Demo;
 /// may still be open at shutdown; the wipe-on-start makes cleanup reliable
 /// without racing the recorders).
 ///
-/// ffmpeg is required — it is what draws the fake world. The scenes are plain
+/// ffmpeg is required: it is what draws the fake world. The scenes are plain
 /// lavfi test sources on purpose: unmistakably synthetic, no real footage
 /// anywhere, and nothing to license.
 /// </summary>
@@ -48,7 +48,7 @@ public sealed class DemoRig
     public required string Root { get; init; }
 
     // Name, scene filtergraph, detection labels the pulses draw from. The scenes
-    // need visible MOTION (a still demo reads as a broken one) but nothing busy —
+    // need visible MOTION (a still demo reads as a broken one) but nothing busy:
     // test bars, fractals and cellular noise all read as a bad signal, so the
     // whole wall is slow, calm colour drifts in four distinct palettes (dawn
     // ambers, dusk blues, forest greens, night teals).
@@ -63,7 +63,7 @@ public sealed class DemoRig
     private const int Fps = 15;
 
     /// <summary>Generates the demo world (footage, seeded history, config) under a
-    /// temp root. Throws with a person-readable message on any failure — the
+    /// temp root. Throws with a person-readable message on any failure: the
     /// caller turns that into a startup error.</summary>
     public static DemoRig Prepare()
     {
@@ -110,7 +110,7 @@ public sealed class DemoRig
     {
         // The name burnt into the frame sells the illusion; drawtext needs a font
         // (fontconfig on Linux, often absent on Windows builds), and each scene
-        // filter varies by ffmpeg build — so fall back scene-then-text-then-plain
+        // filter varies by ffmpeg build, so fall back scene-then-text-then-plain
         // rather than demand any particular build.
         var overlay = $",drawtext=text='{name}  DEMO':fontcolor=white:fontsize=36:" +
                       "box=1:boxcolor=black@0.5:boxborderw=8:x=24:y=24";
@@ -127,7 +127,7 @@ public sealed class DemoRig
         string? lastError = null;
         foreach (var graph in graphs)
         {
-            // Baseline + zerolatency: no B-frames, one slice per frame — access
+            // Baseline + zerolatency: no B-frames, one slice per frame, access
             // units split cleanly and timestamps stay monotone. repeat-headers
             // puts SPS/PPS on every keyframe (the hub's GOP cache and late
             // joiners depend on in-band parameter sets); aud=1 delimits AUs.
@@ -191,7 +191,7 @@ public sealed class DemoRig
         // zerolatency x264 slices every frame across its threads (11 slice NALs
         // per frame was measured), so "a second slice = a new frame" is only true
         // in a stream WITHOUT delimiters. With AUDs present they are the sole
-        // authority — splitting on slices there shipped frames in eleven pieces.
+        // authority: splitting on slices there shipped frames in eleven pieces.
         bool hasAud = nals.Any(n => H26x.H264NalType(n.Span) == 9);
         byte[]? sps = null, pps = null;
         var result = new List<(byte[], bool)>();
@@ -224,7 +224,7 @@ public sealed class DemoRig
                 case 9: Emit(); continue;    // access-unit delimiter: frame boundary
                 case >= 1 and <= 5 when !hasAud && pending.Any(n => H26x.H264NalType(n.Span) is >= 1 and <= 5):
                     // No AUDs anywhere (encoder fallback): a second slice means a
-                    // new frame — single-slice is all that path ever produces.
+                    // new frame, single-slice is all that path ever produces.
                     Emit();
                     break;
             }
@@ -248,7 +248,7 @@ public sealed class DemoRig
     {
         "A synthetic visitor crosses the frame with great determination and no legs to speak of.",
         "Two test patterns meet near the gate; one of them is almost certainly a vehicle.",
-        "Motion in the lower third — the demo cat again, orbiting the mandelbrot.",
+        "Motion in the lower third: the demo cat again, orbiting the mandelbrot.",
         "A gradient drifts by at walking pace. In this neighbourhood, that counts as a person.",
     };
 
@@ -308,7 +308,7 @@ public sealed class DemoRig
     // ---- live pulses -------------------------------------------------------
 
     /// <summary>Fires a detection every minute or three, holds it a few seconds,
-    /// releases it — the recorder does everything else exactly as it would for a
+    /// releases it: the recorder does everything else exactly as it would for a
     /// camera that saw a person. External=true is the established idiom for
     /// pushes no camera sent (on-demand records, wake clips).</summary>
     public static async Task RunPulsesAsync(string camera, Source source,
@@ -336,7 +336,7 @@ public sealed class DemoRig
 /// rate, forever. Mirrors RtspCameraService's shape (Online/Suspended/RunAsync)
 /// so the wiring in Program.cs treats it like any other per-stream service.
 /// Timestamps are a single monotonic microsecond counter that never resets at
-/// the loop seam — the hub's delta math is wrap-safe, resets are not.
+/// the loop seam: the hub's delta math is wrap-safe, resets are not.
 /// </summary>
 public sealed class DemoCameraService
 {
@@ -417,8 +417,8 @@ public sealed class DemoCameraService
 
 /// <summary>
 /// A demo camera's control surface: reports no device features (so the settings
-/// tab hides, exactly like a generic RTSP camera), but DOES answer snapshots —
-/// with a frame from its own synthetic footage — so events get thumbnails.
+/// tab hides, exactly like a generic RTSP camera), but DOES answer snapshots,
+/// with a frame from its own synthetic footage, so events get thumbnails.
 /// </summary>
 public sealed class DemoCameraControl : ICameraControl
 {
@@ -529,5 +529,5 @@ public sealed class DemoCameraControl : ICameraControl
         throw Nope();
 
     private static NotSupportedException Nope() =>
-        new("demo cameras are synthetic — there is no device to control");
+        new("demo cameras are synthetic: there is no device to control");
 }

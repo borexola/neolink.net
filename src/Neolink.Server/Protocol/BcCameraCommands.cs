@@ -124,7 +124,7 @@ public static class BcCameraCommands
     /// <summary>The camera's own service-port table (msg 37): raw ServerPort,
     /// HttpPort, HttpsPort, RtspPort, RtmpPort and OnvifPort elements, each with
     /// a port number and an "enable" flag (absent on services the firmware can't
-    /// toggle). Always asked of the camera live — never a cached value.</summary>
+    /// toggle). Always asked of the camera live, never a cached value.</summary>
     public static async Task<List<XElement>?> GetServicePortsAsync(this IBcCamera cam,
         TimeSpan? timeout = null, CancellationToken ct = default)
     {
@@ -136,7 +136,7 @@ public static class BcCameraCommands
     }
 
     /// <summary>Writes back one (modified) service element obtained from
-    /// <see cref="GetServicePortsAsync"/> (msg 36) — the same read-modify-write
+    /// <see cref="GetServicePortsAsync"/> (msg 36): the same read-modify-write
     /// the app's Port Settings screen performs. Some firmwares never acknowledge
     /// a successful set, so a missing reply is tolerated; callers re-read the
     /// table to verify.</summary>
@@ -220,7 +220,7 @@ public static class BcCameraCommands
         return reply?.Xml?.RawElement("PtzZoomFocus");
     }
 
-    /// <summary>&lt;StartZoomFocus&gt; body — wire format per the reference Rust neolink.</summary>
+    /// <summary>&lt;StartZoomFocus&gt; body: wire format per the reference Rust neolink.</summary>
     internal static XElement BuildStartZoomFocus(byte channelId, string command, uint movePos) =>
         new("StartZoomFocus", new XAttribute("version", BcXmlBody.XmlVersion),
             new XElement("channelId", channelId),
@@ -239,7 +239,7 @@ public static class BcCameraCommands
 
     // ------------------------------------------------------------------ siren
 
-    /// <summary>&lt;audioPlayInfo&gt; body — the field values the reference Rust neolink sends for one siren burst.</summary>
+    /// <summary>&lt;audioPlayInfo&gt; body: the field values the reference Rust neolink sends for one siren burst.</summary>
     internal static XElement BuildAudioAlarmPlay(byte channelId) =>
         new("audioPlayInfo",
             new XElement("channelId", channelId),
@@ -248,7 +248,7 @@ public static class BcCameraCommands
             new XElement("playTimes", 1),
             new XElement("onOff", 0));
 
-    /// <summary>&lt;audioPlayInfo&gt; manual mode — playMode 2 with onOff as the latch,
+    /// <summary>&lt;audioPlayInfo&gt; manual mode: playMode 2 with onOff as the latch,
     /// exactly as Home Assistant's reolink library (reolink_aio) sends it: the siren
     /// sounds until switched off.</summary>
     internal static XElement BuildAudioAlarmManual(byte channelId, bool on) =>
@@ -275,14 +275,14 @@ public static class BcCameraCommands
 
     // ------------------------------------------------------------------ privacy mode
 
-    /// <summary>&lt;sleepState&gt; write body — privacy mode on/off, exactly as
+    /// <summary>&lt;sleepState&gt; write body: privacy mode on/off, exactly as
     /// Home Assistant's reolink library sends it (operate 2 = set).</summary>
     internal static XElement BuildSleepState(bool on) =>
         new("sleepState", new XAttribute("version", BcXmlBody.XmlVersion),
             new XElement("operate", 2),
             new XElement("sleep", on ? 1 : 0));
 
-    /// <summary>Whether privacy mode (camera "sleep": no video, lens dark) is on —
+    /// <summary>Whether privacy mode (camera "sleep": no video, lens dark) is on,
     /// null when the camera doesn't answer the query (msg 574).</summary>
     public static async Task<bool?> GetPrivacyModeAsync(this IBcCamera cam, TimeSpan? timeout = null, CancellationToken ct = default)
     {
@@ -305,7 +305,7 @@ public static class BcCameraCommands
         return null;
     }
 
-    /// <summary>Turns privacy mode on (camera goes dark) or off (msg 575 — NOT 623:
+    /// <summary>Turns privacy mode on (camera goes dark) or off (msg 575, NOT 623:
     /// that id carries the state pushes, which our status watcher owns).</summary>
     public static async Task SetPrivacyModeAsync(this IBcCamera cam, bool on, CancellationToken ct = default)
     {
@@ -333,7 +333,7 @@ public static class BcCameraCommands
             replyTimeout: TimeSpan.FromMilliseconds(800), tolerateNoReply: true, ct: ct).ConfigureAwait(false);
     }
 
-    /// <summary>&lt;FloodlightManual&gt; body — wire format per the reference Rust neolink (version "1").</summary>
+    /// <summary>&lt;FloodlightManual&gt; body: wire format per the reference Rust neolink (version "1").</summary>
     internal static XElement BuildFloodlightManual(byte channelId, bool on, int durationSeconds) =>
         new("FloodlightManual", new XAttribute("version", "1"),
             new XElement("channelId", channelId),

@@ -65,7 +65,7 @@ public static class BcCodec
             // 24-byte header like 0x6414/0x0000, established empirically: after a
             // 20-byte read the next message's magic sat exactly 4 bytes late, every
             // time. The word is consumed to keep the stream framed but NOT used as
-            // an extension offset — its meaning is unverified, and a garbage offset
+            // an extension offset: its meaning is unverified, and a garbage offset
             // would fail the extension bounds check and kill the connection.
             var ext = new byte[4];
             await stream.ReadExactlyAsync(ext, ct).ConfigureAwait(false);
@@ -105,7 +105,7 @@ public static class BcCodec
         // It also carries the nonce, which hasn't been exchanged yet, so the reply itself
         // is only ever plaintext (0x00) or BCEncrypt. If AES was negotiated (any other low
         // byte, e.g. 0x12) the switch to AES happens after the handshake, once the session
-        // key can be derived from the nonce — see BcCamera.LoginAsync.
+        // key can be derived from the nonce: see BcCamera.LoginAsync.
         if (msgId == BcConstants.MsgIdLogin && (responseCode >> 8) == 0xdd)
         {
             ctx.Encryption.Set((responseCode & 0xff) == 0x00
@@ -161,7 +161,7 @@ public static class BcCodec
                 {
                     // FullAes: the media stream is encrypted too. The ciphertext is
                     // padded, so only the plaintext length from this message's
-                    // Extension comes out — decrypting straight off the body span,
+                    // Extension comes out: decrypting straight off the body span,
                     // since FullAes media always carries an Extension, which used to
                     // force a full frame copy before the decrypt and another after.
                     msg.Binary = XmlCrypto.Decrypt(channelId, payload, ctx.Encryption,
@@ -171,7 +171,7 @@ public static class BcCodec
                 {
                     // Under None/BCEncrypt/plain AES (or no encryptLen), binary
                     // payloads are NOT encrypted. No extension (the common case for
-                    // every such media message): the body IS the payload — reuse it
+                    // every such media message): the body IS the payload, reuse it
                     // instead of copying the entire frame. body is never referenced
                     // after this point.
                     msg.Binary = extLen == 0 ? body : payload.ToArray();

@@ -6,12 +6,12 @@
 // client end to end (discovery, device info, media profiles, stream URIs, encoder
 // options + write, imaging get/set, PTZ presets + move + absolute zoom, OSDs,
 // the cell motion grid, reboot).
-// Not a conformant implementation — a test double. Logs every operation it sees.
+// Not a conformant implementation: a test double. Logs every operation it sees.
 //
 //   node tools/fake_onvif.js <port> [skewSeconds] [modes]
 //
 // modes is a comma-separated list:
-//   media2    the camera speaks ONLY Media2 — every ver10 media call faults
+//   media2    the camera speaks ONLY Media2, every ver10 media call faults
 //   zoomonly  the PTZ node is a motorised lens: zoom, no pan or tilt
 //   nocells   no analytics service at all, so no motion grid of its own
 const http = require('http');
@@ -241,7 +241,7 @@ function handleMedia2(op, body) {
 function handle(op, body, url) {
   state.seen.push(op);
   // Which media dialect is served where. A Media2-only camera has no ver10 media
-  // service at all, so everything sent there faults — as it would on the real thing.
+  // service at all, so everything sent there faults, as it would on the real thing.
   if (url.startsWith('/onvif/media2_service'))
     return MODES.has('media2') ? handleMedia2(op, body) : null;
   if (url.startsWith('/onvif/media_service') && MODES.has('media2'))
@@ -524,7 +524,7 @@ http.createServer((req, res) => {
     return;
   }
   // POST /__fire with {topic, items} queues one notification for the next
-  // PullMessages — this is how a test makes the camera "see" something.
+  // PullMessages: this is how a test makes the camera "see" something.
   if (req.method === 'POST' && req.url === '/__fire') {
     let raw = '';
     req.on('data', d => (raw += d));
@@ -551,7 +551,7 @@ http.createServer((req, res) => {
     // A real camera accepts a WS-Security digest only near its OWN clock. With
     // --skew set, this enforces that, so a client that stamps requests in the
     // server's time instead of the camera's fails here exactly as it would in the
-    // field — which is the whole point of the check.
+    // field, which is the whole point of the check.
     if (SKEW_SECONDS && auth === 'wsse' && op !== 'GetSystemDateAndTime') {
       const m = body.match(/<(?:[\w.-]+:)?Created[^>]*>([^<]+)<\//);
       const stamped = m ? Date.parse(m[1]) : NaN;

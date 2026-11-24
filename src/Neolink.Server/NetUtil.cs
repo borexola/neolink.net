@@ -61,7 +61,7 @@ internal static class NetUtil
     /// </summary>
     /// <param name="url">An RTSP URL, or null.</param>
     /// <returns>Host: the bare hostname, which is where OTHER services on that
-    /// camera are looked for — never carrying the stream's port, since ONVIF is not
+    /// camera are looked for, never carrying the stream's port, since ONVIF is not
     /// on it. Display: the same host plus its port when that port is not RTSP's own
     /// 554, for showing a person which camera this is (two cameras behind one
     /// address differ only by it). User/Pass: the login the URL carries, decoded.
@@ -80,7 +80,7 @@ internal static class NetUtil
             if (user.Length == 0) user = null;
         }
         // Uri.Host already brackets an IPv6 literal, which is what an authority
-        // wants — both of these go back into URLs or into a host:port field.
+        // wants, both of these go back into URLs or into a host:port field.
         var display = u.IsDefaultPort || u.Port == 554 ? u.Host : $"{u.Host}:{u.Port}";
         return (u.Host, display, user, pass);
     }

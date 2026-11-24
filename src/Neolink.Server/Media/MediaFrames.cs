@@ -14,7 +14,7 @@ public abstract record MediaFrame;
 /// <summary>Stream info header ("1001"/"1002" magic).</summary>
 public sealed record MediaInfo(uint Width, uint Height, byte Fps) : MediaFrame;
 
-/// <summary>A complete video access unit (Annex-B) — key frame or predicted frame.</summary>
+/// <summary>A complete video access unit (Annex-B): key frame or predicted frame.</summary>
 public sealed record VideoFrame(VideoCodec Codec, bool Keyframe, uint Microseconds, uint? UnixTime, byte[] Data) : MediaFrame;
 
 /// <summary>An AAC frame block (one or more ADTS frames).</summary>

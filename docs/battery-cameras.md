@@ -192,7 +192,7 @@ Step by step:
 #### Verify
 
 Watch Neolink's log: `Wake hints: decoy push service on tcp://…` at startup,
-`push decoy contacted by <camera-ip> … — the redirect works` when the
+`push decoy contacted by <camera-ip> …, the redirect works` when the
 camera first calls in (trigger its PIR, or just wait; the first event
 proves it), then `Wake hints: <camera-ip> called the decoy push service …`
 per event. Nothing at all? With A1 the NAT rule isn't matching (check the
@@ -260,7 +260,7 @@ Steps 1-3 as above, then Status → System Logs → **Settings**: check
 #### Verify
 
 Watch Neolink's log: `Wake hints: listening …` at startup, `receiving syslog
-from … — the pipe works` on the first datagram, `Wake hints: router saw
+from …, the pipe works` on the first datagram, `Wake hints: router saw
 <camera> -> …:443` on each event push. No pipe-works line? Wrong port, or
 UDP 5140 isn't reaching the container.
 
@@ -465,19 +465,19 @@ merge.
 
 | Log line | Meaning |
 |---|---|
-| `parked — the recording stream watches for self-wakes…` | Streams released; the camera may sleep. |
-| `camera is asleep (ping settled into the power-save pattern) — armed…` | Sleep confirmed; watching for the wake edge. |
+| `parked: the recording stream watches for self-wakes…` | Streams released; the camera may sleep. |
+| `camera is asleep (ping settled into the power-save pattern): armed…` | Sleep confirmed; watching for the wake edge. |
 | `camera answered the transport probe after an all-silent park` | Ping filtered here; the fallback prober caught the wake. |
-| `self-wake — recording tentatively…` | Wake caught; capturing, nothing announced yet. |
-| `event started (motion — confirmed self-wake, footage from the wake onward)` | An allowed detection confirmed it; the event is real and announced. |
-| `event started (motion — hint-opened wake)` | The hint was the confirmation (Motion is ticked); kept without waiting for a detection push. |
+| `self-wake: recording tentatively…` | Wake caught; capturing, nothing announced yet. |
+| `event started (motion, confirmed self-wake, footage from the wake onward)` | An allowed detection confirmed it; the event is real and announced. |
+| `event started (motion, hint-opened wake)` | The hint was the confirmation (Motion is ticked); kept without waiting for a detection push. |
 | `[wake-diag] HINT KEPT …` | No detection push followed, but the wake was kept as a motion event. |
-| `self-wake ended with no matching detection — footage discarded…` | Nothing allowed arrived; the tentative event was deleted. |
-| `taping this wake to the timeline (passive — never holds the camera awake)` | The timeline tap is writing a segment from frames already flowing. |
+| `self-wake ended with no matching detection: footage discarded…` | Nothing allowed arrived; the tentative event was deleted. |
+| `taping this wake to the timeline (passive, never holds the camera awake)` | The timeline tap is writing a segment from frames already flowing. |
 | `held awake by …` (hourly) | Something is spending battery; this names it. |
-| `that self-wake connect caught nothing (N in a row) — being more skeptical…` | Self-healing against misread sleep patterns. A real catch resets. |
+| `that self-wake connect caught nothing (N in a row): being more skeptical…` | Self-healing against misread sleep patterns. A real catch resets. |
 | `brief fast-ping blip (N sample(s)) ended before the 3-sample wake confirmation` | The radio went flat too briefly to be a confirmed wake. Frequent blips near a miss = wakes too short for the scan; none = the PIR never fired. |
-| `wake hint (router saw …) — the camera is calling home for an event` | Router-fed instant wake (option B); connecting at once. |
+| `wake hint (router saw …): the camera is calling home for an event` | Router-fed instant wake (option B); connecting at once. |
 | `wake hint (… called the decoy push service …)` | Push-decoy instant wake (option A); connecting at once. |
 | `self-wake caught (router wake hint): a detection followed` | The wake was real; nothing to do. |
 | `[wake-diag] LIKELY OUR PROBE / SUSPECT FALSE ASLEEP / HINT MISFIRE / INCONCLUSIVE` | Post-mortem of a wake that caught nothing. The evidence line behind it is logged at debug level; paste both into issues. |

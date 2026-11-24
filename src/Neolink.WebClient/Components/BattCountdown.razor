@@ -3,7 +3,7 @@
 @implements IDisposable
 
 @* The battery chip's clock. The per-second tick lives in this leaf component so
-   only one small span re-renders each second — a 1 Hz StateHasChanged on the
+   only one small span re-renders each second: a 1 Hz StateHasChanged on the
    wall page itself would rebuild the whole render tree just to advance a clock.
    When the clock hits 0:00 it tells the parent once, so the tile releases the
    camera immediately instead of on the next 10-second poll (which used to leave
@@ -11,7 +11,7 @@
 <span>@T.F("view ends in {0} to save battery", $"{_left / 60}:{_left % 60:00}")</span>
 
 @code {
-    /// <summary>When the stream attached — the viewing budget runs from here.</summary>
+    /// <summary>When the stream attached: the viewing budget runs from here.</summary>
     [Parameter] public DateTime AttachedUtc { get; set; }
     [Parameter] public TimeSpan Budget { get; set; }
     /// <summary>Fires once when the clock reaches 0:00.</summary>

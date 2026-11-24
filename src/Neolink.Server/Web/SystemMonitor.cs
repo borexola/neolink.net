@@ -26,9 +26,9 @@ public readonly record struct SystemSample(
 /// <summary>
 /// Samples the server's resource usage every 2 seconds for the web UI's monitor
 /// page. Two fixed rings hold the history: full 2s detail for the last hour,
-/// plus one-minute aggregates covering the last 24 hours (≈160 KB total — the
+/// plus one-minute aggregates covering the last 24 hours (≈160 KB total, the
 /// deep history is effectively free). Everything is measured from inside the
-/// process — no perf counters, no OS-specific dependencies — so it works the
+/// process, no perf counters, no OS-specific dependencies, so it works the
 /// same on Windows, Linux and in containers.
 /// </summary>
 public sealed class SystemMonitor
@@ -43,7 +43,7 @@ public sealed class SystemMonitor
     // /proc enumeration (Linux), and DriveInfo is a statfs that can be a network
     // round-trip on NAS-mounted volumes. Sampled every 2 s they were the single
     // largest idle-CPU consumer in the whole process (profiled: ~half of all busy
-    // CPU at idle) — visible as periodic spikes on small Docker hosts. They move
+    // CPU at idle), visible as periodic spikes on small Docker hosts. They move
     // slowly; the Monitor page charts them as gauges either way.
     private const int GaugeEveryTicks = 30;               // once a minute
     private const int RecordingsSizeEveryTicks = 300;     // walking the tree reads every file: every 10 min
@@ -130,7 +130,7 @@ public sealed class SystemMonitor
     public static readonly TimeSpan OverloadWindow = TimeSpan.FromMinutes(5);
 
     /// <summary>True when this process has averaged near-max CPU across the overload
-    /// window — a few samples are required so a brief spike doesn't trip it.</summary>
+    /// window: a few samples are required so a brief spike doesn't trip it.</summary>
     public bool Overloaded() =>
         OverloadedFrom(Since(DateTimeOffset.UtcNow.Subtract(OverloadWindow).ToUnixTimeMilliseconds()));
 
@@ -185,7 +185,7 @@ public sealed class SystemMonitor
         // The per-tick reads are deliberately cheap, direct syscalls only:
         // TotalProcessorTime is GetProcessTimes, Environment.WorkingSet is
         // GetProcessMemoryInfo, and the GC counters are in-process. No
-        // proc.Refresh() here — that belongs to the once-a-minute gauge block,
+        // proc.Refresh() here, that belongs to the once-a-minute gauge block,
         // whose properties are the ones backed by the expensive snapshot.
         var now = DateTime.UtcNow;
         var cpuTime = proc.TotalProcessorTime;
@@ -219,7 +219,7 @@ public sealed class SystemMonitor
             catch { /* unmapped/network volume: leave zeros */ }
         }
 
-        // Sizing the recordings tree reads every file's length — over a NAS mount
+        // Sizing the recordings tree reads every file's length: over a NAS mount
         // that is the most expensive thing this process does at idle, so it runs
         // on its own long cadence and keeps the last answer in between.
         if (_recordingsRoot != null && _tick % RecordingsSizeEveryTicks == 0)

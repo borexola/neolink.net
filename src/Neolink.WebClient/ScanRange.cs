@@ -68,7 +68,7 @@ public readonly record struct ScanRange(uint First, uint Last)
             if (!TryIp(t, out var ip)) { error = $"'{t}' is not an IPv4 subnet (use 10.1.1.0/24)"; return null; }
             r = Subnet(ip, 24);
         }
-        if (r.Count > MaxHosts) { error = $"'{t}' is too wide to sweep — {MaxHosts} addresses (a /21) is the most"; return null; }
+        if (r.Count > MaxHosts) { error = $"'{t}' is too wide to sweep: {MaxHosts} addresses (a /21) is the most"; return null; }
         return r;
     }
 

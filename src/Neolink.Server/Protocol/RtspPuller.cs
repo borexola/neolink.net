@@ -72,7 +72,7 @@ public sealed class RtspPuller
     /// <summary>When video first reached the hub on this connection; null until then.</summary>
     public DateTime? StreamingSince { get; private set; }
 
-    /// <param name="url">rtsp://[user:pass@]host[:port]/path — credentials may ride the URL.</param>
+    /// <param name="url">rtsp://[user:pass@]host[:port]/path, credentials may ride the URL.</param>
     public RtspPuller(string tag, string url, IMediaSink sink)
     {
         _tag = tag;
@@ -130,7 +130,7 @@ public sealed class RtspPuller
         tcp.NoDelay = true;
         _net = tcp.GetStream();
         // Reads are buffered (the pump otherwise costs 3 recv syscalls per RTP
-        // packet, and the header scan one per byte — see BcConnection, which got
+        // packet, and the header scan one per byte, see BcConnection, which got
         // the same treatment); writes stay on the raw stream so requests flush.
         _read = new BufferedStream(_net, 64 * 1024);
         try
@@ -195,7 +195,7 @@ public sealed class RtspPuller
                 int len = (head[2] << 8) | head[3];
                 if (_pkt.Length < len) _pkt = new byte[Math.Max(len, _pkt.Length * 2)];
                 await ReadExactAsync(_pkt.AsMemory(0, len), idle.Token).ConfigureAwait(false);
-                if (channel != _videoChannel) continue; // RTCP sender reports — nothing we need
+                if (channel != _videoChannel) continue; // RTCP sender reports, nothing we need
                 OnRtp(_pkt.AsSpan(0, len));
                 if (Environment.TickCount64 - armedAt > 1000)
                 {
@@ -603,7 +603,7 @@ public sealed class RtspPuller
         if (payloadLen <= 0) return;
         var payload = pkt.Slice(headerLen, payloadLen);
 
-        // A new RTP timestamp means a new access unit — flush what we hold.
+        // A new RTP timestamp means a new access unit: flush what we hold.
         if (_haveAuTs && ts != _auTimestamp)
         {
             EmitAccessUnit();
@@ -670,7 +670,7 @@ public sealed class RtspPuller
 
     private static readonly byte[] StartCode3 = { 0, 0, 1 };
 
-    /// <summary>Adds a NAL — or each of several that a buggy camera packed into one payload behind
+    /// <summary>Adds a NAL, or each of several that a buggy camera packed into one payload behind
     /// start codes (go2rtc: "SPS+PPS+IFrame separated by 00 00 00 01"). A real NAL never contains 00 00 01.</summary>
     private void AddNal(ReadOnlySpan<byte> nal)
     {

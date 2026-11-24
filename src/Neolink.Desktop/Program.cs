@@ -13,7 +13,7 @@ internal static class Program
     private const string MutexName = @"Local\Neolink.NET.Desktop.Instance";
     private const string WakeEventName = @"Local\Neolink.NET.Desktop.Wake";
 
-    /// <summary>Held for the process's whole life — EXCEPT during RestartSelf,
+    /// <summary>Held for the process's whole life, EXCEPT during RestartSelf,
     /// which must release it before spawning the successor or the new process
     /// would see "already running" and quietly exit.</summary>
     private static Mutex? _instanceMutex;
@@ -23,7 +23,7 @@ internal static class Program
     {
         // Invariant FORMATTING without invariant MODE: the csproj must not set
         // InvariantGlobalization (WinForms crashes on keyboard-layout switches
-        // under it — see the csproj note), so the culture is pinned here instead
+        // under it, see the csproj note), so the culture is pinned here instead
         // and every format/parse behaves the same on every machine.
         System.Globalization.CultureInfo.DefaultThreadCurrentCulture =
             System.Globalization.CultureInfo.InvariantCulture;
@@ -46,14 +46,14 @@ internal static class Program
         }
 
         // Support aid: "my cameras trip but nothing appears" is almost always
-        // Windows' own notification settings — Focus Assist, or the app switched
+        // Windows' own notification settings: Focus Assist, or the app switched
         // off under Settings > Notifications. This proves the path end to end
         // without waiting for a real event, and says which mechanism was used.
         if (args.Any(a => a.Equals("--test-notification", StringComparison.OrdinalIgnoreCase)))
             return TestNotification();
 
         // A toast clicked in the Action Center launches this exe through the
-        // neolink-desktop: protocol — usually while another instance runs.
+        // neolink-desktop: protocol, usually while another instance runs.
         var deepLink = ProtocolLink.FromArgs(args);
 
         // A second launch (double-clicking the shortcut while it sits in the tray)
@@ -93,7 +93,7 @@ internal static class Program
                            && args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
 
         // A protocol launch with no instance running: start straight on the
-        // event the notification pointed at (never hidden — a click asked for it).
+        // event the notification pointed at (never hidden, a click asked for it).
         startHidden &= deepLink == null;
         using var form = new MainForm(settings, link, startHidden, deepLink);
         using var wake = ListenForWake(form);
@@ -176,7 +176,7 @@ internal static class Program
     /// it in a file the listener reads and deletes.</summary>
     private static string WakeLinkPath => Path.Combine(DesktopSettings.Dir, "wake.link");
 
-    /// <summary>Signals the running instance to come to the front — on the event
+    /// <summary>Signals the running instance to come to the front, on the event
     /// it points at, when the launch carried one (a clicked notification).</summary>
     private static void WakeExistingInstance(string? deepLink)
     {
@@ -227,7 +227,7 @@ internal static class Program
         public void Dispose() => onDispose();
     }
 
-    /// <summary>Restarts the process — the honest answer to "the server address
+    /// <summary>Restarts the process: the honest answer to "the server address
     /// changed", which invalidates the WebView's session, the API token and the
     /// alert baseline all at once. The single-instance mutex is released FIRST:
     /// the successor starts while this process is still winding down, and it must

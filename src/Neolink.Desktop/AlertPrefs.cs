@@ -4,14 +4,14 @@
 namespace Neolink.Desktop;
 
 /// <summary>
-/// The account's alert rules — the SAME blob the web UI keeps at
+/// The account's alert rules: the SAME blob the web UI keeps at
 /// GET/PUT /api/me/settings/notifications. Field names and defaults mirror the
 /// web UI's AlertPrefs exactly, so turning "person" on for the front door in the
 /// browser turns it on in the desktop app and the other way round; there is one
 /// set of rules per account, not one per client.
 ///
 /// The web UI writes this with the default (PascalCase) naming policy and reads
-/// it case-insensitively, so this class must serialize PascalCase too — see
+/// it case-insensitively, so this class must serialize PascalCase too: see
 /// <see cref="ServerLink"/>. Unknown members are skipped by default, which is
 /// what keeps a newer web UI from losing keys it does not know about here.
 /// </summary>
@@ -52,7 +52,7 @@ internal sealed class AlertPrefs
     /// <summary>Cameras that alert when they drop offline and when they return.</summary>
     public List<string> Offline { get; set; } = new();
 
-    /// <summary>The label vocabulary the UI offers — identical to the web UI's list.</summary>
+    /// <summary>The label vocabulary the UI offers: identical to the web UI's list.</summary>
     public static readonly string[] Labels =
     {
         "person", "vehicle", "animal", "package", "doorbell", "crying",

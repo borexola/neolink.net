@@ -8,10 +8,10 @@ namespace Neolink.Media;
 
 /// <summary>
 /// A persistent ffmpeg pipe that turns one stream's camera audio (AAC/ADTS or
-/// raw PCM) into 20 ms Opus packets — what WebRTC ecosystems (go2rtc, browsers,
+/// raw PCM) into 20 ms Opus packets: what WebRTC ecosystems (go2rtc, browsers,
 /// Home Assistant cards) take natively instead of running their own transcode.
 /// One instance per publishing stream: source blocks go in via <see cref="Feed"/>
-/// (never blocking — the camera loop must not feel ffmpeg), finished packets
+/// (never blocking, the camera loop must not feel ffmpeg), finished packets
 /// come back on the reader task through the callback. A dead ffmpeg is
 /// relaunched with backoff and can never take the stream down.
 /// </summary>
@@ -74,7 +74,7 @@ public sealed class AudioTranscoder : IDisposable
             strikes = produced ? 1 : strikes + 1;
             if (strikes >= 5)
             {
-                Log.Warn($"{_name}: ffmpeg keeps exiting without producing Opus — giving up " +
+                Log.Warn($"{_name}: ffmpeg keeps exiting without producing Opus: giving up " +
                          "for this stream session (its RTSP clients hear silence). The lines " +
                          "above say why; a build without libopus is the usual culprit.");
                 return;
@@ -125,7 +125,7 @@ public sealed class AudioTranscoder : IDisposable
         a.Add("-application"); a.Add("voip"); // camera audio is speech; keeps latency low
         a.Add("-frame_duration"); a.Add("20"); // SamplesPerPacket depends on this
         a.Add("-f"); a.Add("ogg");
-        // One page per packet — the muxer would otherwise batch ~1 s per page.
+        // One page per packet: the muxer would otherwise batch ~1 s per page.
         a.Add("-page_duration"); a.Add("20000");
         a.Add("-flush_packets"); a.Add("1");
         a.Add("pipe:1");
@@ -181,7 +181,7 @@ public sealed class AudioTranscoder : IDisposable
             if (!ct.IsCancellationRequested)
                 Log.Warn($"{_name}: ffmpeg audio transcode exited (code {proc.ExitCode}, " +
                          $"{packetsOut} packet(s) produced)" +
-                         (errTail.Count > 0 ? $" — {string.Join(" | ", errTail)}" : ""));
+                         (errTail.Count > 0 ? $": {string.Join(" | ", errTail)}" : ""));
             _ = stdinPump; // completes on its own once the channel or process closes
             return packetsOut > 0;
         }

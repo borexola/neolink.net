@@ -10,7 +10,7 @@ namespace Neolink.Media;
 public static class FrameGrab
 {
     /// <summary>How long to wait for a keyframe when the hub's GOP cache turns out
-    /// to be empty after all — a stream that started between the caller's check and
+    /// to be empty after all: a stream that started between the caller's check and
     /// the subscribe. Short on purpose: the caller is an HTTP request holding a
     /// per-camera gate, and a live stream costs none of this because its buffered
     /// group is handed over the moment we subscribe.</summary>
@@ -48,7 +48,7 @@ public static class FrameGrab
         if (Ffmpeg.ExePath is not { } ffmpeg)
         {
             if (Interlocked.Exchange(ref _missingLogged, 1) == 0)
-                Log.Info("No ffmpeg found — cameras without a snapshot command of their own " +
+                Log.Info("No ffmpeg found: cameras without a snapshot command of their own " +
                          "(generic RTSP) show no still image. Installing ffmpeg on PATH (or " +
                          "pointing NEOLINK_FFMPEG at a binary) gives them one automatically.");
             return null;
@@ -119,7 +119,7 @@ public static class FrameGrab
     }
 
     /// <summary>The keyframe-led run of video packets to decode: whatever the hub
-    /// primed us with, or — when it primed nothing — the next keyframe to arrive.
+    /// primed us with, or, when it primed nothing, the next keyframe to arrive.
     /// Returns empty when no keyframe shows up inside the wait.</summary>
     private static async Task<List<HubVideo>> CollectAsync(
         System.Threading.Channels.ChannelReader<HubPacket> reader, TimeSpan keyframeWait, CancellationToken ct)
@@ -153,7 +153,7 @@ public static class FrameGrab
     }
 
     /// <summary>Adds one packet to the run being collected. A run always STARTS on a
-    /// keyframe — anything before one is undecodable, and a later keyframe starts a
+    /// keyframe: anything before one is undecodable, and a later keyframe starts a
     /// fresher run than the one in hand. Audio is not video and is ignored; frames
     /// past the follow limit are dropped rather than buffered.</summary>
     internal static void Take(List<HubVideo> run, HubPacket packet)

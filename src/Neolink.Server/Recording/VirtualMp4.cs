@@ -7,7 +7,7 @@ namespace Neolink.Recording;
 
 /// <summary>
 /// Serves OLD-FORMAT (fragmented) recordings as if they were classic indexed
-/// MP4s — without touching a byte on disk. New recordings are finalized into
+/// MP4s, without touching a byte on disk. New recordings are finalized into
 /// the classic layout when they close, but installs upgraded from earlier
 /// versions may sit on terabytes of per-frame-fragmented footage, and a file
 /// still being recorded is fragmented by design. Rewriting archives at that
@@ -18,7 +18,7 @@ namespace Neolink.Recording;
 /// so players seek by byte offset exactly like they do on new files.
 ///
 /// <see cref="Open"/> returns a plain FileStream for anything that is not an
-/// old-format file (already classic, foreign, unparseable) — serving then
+/// old-format file (already classic, foreign, unparseable): serving then
 /// behaves exactly as before, making this a pure fast-path with a safe
 /// fallback. Growing (still-recording) files work too: requests inside a short
 /// window share one pinned snapshot covering the samples complete at scan time.
@@ -50,7 +50,7 @@ public static class VirtualMp4
     /// </summary>
     public static Stream Open(string path) => Open(path, out _, out _, out _);
 
-    /// <summary>The snapshot outputs identify the served file state — the
+    /// <summary>The snapshot outputs identify the served file state: the
     /// caller's ETag must come from these, not a fresh FileInfo. `growing` =
     /// fragmented with a fresh mtime, i.e. still being written.</summary>
     public static Stream Open(string path, out long snapshotLength, out DateTime snapshotMTime,
@@ -68,7 +68,7 @@ public static class VirtualMp4
             if (!ClipWriter.IsFragmented(file))
             {
                 file.Seek(0, SeekOrigin.Begin);
-                return file; // classic already — serve raw
+                return file; // classic already: serve raw
             }
             // The writer flushes at least per GOP, so an old mtime means an
             // old-format archive, not a recording in progress.
@@ -116,9 +116,9 @@ public static class VirtualMp4
     }
 
     /// <summary>
-    /// The byte-mapped view: bytes [0, FragEnd) come from the file — except the
+    /// The byte-mapped view: bytes [0, FragEnd) come from the file, except the
     /// 8/16 bytes at the retired header, replaced by a free-box head spanning
-    /// the whole fragment region — and the synthesized moov follows at FragEnd.
+    /// the whole fragment region, and the synthesized moov follows at FragEnd.
     /// </summary>
     private sealed class VirtualClassicStream : Stream
     {
@@ -163,7 +163,7 @@ public static class VirtualMp4
                 int want = (int)Math.Min(buffer.Length, _fragEnd - _pos);
                 SeekFileIfNeeded();
                 n = _file.Read(buffer[..want]);
-                if (n <= 0) return 0; // file shrank underneath us — treat as EOF
+                if (n <= 0) return 0; // file shrank underneath us: treat as EOF
                 _filePos = _pos + n;
                 ApplyPatch(buffer, _pos, n);
             }

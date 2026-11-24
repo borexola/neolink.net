@@ -75,7 +75,7 @@ public static class Adpcm
 }
 
 /// <summary>
-/// Stateful DVI-4 / IMA ADPCM encoder for the outbound two-way-talk stream — the
+/// Stateful DVI-4 / IMA ADPCM encoder for the outbound two-way-talk stream: the
 /// inverse of <see cref="Adpcm.BlockToPcm"/>. After quantizing each sample it
 /// reconstructs it exactly the way the decoder will, so both sides' predictor
 /// state stays in lockstep across an arbitrarily long stream of blocks.
@@ -137,7 +137,7 @@ public sealed class AdpcmEncoder
 }
 
 /// <summary>
-/// Serializes ADPCM blocks into BcMedia frames for the outbound talk stream — the
+/// Serializes ADPCM blocks into BcMedia frames for the outbound talk stream: the
 /// mirror image of MediaFrameReader's ADPCM parsing. Layout (little-endian, verified
 /// against a real camera capture): u32 magic 0x62773130 "01wb", u16 payload size,
 /// u16 payload size repeated, u16 sub-magic 0x0100, u16 half block size, block,
@@ -202,7 +202,7 @@ public sealed class TalkFrameEncoder
 
     /// <summary>
     /// Feeds one PCM chunk and returns the frames it completed (possibly none).
-    /// The returned list is reused by the next call — consume it before feeding again.
+    /// The returned list is reused by the next call: consume it before feeding again.
     /// </summary>
     public IReadOnlyList<byte[]> Feed(ReadOnlySpan<byte> pcm16le)
     {

@@ -3,7 +3,7 @@
 // in the repository root.
 namespace Neolink.Desktop;
 
-/// <summary>What kind of thing happened — the shell uses this to decide whether
+/// <summary>What kind of thing happened: the shell uses this to decide whether
 /// quiet hours may swallow it.</summary>
 internal enum AlertKind
 {
@@ -22,7 +22,7 @@ internal sealed record Alert(
     string? DeepLink = null, string? ThumbPath = null);
 
 /// <summary>
-/// The alerting decision, with no clock, no network and no UI in it — every
+/// The alerting decision, with no clock, no network and no UI in it: every
 /// input arrives as an argument, so the whole thing is exercised by the self
 /// test. <see cref="AlertEngine"/> owns the timer and the toasts; this owns
 /// what counts as news.
@@ -33,11 +33,11 @@ internal sealed record Alert(
 /// </summary>
 internal sealed class AlertRules
 {
-    /// <summary>Events older than this on arrival are catch-up, not news — a
+    /// <summary>Events older than this on arrival are catch-up, not news: a
     /// laptop waking from sleep must not fire an hour of backlog.</summary>
     public static readonly TimeSpan MaxEventAge = TimeSpan.FromMinutes(3);
 
-    /// <summary>Consecutive polls a camera must look faulted before it alerts —
+    /// <summary>Consecutive polls a camera must look faulted before it alerts:
     /// ~20s at the default cadence, which rides out a reconnect blip.</summary>
     public const int OfflinePollsToAlert = 2;
 
@@ -53,7 +53,7 @@ internal sealed class AlertRules
     private bool _prevStorageFull, _prevOverload, _prevWriteFailure;
 
     /// <summary>True once a first poll has established the baseline. Until then
-    /// nothing fires — a fresh start is not a burst of alerts.</summary>
+    /// nothing fires: a fresh start is not a burst of alerts.</summary>
     public bool Seeded => _eventsSeeded;
 
     /// <summary>Forgets the baseline, so the next poll seeds again. Used when the
@@ -73,9 +73,9 @@ internal sealed class AlertRules
     /// <summary>
     /// Everything one poll should raise, in the order it happened. Advancing the
     /// state is this method's job whether or not the caller goes on to show the
-    /// alerts — a suppressed alert (quiet hours) must not fire late.
+    /// alerts: a suppressed alert (quiet hours) must not fire late.
     /// </summary>
-    /// <param name="trace">Receives one line per decision about a NEW event —
+    /// <param name="trace">Receives one line per decision about a NEW event:
     /// alerted or why not. Null in tests; the app feeds the diagnostic log.</param>
     public List<Alert> Evaluate(AlertPrefs prefs, IReadOnlyList<ApiEvent>? events,
         IReadOnlyList<ApiCamera>? cameras, ApiFeatures? features, DateTime utcNow,
@@ -98,7 +98,7 @@ internal sealed class AlertRules
         {
             foreach (var e in events) _seen.Add(e.Id);
             _eventsSeeded = true;
-            trace?.Invoke($"events: baseline seeded with {events.Count} existing event(s) — those never alert");
+            trace?.Invoke($"events: baseline seeded with {events.Count} existing event(s), those never alert");
             return;
         }
 
@@ -108,12 +108,12 @@ internal sealed class AlertRules
             if (!_seen.Add(ev.Id)) continue;
             if (!prefs.Enabled)
             {
-                trace?.Invoke($"event {ev.Id} ({ev.Camera}): skipped — alerts are OFF in the account rules");
+                trace?.Invoke($"event {ev.Id} ({ev.Camera}): skipped, alerts are OFF in the account rules");
                 continue;
             }
             if (utcNow - ev.Start > MaxEventAge)
             {
-                trace?.Invoke($"event {ev.Id} ({ev.Camera}): skipped — {(utcNow - ev.Start).TotalMinutes:0.0} min old, catch-up not news");
+                trace?.Invoke($"event {ev.Id} ({ev.Camera}): skipped, {(utcNow - ev.Start).TotalMinutes:0.0} min old, catch-up not news");
                 continue;
             }
             var hits = ev.AlertLabels
@@ -122,7 +122,7 @@ internal sealed class AlertRules
                 .ToList();
             if (hits.Count == 0)
             {
-                trace?.Invoke($"event {ev.Id} ({ev.Camera}): skipped — labels [{string.Join(", ", ev.AlertLabels)}] " +
+                trace?.Invoke($"event {ev.Id} ({ev.Camera}): skipped, labels [{string.Join(", ", ev.AlertLabels)}] " +
                               "not selected for this camera in the alert rules");
                 continue;
             }
@@ -131,11 +131,11 @@ internal sealed class AlertRules
             var cooldown = TimeSpan.FromSeconds(Math.Max(0, prefs.CooldownSeconds));
             if (_lastFired.TryGetValue(key, out var last) && utcNow - last < cooldown)
             {
-                trace?.Invoke($"event {ev.Id} ({ev.Camera}): skipped — within the {cooldown.TotalSeconds:0}s cooldown for {key}");
+                trace?.Invoke($"event {ev.Id} ({ev.Camera}): skipped, within the {cooldown.TotalSeconds:0}s cooldown for {key}");
                 continue;
             }
             _lastFired[key] = utcNow;
-            trace?.Invoke($"event {ev.Id} ({ev.Camera}): ALERT — {string.Join("+", hits)}");
+            trace?.Invoke($"event {ev.Id} ({ev.Camera}): ALERT, {string.Join("+", hits)}");
 
             outp.Add(new Alert(AlertKind.Detection, ev.Id, ev.Title,
                 $"{ev.Camera} · {ev.Start.ToLocalTime():HH:mm:ss}",
@@ -208,17 +208,17 @@ internal sealed class AlertRules
             if (prefs.SysStorage && storageFull != _prevStorageFull)
                 outp.Add(new Alert(AlertKind.ServerCondition, "sys-storage",
                     storageFull ? "Storage full" : "Storage recovered",
-                    storageFull ? "Recording has stopped — free space or adjust retention/archive."
+                    storageFull ? "Recording has stopped: free space or adjust retention/archive."
                                 : "Storage is no longer full.", DeepLink: "/"));
             if (prefs.SysOverload && f.Overload != _prevOverload)
                 outp.Add(new Alert(AlertKind.ServerCondition, "sys-overload",
                     f.Overload ? "Server overloaded" : "Server load back to normal",
-                    f.Overload ? "CPU has stayed near maximum for several minutes — streams or recording may lag."
+                    f.Overload ? "CPU has stayed near maximum for several minutes: streams or recording may lag."
                                : "CPU usage has returned to normal.", DeepLink: "/"));
             if (prefs.SysWriteFailure && f.WriteFailure != _prevWriteFailure)
                 outp.Add(new Alert(AlertKind.ServerCondition, "sys-write",
                     f.WriteFailure ? "Recording write failures" : "Recording writes recovered",
-                    f.WriteFailure ? "The server is failing to write footage to disk — check the drive."
+                    f.WriteFailure ? "The server is failing to write footage to disk: check the drive."
                                    : "Footage is writing to disk again.", DeepLink: "/"));
         }
 

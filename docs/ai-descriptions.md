@@ -69,7 +69,7 @@ check and give the server your CA:
    getting into a car and the car moving closes the event before the
    departure. Raise `post_seconds` to bridge such gaps.
 3. **When the event closes**, the frames go to the model, each introduced by
-   its own time label ("Frame 3 of 12 — +4s into the event:", or "3s BEFORE
+   its own time label ("Frame 3 of 12, +4s into the event:", or "3s BEFORE
    the trigger (pre-roll):"), with grounding rules that forbid narrating
    anything the frames don't show. Oversized frames are downscaled through
    ffmpeg; very large sets split into ordered parts. Jobs run one at a time
@@ -84,7 +84,7 @@ Battery-friendly: the stream tap only reads frames already flowing, and
 tentative self-wake recordings are never sampled.
 
 **Which pipeline am I on?** The startup log says it in one line ("AI
-describe: ffmpeg at … — stream frame sampling, pre-trigger frames and
+describe: ffmpeg at …, stream frame sampling, pre-trigger frames and
 downscaling active", or the "no ffmpeg found" variant), the Settings → AI
 page shows the same status, and each event's "describing event" log line
 says `stream-tap` when the stream was the source.

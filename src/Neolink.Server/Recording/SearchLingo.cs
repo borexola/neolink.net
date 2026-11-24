@@ -9,7 +9,7 @@ namespace Neolink.Recording;
 /// <summary>Multilingual front-end for EventSearch: rewrites the closed
 /// vocabulary (dates, labels, negators, connectives) of the six UI languages
 /// into English so the one grammar serves them all. Open vocabulary is left
-/// alone — untranslated words become keywords and take the AI-translate path.</summary>
+/// alone: untranslated words become keywords and take the AI-translate path.</summary>
 internal static class SearchLingo
 {
     static SearchLingo()

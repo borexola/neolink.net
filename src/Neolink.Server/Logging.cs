@@ -45,7 +45,7 @@ public static class Log
 
     /// <summary>Mirrors every line at or above <see cref="Level"/> to a file
     /// (--log). Returns false, with the reason on the console, when the path is
-    /// unusable — the caller decides whether that is fatal.</summary>
+    /// unusable: the caller decides whether that is fatal.</summary>
     public static bool AttachFile(string path, out string? error)
     {
         lock (Gate)
@@ -169,7 +169,7 @@ public static class Log
 
     /// <summary>
     /// Camera XML, event text and submitted usernames all reach the log, and a
-    /// bare newline in any of them would forge a whole line — including the
+    /// bare newline in any of them would forge a whole line, including the
     /// "intrusion attempt" line users are told to point fail2ban at. Multi-line
     /// content (stack traces) keeps its shape, indented, so that untrusted text
     /// can never begin a line and be read as a record of its own.

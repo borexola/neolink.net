@@ -7,20 +7,20 @@ using System.Text.RegularExpressions;
 namespace Neolink.Recording;
 
 /// <summary>A parsed search: hard filters plus free-text keywords. Structured
-/// means every word was consumed by the grammar — no AI needed.</summary>
+/// means every word was consumed by the grammar, no AI needed.</summary>
 public sealed class EventQuery
 {
     public List<string> Labels { get; init; } = new();
-    /// <summary>Negated labels ("no cars", "without people") — excluded, never matched.</summary>
+    /// <summary>Negated labels ("no cars", "without people"): excluded, never matched.</summary>
     public List<string> NotLabels { get; init; } = new();
     public List<string> Cameras { get; init; } = new();
     public DateTime? FromLocal { get; set; }
     public DateTime? ToLocal { get; set; }
     public List<string> Keywords { get; init; } = new();
-    /// <summary>A bare number the grammar could not place ("between 9 and 10") —
+    /// <summary>A bare number the grammar could not place ("between 9 and 10"):
     /// worth an AI look even when no keywords remain.</summary>
     public bool StrayDigits { get; internal set; }
-    /// <summary>The only date evidence was a bare clock time anchored to today —
+    /// <summary>The only date evidence was a bare clock time anchored to today:
     /// weak enough that an AI-supplied day should win the merge.</summary>
     internal bool TimeOnly { get; set; }
     /// <summary>The query was typed in one of the non-English UI languages.</summary>
@@ -32,7 +32,7 @@ public sealed class EventQuery
     /// <summary>Typos fixed by the parser (typed, meant), so the judge reads the intended words.</summary>
     public List<(string From, string To)> Corrections { get; } = new();
 
-    /// <summary>The hard filters alone — what the AI judge pool is drawn from.</summary>
+    /// <summary>The hard filters alone: what the AI judge pool is drawn from.</summary>
     public EventQuery StructuralOnly()
     {
         var q = new EventQuery { FromLocal = FromLocal, ToLocal = ToLocal, UnreviewedOnly = UnreviewedOnly };
@@ -100,7 +100,7 @@ public sealed class EventQuery
 
 /// <summary>Natural-language event search. Deterministic first: labels, camera
 /// names and date phrases parse locally, leftover words match the stored AI
-/// descriptions. Only a query with leftovers may involve the LLM — and then
+/// descriptions. Only a query with leftovers may involve the LLM, and then
 /// solely to translate the phrase into this same structured plan; matching
 /// itself never runs through a model.</summary>
 public static class EventSearch
@@ -125,7 +125,7 @@ public static class EventSearch
         ["object-taken"] = new[] { "object-taken", "removed", "stolen" },
     };
 
-    // Words a query needs but a match never does — the asking, not the scene.
+    // Words a query needs but a match never does: the asking, not the scene.
     private static readonly HashSet<string> Filler = new(StringComparer.Ordinal)
     {
         "in", "on", "at", "the", "a", "an", "any", "all", "show", "me", "my", "of", "i", "we", "you",
@@ -224,7 +224,7 @@ public static class EventSearch
         q.Foreign = dayFirst;
         s = Regex.Replace(s, @"\bline[\s-]?crossing\b", " line-crossing ");
         // Negations before label extraction: "no cars today" must EXCLUDE
-        // vehicles, never filter to them — and lists distribute ("no cars or
+        // vehicles, never filter to them, and lists distribute ("no cars or
         // people" negates both).
         s = Regex.Replace(s,
             @"\b(?:no|not|without|except(?:\s+for)?|excluding)\s+((?:(?:a|an|any|the)\s+)?[a-z-]+(?:\s+(?:or|and)\s+(?:(?:a|an|any|the)\s+)?[a-z-]+)*)",
@@ -247,7 +247,7 @@ public static class EventSearch
         {
             if (tok.Length > 0 && tok.All(char.IsDigit))
             {
-                q.StrayDigits = true; // a number the grammar didn't consume — let the AI look
+                q.StrayDigits = true; // a number the grammar didn't consume: let the AI look
                 continue;
             }
             if (tok.Length < 3 || Filler.Contains(tok)) continue;
@@ -351,11 +351,11 @@ public static class EventSearch
         bool bareHour = false;
         string? todWord = null;
         TakeAll(@"\b(?:since|after)\s+(?=last\s|this\s|(?:the\s+)?weekend)", _ => sinceRange = true);
-        // Fixed multi-word phrases first — longer patterns must not be eaten
+        // Fixed multi-word phrases first: longer patterns must not be eaten
         // piecemeal by the shorter ones below.
         TakeAll(@"\b(?:the\s+)?day before yesterday\b", _ => days.Add(today.AddDays(-2)));
         TakeAll(@"\blast night\b", _ => { rFrom = today.AddDays(-1).AddHours(20); rTo = today.AddHours(6); });
-        // Before 06:00 "tonight" means the night still in progress — yesterday's evening.
+        // Before 06:00 "tonight" means the night still in progress: yesterday's evening.
         TakeAll(@"\btonight\b", _ =>
         {
             var b = now.Hour < 6 ? today.AddDays(-1) : today;
@@ -424,7 +424,7 @@ public static class EventSearch
         // No "by" here: "did anyone come BY yesterday" is phrasal, not a bound.
         TakeAll($@"\b(before|until|till)\s+(?:the\s+)?({WeekdaysAlt}|today|yesterday)\b",
             m => qTo = DayWord(m.Groups[2].Value));
-        // Explicit dates may come in pairs ("from 8/20 to 8/22") — the days list
+        // Explicit dates may come in pairs ("from 8/20 to 8/22"): the days list
         // spans them, so each pattern gets two bites.
         for (int i = 0; i < 2; i++)
         {
@@ -437,7 +437,7 @@ public static class EventSearch
             });
             if (!got) break;
         }
-        // US-style 8/20, 8/20/2026 — month/day, day/month tried when month > 12.
+        // US-style 8/20, 8/20/2026: month/day, day/month tried when month > 12.
         for (int i = 0; i < 2; i++)
         {
             bool got = false;
@@ -680,7 +680,7 @@ public static class EventSearch
         {
             q.FromLocal = rFrom;
             q.ToLocal = rTo;
-            // "last night at 11pm": narrow the range to the clock time inside it —
+            // "last night at 11pm": narrow the range to the clock time inside it,
             // but only for short ranges; "last week at 3pm" must not collapse to
             // one hour of Monday.
             if (tFrom != null && rTo != null && rTo - rFrom <= TimeSpan.FromHours(36))
@@ -731,7 +731,7 @@ public static class EventSearch
         }
         else if (todFrom != null)
         {
-            // A bare time-of-day anchors to its most recent instance —
+            // A bare time-of-day anchors to its most recent instance:
             // "overnight" means the night just past.
             var b = todWord is "night" or "overnight" ? today.AddDays(-1) : today;
             q.FromLocal = b.AddMinutes(todFrom.Value);
@@ -759,7 +759,7 @@ public static class EventSearch
         rTo = first.AddMonths(1);
     }
 
-    /// <summary>1:00-6:59 with no meridiem reads as afternoon/evening — a
+    /// <summary>1:00-6:59 with no meridiem reads as afternoon/evening, a
     /// security query's "2:30" is almost never small hours.</summary>
     private static int Daytime(int mins) => mins is >= 60 and < 420 ? mins + 720 : mins;
 
@@ -893,7 +893,7 @@ public static class EventSearch
         return q.HasStructure ? pool.OrderByDescending(e => e.StartUtc).Take(limit).ToList() : new List<EventRecord>();
     }
 
-    /// <summary>Whole-word keyword scoring with plural tolerance — substring
+    /// <summary>Whole-word keyword scoring with plural tolerance: substring
     /// matching let "red" hit "covered" and "cat" hit "scattered".</summary>
     internal static int Score(EventRecord e, IReadOnlyList<string> keywords) => Score(e, keywords, out _);
 
@@ -994,7 +994,7 @@ public static class EventSearch
     };
 
     /// <summary>AI fills gaps; the deterministic parse always wins where it
-    /// produced something — the grammar's dates are exact, a small model's rarely
+    /// produced something: the grammar's dates are exact, a small model's rarely
     /// are (live: the model turned an already-parsed "last week" into a rolling
     /// seven days anchored to the current minute).</summary>
     public static EventQuery Merge(EventQuery parsed, EventQuery ai)
@@ -1019,7 +1019,7 @@ public static class EventSearch
             if (!q.Cameras.Contains(c)) q.Cameras.Add(c);
         foreach (var k in parsed.Keywords.Concat(ai.Keywords))
             if (!q.Keywords.Contains(k)) q.Keywords.Add(k);
-        // A selected camera already encodes its place words — "yard" alongside
+        // A selected camera already encodes its place words: "yard" alongside
         // Backyard can never match a description and poisons the all-keywords
         // tier. Substring shadowing ("green" in "Greenhouse") must never delete
         // the LAST keywords, or the descriptive part of the query vanishes.
@@ -1045,7 +1045,7 @@ public static class EventSearch
             ? "(none configured)"
             : string.Join(", ", cameras.Select(c => "\"" + c + "\""));
         var camShot = cameras.Count == 0 ? "" :
-            $"Example — \"anyone at {cameras[0]} in the evening\" -> {{\"labels\":[\"person\"],\"cameras\":[\"{cameras[0]}\"]," +
+            $"Example: \"anyone at {cameras[0]} in the evening\" -> {{\"labels\":[\"person\"],\"cameras\":[\"{cameras[0]}\"]," +
             $"\"from\":\"{today:yyyy-MM-dd} 18:00\",\"to\":\"{today.AddDays(1):yyyy-MM-dd} 00:00\",\"keywords\":[]}}\n";
         return
             "You translate a security-camera search query into a JSON filter. The query may be in any language; " +
@@ -1062,7 +1062,7 @@ public static class EventSearch
             "A place this list does not name is NOT a camera: leave cameras alone and put the place word, in " +
             "English, into keywords instead.\n" +
             $"- from and to: \"yyyy-MM-dd HH:mm\" strings, or null. Now is {nowLocal:yyyy-MM-dd HH:mm}, a " +
-            $"{nowLocal.DayOfWeek}. Whole days ALWAYS run 00:00 to 00:00 of the NEXT day — never the current " +
+            $"{nowLocal.DayOfWeek}. Whole days ALWAYS run 00:00 to 00:00 of the NEXT day, never the current " +
             $"clock time. \"yesterday\" = \"{today.AddDays(-1):yyyy-MM-dd} 00:00\" to \"{today:yyyy-MM-dd} 00:00\". " +
             $"\"last week\" = the previous calendar week, \"{monday.AddDays(-7):yyyy-MM-dd} 00:00\" to " +
             $"\"{monday:yyyy-MM-dd} 00:00\". \"this week\" = \"{monday:yyyy-MM-dd} 00:00\" to " +
@@ -1072,20 +1072,20 @@ public static class EventSearch
             "- keywords: 0 to 5 lowercase ENGLISH words that would appear in a written English description of " +
             "the scene (colors, objects, actions). Translate them to English. Never repeat a label word or a " +
             "camera name. At most one spelling variant (grey/gray).\n" +
-            $"Example — \"blue truck at the gate yesterday\" -> {{\"labels\":[\"vehicle\"],\"cameras\":[]," +
+            $"Example: \"blue truck at the gate yesterday\" -> {{\"labels\":[\"vehicle\"],\"cameras\":[]," +
             $"\"from\":\"{today.AddDays(-1):yyyy-MM-dd} 00:00\",\"to\":\"{today:yyyy-MM-dd} 00:00\"," +
             "\"keywords\":[\"blue\",\"gate\"]}\n" +
             camShot +
-            $"Example — \"coche rojo ayer en la entrada\" -> {{\"labels\":[\"vehicle\"],\"cameras\":[]," +
+            $"Example: \"coche rojo ayer en la entrada\" -> {{\"labels\":[\"vehicle\"],\"cameras\":[]," +
             $"\"from\":\"{today.AddDays(-1):yyyy-MM-dd} 00:00\",\"to\":\"{today:yyyy-MM-dd} 00:00\"," +
             "\"keywords\":[\"red\",\"entrance\"]}\n" +
-            "Example — \"when did the mailman last come\" -> {\"labels\":[\"person\"],\"cameras\":[]," +
+            "Example: \"when did the mailman last come\" -> {\"labels\":[\"person\"],\"cameras\":[]," +
             "\"from\":null,\"to\":null,\"keywords\":[\"mailman\",\"mail\",\"postal\"]}";
     }
 
-    /// <summary>Candidates for the judge pass: every keyword-hit event first — a
+    /// <summary>Candidates for the judge pass: every keyword-hit event first, a
     /// description that literally mentions the words must never age out of the
-    /// pool on a busy system — then newest described events fill the rest for
+    /// pool on a busy system, then newest described events fill the rest for
     /// the paraphrases keywords cannot see.</summary>
     public static List<EventRecord> JudgePool(EventQuery q, EventStore store)
     {
@@ -1104,7 +1104,7 @@ public static class EventSearch
     }
 
     /// <summary>The judge pass: the model reads real event descriptions and picks
-    /// the ones matching the query's descriptive part — paraphrase-proof where
+    /// the ones matching the query's descriptive part, paraphrase-proof where
     /// keyword matching is not ("gray" never matches "light-colored").</summary>
     public static string JudgeSystemPrompt() =>
         "You match security-camera events against a search query.\n" +
@@ -1235,7 +1235,7 @@ public static class EventSearch
                     if (!q.Cameras.Contains(hit)) q.Cameras.Add(hit);
                     continue;
                 }
-                // An unmatched "camera" is a place cue — keep its words as keywords.
+                // An unmatched "camera" is a place cue: keep its words as keywords.
                 foreach (var w in Regex.Split(c.ToLowerInvariant(), @"[^a-z0-9]+"))
                     if (w.Length >= 3 && LabelOf(w) == null && !Filler.Contains(w) && !q.Keywords.Contains(w))
                         q.Keywords.Add(w);

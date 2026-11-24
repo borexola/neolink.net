@@ -7,7 +7,7 @@ namespace Neolink.WebClient;
 
 /// <summary>
 /// The detection zones the live object boxes obey, per camera, for every surface
-/// that draws them — the wall's single-camera view, the event pop-up and the
+/// that draws them: the wall's single-camera view, the event pop-up and the
 /// events page. Scoped, so it lives exactly as long as the browser's own copy of
 /// the grids: one circuit, one page load, one set of pushes.
 ///
@@ -58,7 +58,7 @@ public sealed class DetectZones
 
     /// <summary>Reads the camera's zones unless they are known, already being read,
     /// or were unreadable a moment ago. Returns true when something changed and the
-    /// caller should re-render. Safe to call from a render path — it does nothing
+    /// caller should re-render. Safe to call from a render path: it does nothing
     /// on all but the first call per camera.</summary>
     public async Task<bool> EnsureAsync(string camera, HttpClient http, string apiBase,
         string? token, IReadOnlyList<string> groups)

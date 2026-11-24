@@ -171,7 +171,7 @@
       <ServiceControl Id="NeolinkServiceControl" Name="Neolink.NET"
                       Start="install" Stop="both" Remove="uninstall" Wait="yes" />
       <!-- Recovery: restart after any failure. This is BOTH crash resilience and
-           the web UI's Restart button — a service cannot restart itself, so a
+           the web UI's Restart button: a service cannot restart itself, so a
            UI-requested restart exits without reporting SERVICE_STOPPED and these
            actions bring it back up. -->
       <util:ServiceConfig ServiceName="Neolink.NET"
@@ -234,7 +234,7 @@
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
 
     <!-- The local-server choice is one question, so it gets one page with one
-         checkbox — not the feature tree, whose "Will be installed on local hard
+         checkbox, not the feature tree, whose "Will be installed on local hard
          drive" dropdowns read like a filesystem exam to the very people the
          standalone option is for. The page slots between the licence and the
          folder; Next translates the box into MSI feature states. -->
@@ -254,17 +254,17 @@
                  Text="{\WixUI_Font_Title}Choose what this PC does" />
         <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15"
                  Transparent="yes" NoPrefix="yes"
-                 Text="Just the viewer — or the whole system." />
+                 Text="Just the viewer, or the whole system." />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="ViewerText" Type="Text" X="20" Y="58" Width="330" Height="28" NoPrefix="yes"
                  Text="Out of the box, this installs the viewer: your cameras in a window, connected to a Neolink.NET server you already have (the Home Assistant add-on, Docker, or another PC)." />
         <Control Id="ServerCheck" Type="CheckBox" X="20" Y="96" Width="330" Height="17"
                  Property="INSTALL_LOCAL_SERVER" CheckBoxValue="1"
-                 Text="&amp;Run everything on this PC — install the server too" />
+                 Text="&amp;Run everything on this PC: install the server too" />
         <Control Id="ServerText" Type="Text" X="33" Y="116" Width="317" Height="44" NoPrefix="yes"
-                 Text="No server yet? Tick this and this PC becomes the whole system: the server runs in the background, starts with Windows, and records and serves your cameras around the clock — no Docker, no Home Assistant. Phones and other PCs on your network can connect to it too." />
+                 Text="No server yet? Tick this and this PC becomes the whole system: the server runs in the background, starts with Windows, and records and serves your cameras around the clock, no Docker, no Home Assistant. Phones and other PCs on your network can connect to it too." />
         <Control Id="ChangeText" Type="Text" X="33" Y="164" Width="317" Height="17" NoPrefix="yes"
-                 Text="Not sure? Leave it unticked — running this installer again can add it later." />
+                 Text="Not sure? Leave it unticked: running this installer again can add it later." />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Back">
           <Publish Event="NewDialog" Value="LicenseAgreementDlg" />

@@ -3,7 +3,7 @@
     'use strict';
 
     // Has anyone actually touched this page yet? A clip that auto-opens from a
-    // deep link on a FULL page load (notification tap) starts muted — nobody
+    // deep link on a FULL page load (notification tap) starts muted: nobody
     // asked for audio, and unmuted autoplay is usually blocked anyway. Any real
     // interaction before playback (clicking an event row) keeps sound on.
     let userGestureSeen = false;
@@ -32,7 +32,7 @@
     // socket while the page is hidden and reconnects the moment it shows again.
     // A plain browser never sets the flag, so tabs behave exactly as before.
     // The shell also reports hide/show itself (shellVisibility) rather than
-    // trusting the WebView to flip document.hidden — either signal counts.
+    // trusting the WebView to flip document.hidden, either signal counts.
     let shellPauseHidden = window.__neolinkShellPauseHidden === true;
     let shellHidden = false;
     const liveHidden = () => document.hidden === true || shellHidden;
@@ -48,7 +48,7 @@
         constructor(video, wsUrl) {
             this.video = video;
             // Blazor renders the `muted` attribute, but on dynamically created
-            // elements that only sets defaultMuted — the live property stays false,
+            // elements that only sets defaultMuted: the live property stays false,
             // and unmuted autoplay is blocked until a user gesture (symptom: frozen
             // first frame + "connecting…" after a page refresh). Mute for real.
             video.muted = true;
@@ -74,7 +74,7 @@
             this.msgCount = 0;
             // `live` tracks the CURRENT state (drives the status overlay and is
             // cleared on every stall/reconnect). `everLive` is one-way: once a real
-            // frame has painted, the snapshot still is retired for good — otherwise
+            // frame has painted, the snapshot still is retired for good, otherwise
             // a flaky camera flashes an old frame back over a frozen-but-newer last
             // frame on each 3 s retry.
             this.onPlaying = () => {
@@ -90,7 +90,7 @@
             };
             video.addEventListener('playing', this.onPlaying);
             video.addEventListener('waiting', this.onWaiting);
-            // Session totals for the stats panel — the same events as `diag`, but
+            // Session totals for the stats panel: the same events as `diag`, but
             // never reset, so the readout shows the whole session rather than
             // whatever landed inside the current 30 s console window.
             this.totals = { resync: 0, hop: 0, stall: 0 };
@@ -101,14 +101,14 @@
             this.meta = null;      // the server's init message (codec/mime/size)
             // Playback-health counters, reported to the console every 30 s when
             // anything notable happened. Gap-hops mean footage never REACHED the
-            // browser (the server or the network dropped it) — the one signal
+            // browser (the server or the network dropped it): the one signal
             // that separates "server can't keep up" from "this device can't".
             this.diag = { resync: 0, hop: 0, stall: 0 };
             this.diagTimer = setInterval(() => {
                 const d = this.diag;
                 if (d.resync || d.hop || d.stall) {
                     const path = decodeURIComponent((this.wsUrl.split('path=')[1] || this.wsUrl).split('&')[0]);
-                    console.info(`[neolink] live ${path}: last 30s — ${d.hop} skip(s) over footage that never arrived `
+                    console.info(`[neolink] live ${path}: last 30s, ${d.hop} skip(s) over footage that never arrived `
                         + `(server/network drops), ${d.resync} live-edge resync(s) (player fell behind), ${d.stall} stall(s)`);
                 }
                 this.diag = { resync: 0, hop: 0, stall: 0 };
@@ -168,7 +168,7 @@
             this.teardownMse();
             this.meta = meta;
             // iPhone Safari has NO classic MediaSource: since iOS 17.1 Apple
-            // ships ManagedMediaSource instead — near drop-in, but it must be
+            // ships ManagedMediaSource instead, near drop-in, but it must be
             // detected and used explicitly or live view dies with a misleading
             // "codec not supported" for every codec.
             const MS = window.ManagedMediaSource || window.MediaSource;
@@ -191,7 +191,7 @@
                 return;
             }
             this.setStatus('connecting…');
-            // Tell the UI whether this stream carries audio — the speaker toggle
+            // Tell the UI whether this stream carries audio: the speaker toggle
             // only shows for cameras that actually have some.
             if (meta.audio) this.video.dataset.audio = '1';
             else delete this.video.dataset.audio;
@@ -235,7 +235,7 @@
 
             // Append the whole backlog in ONE buffer (fragments are self-contained
             // moof/mdat pairs, so concatenation is valid MSE input). Per-frame
-            // appends are cheap on Chromium but expensive on Safari — at 25 fps
+            // appends are cheap on Chromium but expensive on Safari, at 25 fps
             // the per-append overhead alone made iPhones stutter and fall behind.
             if (this.queue.length && this.msStreaming) {
                 let take = 0, bytes = 0;
@@ -299,7 +299,7 @@
                 if (!inLast) return; // behind a gap: jumpGap handles it
 
                 // Backgrounded (phone locked, app switched): the element barely
-                // advances by design — chasing now means pointless seeks, and the
+                // advances by design, chasing now means pointless seeks, and the
                 // first pump after returning does one clean resync instead.
                 if (document.hidden) return;
 
@@ -380,7 +380,7 @@
 
         /// A raw snapshot of everything knowable about this stream right now. Rates
         /// (fps, bitrate) are deltas, so the caller derives those from consecutive
-        /// snapshots — this only reports counters and instantaneous values.
+        /// snapshots: this only reports counters and instantaneous values.
         stats() {
             const v = this.video;
             let q = null;
@@ -448,7 +448,7 @@
         }
 
         /// The shell's nap: the window is hidden, so stop the STREAM, not just
-        /// the rendering — the socket closes and the server stops sending.
+        /// the rendering, the socket closes and the server stops sending.
         sleep() {
             if (this.sleeping || !this.alive) return;
             this.sleeping = true;
@@ -478,11 +478,11 @@
     // A DOM-side overlay (no Blazor circuit traffic at 1 Hz) that answers the two
     // questions a camera stream actually raises when it looks bad: is the picture
     // arriving, and can this device decode it? Those have different culprits, so
-    // the panel keeps them apart — dropped frames are THIS browser giving up,
+    // the panel keeps them apart: dropped frames are THIS browser giving up,
     // gap-hops are footage that never reached it at all.
     const statsPanels = {};
     const WS_STATE = ['connecting', 'open', 'closing', 'closed'];
-    const nerdEsc = (s) => String(s ?? '—').replace(/[&<>"]/g, c =>
+    const nerdEsc = (s) => String(s ?? '-').replace(/[&<>"]/g, c =>
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const nerdBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB'
         : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB'
@@ -513,19 +513,19 @@
 
         const rows = [
             ['stream', s.path],
-            ['source', s.srcW ? `${s.srcW}×${s.srcH}` : '—'],
+            ['source', s.srcW ? `${s.srcW}×${s.srcH}` : '-'],
             ['decoding', s.w ? `${s.w}×${s.h} → ${s.elW}×${s.elH} css @ ${s.dpr}× dpr` : 'no frames yet'],
             ['codec', s.codec],
             ['fps', fps == null ? 'measuring…' : fps.toFixed(1)],
             ['frames', s.frames == null ? 'not reported'
                 : `${s.frames.toLocaleString()} decoded · ${s.dropped.toLocaleString()} dropped (${dropPct.toFixed(2)}%)`,
                 dropPct >= 2 ? 'bad' : dropPct >= 0.5 ? 'warn' : ''],
-            ['buffer', s.ahead == null ? '—' : `${s.ahead.toFixed(2)} s ahead / ${s.target.toFixed(2)} s target (floor ${s.floor.toFixed(2)} s)`,
+            ['buffer', s.ahead == null ? '-' : `${s.ahead.toFixed(2)} s ahead / ${s.target.toFixed(2)} s target (floor ${s.floor.toFixed(2)} s)`,
                 s.ahead != null && s.ahead < 0.15 ? 'warn' : ''],
             ['speed', `${s.rate.toFixed(2)}×${s.rate > 1.001 ? ' (catching up)' : ''} · ${s.rateFlips} rate change(s)`, s.rate > 1.001 ? 'warn' : ''],
             ['bitrate', bps == null ? 'measuring…' : `${nerdRate(bps)} · avg ${nerdRate(avgBps)}`],
             ['received', `${nerdBytes(s.bytes)} in ${nerdDur(s.session)}`],
-            ['delivery', `${s.fragments.toLocaleString()} fragments · widest gap ${s.maxGap == null ? '—' : s.maxGap.toFixed(2) + ' s'}`],
+            ['delivery', `${s.fragments.toLocaleString()} fragments · widest gap ${s.maxGap == null ? '-' : s.maxGap.toFixed(2) + ' s'}`],
             ['never arrived', `${s.hop} skip${s.hop === 1 ? '' : 's'}`, s.hop ? 'warn' : ''],
             ['recovery', `${s.resync} resync${s.resync === 1 ? '' : 's'} · ${s.stall} stall${s.stall === 1 ? '' : 's'}`],
             ['link', `${WS_STATE[s.ws]}${s.ws === 1 ? ' ' + nerdDur(s.uptime) : ''} · ${nerdBytes(s.wsQueued)} queued · `
@@ -535,7 +535,7 @@
         ];
 
         // Starved source: the link is fine and nothing was skipped or dropped, yet
-        // fragments arrive seconds apart at a trickle bitrate — the CAMERA is not
+        // fragments arrive seconds apart at a trickle bitrate, the CAMERA is not
         // producing/shipping enough video (some battery models' radios can't carry
         // what their own encoder makes). No knob on this device helps.
         const starved = s.ws === 1 && s.hop === 0 && dropPct < 2 && s.session > 20
@@ -552,7 +552,7 @@
         st.el.querySelector('.nerd-rows').innerHTML = rows.map(([k, v, cls]) =>
             `<div class="nerd-row"><span>${nerdEsc(k)}</span><b class="${cls || ''}">${nerdEsc(v)}</b></div>`).join('');
 
-        // Bitrate over the last minute — the shape says more than the number: a
+        // Bitrate over the last minute: the shape says more than the number: a
         // sawtooth is GOP batching, a cliff is the camera or the link giving up.
         const peak = Math.max(1, ...st.spark);
         const pts = st.spark.map((b, i) =>
@@ -563,14 +563,14 @@
         vEl.textContent = verdict;
         vEl.className = 'nerd-verdict ' + vcls;
 
-        // Kept ready so "copy" is instant — a paste-ready report for an issue.
+        // Kept ready so "copy" is instant: a paste-ready report for an issue.
         st.text = [`neolink.net · live stream stats (${new Date().toISOString()})`,
             ...rows.map(([k, v]) => `${k.padEnd(14)}${v}`),
             `verdict       ${verdict}`,
             `browser       ${navigator.userAgent}`].join('\n');
     }
 
-    // Flat speaker SVGs (built once — audioSync runs on every render). Emoji
+    // Flat speaker SVGs (built once, audioSync runs on every render). Emoji
     // render inconsistently across platforms, so these are inline SVG.
     const _spk = (body) => '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" '
         + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
@@ -623,7 +623,7 @@
             this.save(geo);
         },
         // Lays every (non-dragging) tile out from its stored fractions at the
-        // stage's CURRENT size — also runs whenever the stage resizes.
+        // stage's CURRENT size, also runs whenever the stage resizes.
         apply(stage) {
             const W = stage.clientWidth, H = stage.clientHeight;
             if (!W || !H) return;
@@ -638,7 +638,7 @@
                     w: Math.min(0.55, 440 / W), h: Math.min(0.5, 280 / H),
                 };
                 // Legacy pixel geometry (pre-fractions): convert once and WRITE IT
-                // BACK — re-normalizing the same pixels at a different stage size
+                // BACK, re-normalizing the same pixels at a different stage size
                 // would corrupt the layout.
                 if (g.w > 1.5 || g.h > 1.5) {
                     g = { x: g.x / W, y: g.y / H, w: g.w / W, h: g.h / H };
@@ -727,7 +727,7 @@
     // ---------- monitor page (live server log tails) ----------
     const logTails = {};
     let evMoreObs = null, evMoreScroll = null;
-    // A camera's log lines start "{name}: …" or "{name} (Main): …" — the
+    // A camera's log lines start "{name}: …" or "{name} (Main): …": the
     // delimiter keeps "Drive" from matching "Driveway".
     const logCamHit = (msg, cam) => msg.startsWith(cam + ':') || msg.startsWith(cam + ' (');
 
@@ -768,7 +768,7 @@
         },
 
         // Freeform geometry accessors for Blazor (saved layouts). They talk to
-        // the LIVE in-memory state — a plain localStorage read could be a
+        // the LIVE in-memory state: a plain localStorage read could be a
         // debounce-interval behind what's on screen.
         freeGeometry() {
             return JSON.stringify(free.load());
@@ -779,7 +779,7 @@
             localStorage.setItem(free.key, JSON.stringify(free.geo));
         },
 
-        // Briefly flash a tile's border red — used when a camera the user picked
+        // Briefly flash a tile's border red: used when a camera the user picked
         // is already on screen (so we don't duplicate or clobber another tile).
         flashTile(id) {
             const el = document.getElementById(id);
@@ -819,7 +819,7 @@
         // Live object boxes (preview). The detector is a separate script that is
         // fetched the first time it is actually wanted, so a server with the
         // feature off never downloads a byte of it. `cfg` is null whenever boxes
-        // should not be drawn — which is every view except one camera on its own.
+        // should not be drawn, which is every view except one camera on its own.
         detect(cfg) {
             this._detectWant = cfg;
             if (window.neolinkDetect) { window.neolinkDetect.sync(cfg); return; }
@@ -843,7 +843,7 @@
         },
 
         // The camera's detection-zone grids for the boxes. Kept here as well as
-        // handed on, because the detector script may still be downloading — and
+        // handed on, because the detector script may still be downloading, and
         // sent only when they change: a grid is far too big to ride the per-render
         // config across the circuit.
         detectZones(payload) {
@@ -889,11 +889,11 @@
 
         // Drives the event player: points the <video> at `url` (the user picks
         // main clip or sub-stream preview), preserving the current position
-        // across a source swap, and applies the playback rate. Idempotent — a
+        // across a source swap, and applies the playback rate. Idempotent: a
         // same-url call only updates the rate.
         //
         // Fast playback borrows the timeline's recipe: above 1× the audio is
-        // muted (the decoder drops the audio pipeline entirely — that, not
+        // muted (the decoder drops the audio pipeline entirely, that, not
         // video, is what stalled full-res clips at high rates), and the native
         // playbackRate does the rest. The previous mute state comes back at 1×.
         // `autoplay === false` attaches the source without starting playback;
@@ -918,12 +918,12 @@
                 }
             };
             // A failed fetch (camera refused the recording, server error) leaves a
-            // <video> silently black — surface it. The overlay clears whenever a
+            // <video> silently black: surface it. The overlay clears whenever a
             // new source attaches.
             const errorBox = () => v.closest('.event-player-media') || v.parentElement;
             v.onerror = () => {
                 // The SD preview can be unplayable (a sub stream that never
-                // delivered a frame) while the HD clip is fine — swap once,
+                // delivered a frame) while the HD clip is fine: swap once,
                 // silently, before surfacing an error.
                 if (fallback && v.dataset.evUrl !== fallback) {
                     const resume = autoplay !== false || !v.paused;
@@ -933,7 +933,7 @@
                     if (resume) v.play().catch(() => { v.muted = true; v.play().catch(() => { }); });
                     return;
                 }
-                // An aborted load is our own doing (a swap, a close) — never an error.
+                // An aborted load is our own doing (a swap, a close), never an error.
                 const code = v.error?.code ?? 0;
                 if (code === 1) return;
                 // A damaged SD recording: this decoder stops where VLC conceals. Ask the
@@ -1003,7 +1003,7 @@
                     applyRate();
                     if (autoplay === false && !wasPlaying) return;
                     // Fresh full-page load (notification deep link): start muted
-                    // by design. Otherwise autoplay policy can still veto sound —
+                    // by design. Otherwise autoplay policy can still veto sound:
                     // retry muted so the clip starts either way; the user can
                     // unmute on the controls.
                     if (!userGestureSeen) v.muted = true;
@@ -1042,7 +1042,7 @@
 
         // Event-strip edge arrows: shown only while that side actually has more
         // to scroll, clicking pages the strip by most of a viewport. All state
-        // lives here (classes on the wrapper) — no circuit traffic per scroll.
+        // lives here (classes on the wrapper), no circuit traffic per scroll.
         stripNavInit(wrapId) {
             const wrap = document.getElementById(wrapId);
             if (!wrap || wrap.dataset.navInit) return;
@@ -1062,7 +1062,7 @@
             wrap.querySelector('.strip-nav-right')?.addEventListener('click', () => page(1));
 
             // Swipe/drag panning (mouse only): press anywhere on the strip and drag
-            // to scroll it. Touch is left alone — the browser already pans natively.
+            // to scroll it. Touch is left alone: the browser already pans natively.
             // A real drag (>5px) swallows the click on release so the card under
             // the cursor doesn't open, but a plain click still plays its event.
             const drag = { active: false, moved: false, startX: 0, startLeft: 0 };
@@ -1158,7 +1158,7 @@
                 if (!tile || !grid) return;
                 e.preventDefault();
                 e.stopPropagation();
-                tile.draggable = false; // the grip resizes — it must not start a tile drag
+                tile.draggable = false; // the grip resizes: it must not start a tile drag
 
                 const colCount = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
                 const gap = parseFloat(getComputedStyle(grid).gap) || 8;
@@ -1193,7 +1193,7 @@
         // Live-audio mute toggles: cameras with AAC audio expose a speaker button
         // (tile bar / quick view). Videos start muted so autoplay always works;
         // clicking the toggle is the user gesture that lets sound through. JS owns
-        // the state — audioSync re-stamps the glyphs after every Blazor render.
+        // the state: audioSync re-stamps the glyphs after every Blazor render.
         audioInit() {
             if (!document.body.dataset.audioInit) {
                 document.body.dataset.audioInit = '1';
@@ -1242,7 +1242,7 @@
         // and the quick-view pop-up): the mouse wheel zooms around the cursor so
         // the spot under it stays put, dragging pans while zoomed, the HUD pill
         // steps in/out and restores 1:1, and a double-click snaps back to 1:1.
-        // All state lives DOM-side — nothing touches the Blazor circuit.
+        // All state lives DOM-side, nothing touches the Blazor circuit.
         zoomInit() {
             if (document.body.dataset.zoomInit) { this._zoomSweep?.(); return; }
             document.body.dataset.zoomInit = '1';
@@ -1280,12 +1280,12 @@
                 // A video can go black on the first zoom: the transform promotes
                 // it to its own composited layer, and the frame already on screen
                 // doesn't reliably land in the new layer. A paused video then has
-                // nothing repainting it at all — and even a PLAYING clip can sit
+                // nothing repainting it at all, and even a PLAYING clip can sit
                 // black when no fresh frame happens to be due (a stalled buffer,
                 // a long GOP, the end of the clip, seen on the event pop-up).
                 // Re-presenting the current frame via a zero seek repaints it.
                 // File-backed players (the event pop-up and the /events page)
-                // always get the nudge; the live MSE tiles only when paused — a
+                // always get the nudge; the live MSE tiles only when paused: a
                 // zero seek there jolts the live pipeline, and a playing live
                 // tile repaints on the next arriving frame anyway. Once per
                 // zoom-in only, so panning stays smooth.
@@ -1296,7 +1296,7 @@
                 box.classList.toggle('zoomed', st.z > 1);
                 if (st.z > 1) zoomedBoxes.add(box); else zoomedBoxes.delete(box);
                 // The event player's native controls would scale with the frame and
-                // fight the pan gesture — hide them while zoomed, restore at 1:1.
+                // fight the pan gesture: hide them while zoomed, restore at 1:1.
                 if (box.classList.contains('event-player-media'))
                     v.controls = st.z <= 1;
                 const badge = box.querySelector('[data-zoom-badge]');
@@ -1315,11 +1315,11 @@
             };
             const reset = (box) => { const st = stOf(box); st.z = 1; st.tx = 0; st.ty = 0; apply(box); };
 
-            // On touch screens the on-video pills sit ON the picture and block it —
+            // On touch screens the on-video pills sit ON the picture and block it:
             // fade them out after a moment of stillness; any tap on the surface
             // (or any zoom activity) brings them back. Covers the zoom HUD and the
             // camera rail (PTZ/mic/settings) alike; a rail with its pad open or a
-            // talk session running (.open) never fades — a control in active use
+            // talk session running (.open) never fades: a control in active use
             // must not vanish under a resting finger. Desktop keeps the hover
             // behavior plus the ui-idle cursor fade below and never uses this.
             const coarse = () => matchMedia('(pointer: coarse)').matches;
@@ -1342,11 +1342,11 @@
             }, 800);
 
             // Desktop video-player chrome: a still cursor on the maximized (or
-            // browser-fullscreen) tile fades ALL its on-video controls — the
+            // browser-fullscreen) tile fades ALL its on-video controls, the
             // toolbar with the mic, the PTZ overlay, the zoom HUD (CSS keys on
-            // .ui-idle) — and any mouse movement brings them straight back.
+            // .ui-idle), and any mouse movement brings them straight back.
             // Hover can't express this: a cursor parked on the video keeps
-            // :hover true forever. Touch is excluded — no cursor to go still.
+            // :hover true forever. Touch is excluded, no cursor to go still.
             let uiIdleTimer = null;
             const uiSurface = () =>
                 (document.fullscreenElement instanceof Element && document.fullscreenElement.classList.contains('tile'))
@@ -1375,7 +1375,7 @@
                 zoomAt(box, e.deltaY < 0 ? STEP : 1 / STEP, e.clientX - r.left, e.clientY - r.top);
             }, { passive: false, capture: true });
 
-            // HUD buttons — capture phase so the tile underneath never sees the click.
+            // HUD buttons: capture phase so the tile underneath never sees the click.
             document.addEventListener('click', (e) => {
                 const btn = e.target instanceof Element ? e.target.closest('[data-zoom]') : null;
                 if (!btn) return;
@@ -1390,7 +1390,7 @@
 
             // Drag pans while zoomed; the click on release is swallowed so the
             // tile doesn't react to it. Two touch pointers on the same surface
-            // PINCH instead — the natural phone gesture, so the HUD buttons are
+            // PINCH instead: the natural phone gesture, so the HUD buttons are
             // a convenience there, not the only way in.
             const pan = { box: null, moved: false, x: 0, y: 0 };
             const pinch = { box: null, d: 0, pts: new Map() };
@@ -1415,7 +1415,7 @@
                 if (!eligible(box) || stOf(box).z <= 1) return;
                 if (e.target.closest('.tile-bar, .zoom-hud, button, select')) return;
                 pan.box = box; pan.moved = false; pan.x = e.clientX; pan.y = e.clientY;
-                // While zoomed, dragging PANS — it must not start an HTML5 tile
+                // While zoomed, dragging PANS: it must not start an HTML5 tile
                 // drag (Blazor re-stamps draggable on the next render).
                 if (box instanceof HTMLElement) box.draggable = false;
             }, { capture: true });
@@ -1463,10 +1463,10 @@
             }, { capture: true });
 
             // Double-click zoomed video: back to 1:1 (swallowed so the tile's own
-            // double-click — maximize/restore — only fires from an unzoomed state).
+            // double-click, maximize/restore, only fires from an unzoomed state).
             // Controls are exempt: rapid +/− clicks on the HUD (or any button) fire
             // a dblclick too, and this capture-phase listener runs before the HUD's
-            // own stopPropagation could shield it — only the video surface resets.
+            // own stopPropagation could shield it, only the video surface resets.
             document.addEventListener('dblclick', (e) => {
                 const box = boxOf(e.target);
                 if (!box || stOf(box).z <= 1) return;
@@ -1535,7 +1535,7 @@
             if (!v) return 0;
             // Busy veil: while the player has no decodable picture under the
             // cursor (first load, a seek into an unbuffered range, a stalled
-            // fetch), the tile carries .tl-loading and CSS shows a spinner —
+            // fetch), the tile carries .tl-loading and CSS shows a spinner,
             // otherwise a slow segment just looks frozen.
             const tile = v.closest('.tl-tile');
             const busy = (b) => { if (tile) tile.classList.toggle('tl-loading', b); };
@@ -1572,7 +1572,7 @@
             // Cursor beyond this file's media (a segment cut short by a suspension
             // or outage, or the still-growing live file the browser only has a
             // snapshot of): the picture is EXHAUSTED, not lagging. Hold the last
-            // frame quietly — reporting lag here would slow every other camera
+            // frame quietly: reporting lag here would slow every other camera
             // to a crawl ("catching up…") over footage that does not exist.
             const dur = v.dataset.tlUrl === url ? v.duration : NaN;
             const pastEnd = Number.isFinite(dur) && dur > 0 && offset >= dur - 0.3;
@@ -1583,7 +1583,7 @@
                 v.currentTime = offset;
             } else if (!pastEnd) {
                 // The clock ticks every 500 ms, so timer jitter scales with the
-                // playback rate — widen the drift tolerance accordingly or fast
+                // playback rate: widen the drift tolerance accordingly or fast
                 // playback degrades into a seek-storm. (The adaptive clock keeps
                 // real lag below this while playing; seeks stay exceptional.)
                 // Paused is the precision path: 0.05 s so the 0.1 s keyboard
@@ -1592,7 +1592,7 @@
                 if (Math.abs(v.currentTime - offset) > tolerance) v.currentTime = offset;
             }
             // AFTER the src/load branch: load() resets playbackRate to the default,
-            // so set both — a new segment then starts at the chosen speed.
+            // so set both, a new segment then starts at the chosen speed.
             try {
                 if (v.defaultPlaybackRate !== r) v.defaultPlaybackRate = r;
                 if (v.playbackRate !== r) v.playbackRate = r;
@@ -1609,7 +1609,7 @@
 
         // Saves the player's current frame as a PNG download. Returns false when
         // there is no decodable picture yet, or the canvas is tainted (a remote
-        // server without CORS headers) — in both cases there is nothing to save.
+        // server without CORS headers), in both cases there is nothing to save.
         tlSnap(id, filename) {
             const v = document.getElementById(id);
             if (!v || v.readyState < 2 || !v.videoWidth) return false;
@@ -1844,7 +1844,7 @@
 
         // Drag the vertical divider between the program monitor and the
         // thumbnail rail (focused studio): the rail's grid column follows the
-        // pointer live, and Blazor gets the width it landed on — the same
+        // pointer live, and Blazor gets the width it landed on, the same
         // split of labor as tlResizeInit. The template string written here
         // must stay in step with GridStyle() in Timeline.razor.
         tlColResizeInit(handleId, dotnetRef) {
@@ -1961,7 +1961,7 @@
 
         // Is the tab hidden? Battery tiles ask on each poll tick: "keep awake" must
         // not hold a camera awake for a dashboard nobody is looking at. The
-        // shell's own hide/show report counts too — a window in the tray is
+        // shell's own hide/show report counts too: a window in the tray is
         // hidden even if the WebView never flipped document.hidden.
         pageHidden() {
             return liveHidden();
@@ -1980,7 +1980,7 @@
         },
 
         // Right-click on a single-camera view opens this instead of the tile's
-        // camera picker (on that view the tile IS the camera — nothing to pick).
+        // camera picker (on that view the tile IS the camera, nothing to pick).
         // Toggles: a second right-click, the ✕, or leaving the view closes it.
         statsToggle(videoId) {
             if (statsPanels[videoId]) { this.statsClose(videoId); return false; }
@@ -2004,7 +2004,7 @@
                     '<span class="nerd-sparklabel"></span>' +
                 '</div>' +
                 '<div class="nerd-verdict"></div>';
-            // The tile underneath reacts to clicks (maximize, drag, zoom) — the
+            // The tile underneath reacts to clicks (maximize, drag, zoom): the
             // panel must swallow its own.
             for (const ev of ['click', 'dblclick', 'pointerdown', 'wheel'])
                 el.addEventListener(ev, (e) => e.stopPropagation());
@@ -2050,8 +2050,8 @@
             st.el.remove();
             delete statsPanels[videoId];
         },
-        // Tells Blazor when browser fullscreen ends — Esc, the toggle button or
-        // the browser's own UI all land here — so the fullscreen sub→main
+        // Tells Blazor when browser fullscreen ends, Esc, the toggle button or
+        // the browser's own UI all land here, so the fullscreen sub→main
         // stream switch can be reverted. Idempotent.
         fsWatch(dotnetRef) {
             if (document.body.dataset.fsWatch) return;
@@ -2078,7 +2078,7 @@
                 try { el.webkitRequestFullscreen(); } catch { }
                 return;
             }
-            // iPhone: no element fullscreen exists AT ALL — only the <video>
+            // iPhone: no element fullscreen exists AT ALL, only the <video>
             // itself, through WebKit's native player. When it closes, bridge its
             // proprietary event to a normal fullscreenchange so the existing
             // fsWatch/glyph logic sees the exit like any other browser.
@@ -2106,10 +2106,10 @@
         setMicPref(id) {
             try { id ? localStorage.setItem('neolink.mic', id) : localStorage.removeItem('neolink.mic'); } catch { }
         },
-        // Real microphones only — Chromium's "default"/"communications" rows are
+        // Real microphones only: Chromium's "default"/"communications" rows are
         // aliases of devices already in the list. Labels are blank until the
         // mic permission is granted; unlock=true takes (and instantly releases)
-        // a capture so the names appear — only the settings Refresh button does
+        // a capture so the names appear, only the settings Refresh button does
         // that, never a mere tab open.
         async micList(unlock) {
             if (!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices)) return [];
@@ -2189,7 +2189,7 @@
                     }
                     ws.send(i16.buffer);
                     // A dead input (a headset amp with nothing plugged in as the
-                    // system default) streams flawlessly and says nothing — the
+                    // system default) streams flawlessly and says nothing: the
                     // one talk failure that shows no error anywhere. Warn once,
                     // after enough audio that a quiet room can't false-positive
                     // a working mic below this floor.
@@ -2211,7 +2211,7 @@
                 const reason = ev.reason || '';
                 if (reason && reason !== 'bye') t.report('error', reason);
                 // A handshake the server (or a proxy) refused closes with no
-                // reason at all — without naming it, the button just snaps back
+                // reason at all, without naming it, the button just snaps back
                 // to idle and the failure is invisible.
                 else if (!t.opened) t.report('error', `the talk connection was refused (code ${ev.code})`);
                 else t.report('off');
@@ -2235,7 +2235,7 @@
         // ---------- monitor page: browser-side resource sampling ----------
         // FPS is counted with a requestAnimationFrame loop (started on demand,
         // stopped when the page stops sampling); JS heap comes from the
-        // non-standard performance.memory (Chromium only — -1 elsewhere).
+        // non-standard performance.memory (Chromium only, -1 elsewhere).
         perfStart() {
             if (perf.raf) return;
             perf.frames = 0;
@@ -2345,7 +2345,7 @@
         },
 
         // ---------- live server log tail (admin) ----------
-        // Lines are appended straight into the DOM here — routing every log line
+        // Lines are appended straight into the DOM here: routing every log line
         // through the Blazor circuit would re-render the page per line. The view
         // auto-follows while scrolled to the bottom; scrolling up freezes it.
         logsAttach(containerId, httpUrl) {
@@ -2464,7 +2464,7 @@
         },
 
         // Full-screen "server is restarting" overlay. Shown the instant the admin
-        // confirms a restart — the Blazor circuit is about to drop and the client
+        // confirms a restart: the Blazor circuit is about to drop and the client
         // gets NO further server messages until it is back, so this runs entirely
         // in the browser: it owns its own DOM, waits for the server to actually go
         // down and then come back (two phases, so it can't reload against the
@@ -2523,14 +2523,14 @@
             setTimeout(tick, 1200);
         },
 
-        // Remove the restarting overlay — used only when the restart was REFUSED
+        // Remove the restarting overlay: used only when the restart was REFUSED
         // (server still up), so the admin isn't stuck behind a screen forever.
         hideRestarting() {
             document.getElementById('neolink-restarting')?.remove();
             document.body.classList.remove('is-restarting');
         },
         // Kicks off a browser download of a server-prepared file (the response's
-        // Content-Disposition names it) — used by the timeline's footage export.
+        // Content-Disposition names it): used by the timeline's footage export.
         download(url) {
             const a = document.createElement('a');
             a.href = url;
@@ -2542,7 +2542,7 @@
 
         // ---- Detection-zone editor ------------------------------------------
         // A canvas painting the camera's watched/ignored cell grid over its
-        // latest snapshot. All paint interaction stays in the browser — the
+        // latest snapshot. All paint interaction stays in the browser: the
         // circuit only sees the final table string when the user saves.
         zoneInit(canvas, cols, rows, table, imgUrl, noSnapLabel, mode) {
             if (!canvas) return;
@@ -2559,7 +2559,7 @@
                 mode: mode === 'watch' ? 'watch' : 'block',
                 paint: false, // the value the pending box will apply
                 // The box being dragged, in cell coordinates. Shading cell by cell
-                // is unusable on a dense grid — a 4K camera reports ~23000 cells, so
+                // is unusable on a dense grid: a 4K camera reports ~23000 cells, so
                 // clearing a driveway would mean dragging over hundreds of them.
                 // A drag marks a RECTANGLE (a click is a 1x1 one) and any shape is
                 // composed from a few of those, which is how the camera's own app
@@ -2579,7 +2579,7 @@
                 if (!w) return;
                 let h = w * aspect;
                 // clientHeight INCLUDES the box's own padding, which is not usable
-                // space — counting it would size the canvas a few pixels too tall
+                // space: counting it would size the canvas a few pixels too tall
                 // and push the note under it out of a box that does not scroll.
                 const cs = getComputedStyle(box);
                 const gap = parseFloat(cs.rowGap) || 0;
@@ -2641,7 +2641,7 @@
                 ctx.clearRect(0, 0, w, h);
                 ctx.drawImage(backdrop, 0, 0);
                 // Shade whole RUNS of ignored cells: a row of 160 ignored cells is
-                // one rectangle, not 160 — the difference a 4K grid feels.
+                // one rectangle, not 160, the difference a 4K grid feels.
                 const cw = w / st.cols, ch = h / st.rows;
                 ctx.fillStyle = 'rgba(10, 10, 14, 0.62)';
                 for (let r = 0; r < st.rows; r++) {
@@ -2775,7 +2775,7 @@
         // ---- UI language ----------------------------------------------------
         // A cookie, not localStorage: the circuit that renders the page is created
         // BEFORE any script of ours runs, and only a cookie rides along with that
-        // request — so this is what stops a French user seeing an English frame
+        // request, so this is what stops a French user seeing an English frame
         // first. The <html lang> follows it live for spell-checkers and screen
         // readers, which read the attribute rather than the text.
         setLang(code) {
@@ -2793,7 +2793,7 @@
         // entirely, while Firefox KEEPS it and auto-denies requestPermission
         // without ever showing a prompt. Checking isSecureContext first is what
         // turns the Firefox case into the honest "needs HTTPS" message instead
-        // of "blocked — re-allow in site settings", advice that cannot work
+        // of "blocked: re-allow in site settings", advice that cannot work
         // there (field report: user allowed it manually, still "blocked").
         notifState() {
             if (!window.isSecureContext) return 'unsupported';
@@ -2837,10 +2837,10 @@
     };
 
     // Camera-settings dialog: draggable by its header, resizable by the native
-    // corner grip (CSS resize) — so staged changes (OSD, picture) can be watched
+    // corner grip (CSS resize), so staged changes (OSD, picture) can be watched
     // applying on the video BENEATH the modal. Still a modal: only ✕ dismisses.
     // Geometry lives as INLINE styles on the panel element, which Blazor throws
-    // away with the element on close — a reopened dialog is always back to the
+    // away with the element on close: a reopened dialog is always back to the
     // centered default. Delegated document-level handlers: no per-open init,
     // and desktop-only (phones keep the fixed sheet).
     (() => {
@@ -2886,14 +2886,14 @@
         for (const evt of ['pointerup', 'pointercancel'])
             document.addEventListener(evt, () => {
                 drag.panel = null;
-                // A native corner-grip resize ends in a pointerup too — re-clamp
+                // A native corner-grip resize ends in a pointerup too: re-clamp
                 // every moved panel here so growing it can't push it off-screen
                 // (the ResizeObserver below covers non-pointer size changes).
                 document.querySelectorAll('.campanel').forEach(clampInto);
             });
 
         // Growing the panel with the corner grip (or shrinking the window) can
-        // strand a MOVED panel outside the usable area — pull it back in. The
+        // strand a MOVED panel outside the usable area: pull it back in. The
         // observer attaches on the first drag (see pointerdown): until then the
         // panel is centered and the CSS max-width/height caps keep it in view,
         // and watching for panels via DOM mutations is unreliable (Blazor's
@@ -2906,7 +2906,7 @@
         window.addEventListener('resize', () => document.querySelectorAll('.campanel').forEach(clampInto));
     })();
 
-    // PWA service worker (see sw.js — install support + offline screen, no
+    // PWA service worker (see sw.js, install support + offline screen, no
     // caching). Registered only when the app is served from the origin root:
     // under a base-path proxy (HA ingress) the prefix is a rotating per-session
     // token, so a worker registered there would just pile up dead scopes.
@@ -2915,6 +2915,6 @@
     if ('serviceWorker' in navigator && new URL(document.baseURI).pathname === '/') {
         navigator.serviceWorker
             .register('/_content/Neolink.WebClient/sw.js', { scope: '/' })
-            .catch(() => { /* http on a LAN address: not a secure context — fine */ });
+            .catch(() => { /* http on a LAN address: not a secure context, fine */ });
     }
 })();

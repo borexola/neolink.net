@@ -8,15 +8,15 @@ namespace Neolink.Notifications;
 /// <summary>
 /// Encrypts small secrets (the SMTP password) at rest with AES-256-GCM
 /// (authenticated encryption). A secret the app must REPLAY to a mail server
-/// cannot be hashed the way a login password is — the original has to be
-/// recoverable at send time — so this is encryption, not a one-way digest. It
+/// cannot be hashed the way a login password is, the original has to be
+/// recoverable at send time, so this is encryption, not a one-way digest. It
 /// protects the credential against casual disk / backup / config exposure, but
 /// NOT against an attacker who already has full read access to the host (they
 /// would have both the key and the ciphertext). That limit is inherent to any
 /// self-hosted app that sends its own authenticated email.
 ///
 /// The 256-bit key comes from:
-///   1. the NEOLINK_SECRET_KEY environment variable (base64 or hex, 32 bytes) —
+///   1. the NEOLINK_SECRET_KEY environment variable (base64 or hex, 32 bytes),
 ///      so the key can live only in the environment (Docker/systemd secret) and
 ///      never touch disk; the on-disk ciphertext is then useless on its own, or
 ///   2. an auto-generated <c>secret.key</c> in the state dir, written owner-only
@@ -35,7 +35,7 @@ public sealed class SecretProtector
     private readonly byte[] _key;
 
     /// <summary>Where the active key came from: "env" (NEOLINK_SECRET_KEY),
-    /// "file" (the state dir's secret.key) or "ephemeral" (unwritable state dir —
+    /// "file" (the state dir's secret.key) or "ephemeral" (unwritable state dir,
     /// nothing encrypted this run survives a restart).</summary>
     public string KeySource { get; private set; } = "file";
 
@@ -43,7 +43,7 @@ public sealed class SecretProtector
     public string? KeyFile { get; private set; }
 
     /// <summary>Short one-way identifier of the active key (first 12 hex chars of
-    /// its SHA-256) — lets the admin tell WHICH key is in use and match it against
+    /// its SHA-256): lets the admin tell WHICH key is in use and match it against
     /// a backup, without the key itself ever being shown.</summary>
     public string Fingerprint => Convert.ToHexString(SHA256.HashData(_key))[..12].ToLowerInvariant();
 
@@ -58,8 +58,8 @@ public sealed class SecretProtector
     }
 
     /// <summary>Derives an independent 32-byte subkey from the master secret for
-    /// <paramref name="purpose"/> (HKDF-SHA256), so different subsystems — footage
-    /// encryption, secret tokens — never share the raw key material.</summary>
+    /// <paramref name="purpose"/> (HKDF-SHA256), so different subsystems, footage
+    /// encryption, secret tokens, never share the raw key material.</summary>
     public byte[] DeriveSubKey(string purpose) =>
         HKDF.DeriveKey(HashAlgorithmName.SHA256, _key, 32, salt: null,
             info: System.Text.Encoding.UTF8.GetBytes(purpose));
@@ -83,7 +83,7 @@ public sealed class SecretProtector
     }
 
     /// <summary>Decrypts a token from <see cref="Protect"/>. Returns null on ANY
-    /// problem — wrong key, tampering (GCM tag mismatch), truncation, garbage —
+    /// problem, wrong key, tampering (GCM tag mismatch), truncation, garbage,
     /// so callers degrade to "no password" instead of throwing.</summary>
     public string? Unprotect(string? token)
     {
@@ -116,7 +116,7 @@ public sealed class SecretProtector
                 KeySource = "env";
                 return k;
             }
-            Log.Warn($"{KeyEnvVar} is set but is not a 32-byte base64/hex key — falling back to the key file.");
+            Log.Warn($"{KeyEnvVar} is set but is not a 32-byte base64/hex key: falling back to the key file.");
         }
 
         var path = Path.Combine(stateDir, KeyFileName);
@@ -131,7 +131,7 @@ public sealed class SecretProtector
                     KeyFile = Path.GetFullPath(path);
                     return existing;
                 }
-                Log.Warn($"Secret key file {path} is malformed ({existing.Length} bytes) — regenerating.");
+                Log.Warn($"Secret key file {path} is malformed ({existing.Length} bytes): regenerating.");
             }
             var key = RandomNumberGenerator.GetBytes(32);
             // Locked down while the file is still empty: writing first and

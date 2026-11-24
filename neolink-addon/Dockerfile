@@ -14,7 +14,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY run.sh /run.sh
-# The sed guards against CRLF sneaking in from a Windows checkout — a stray
+# The sed guards against CRLF sneaking in from a Windows checkout: a stray
 # \r after the shebang breaks the container with a cryptic "no such file".
 RUN sed -i 's/\r$//' /run.sh && chmod +x /run.sh
 

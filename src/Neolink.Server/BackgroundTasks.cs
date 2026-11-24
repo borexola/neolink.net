@@ -10,7 +10,7 @@ namespace Neolink;
 /// <see cref="Begin"/>, updates its handle as it progresses, and disposes it when
 /// done; the web UI polls <see cref="Active"/> (via the admin-only
 /// /api/background endpoint) and shows a progress strip while anything runs.
-/// Deliberately in-memory only: these are live activities, not history — a
+/// Deliberately in-memory only: these are live activities, not history, a
 /// restart means nothing is running.
 /// </summary>
 public static class BackgroundTasks
@@ -23,7 +23,7 @@ public static class BackgroundTasks
     private static readonly Dictionary<string, (string Name, string? Detail, double? Percent, DateTime Started)> Tasks = new();
 
     /// <summary>Registers a job and returns the handle it reports progress on.
-    /// Always dispose the handle (use <c>using</c>) — a leaked entry would show a
+    /// Always dispose the handle (use <c>using</c>): a leaked entry would show a
     /// forever-running job to the admin.</summary>
     public static Handle Begin(string name, string? detail = null, double? percent = null)
     {

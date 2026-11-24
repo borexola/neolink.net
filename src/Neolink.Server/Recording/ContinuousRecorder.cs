@@ -14,7 +14,7 @@ namespace Neolink.Recording;
 /// open either way, packets are simply discarded while the switch is off, so a
 /// toggle takes effect on the next frame. Segments roll at the first keyframe once
 /// they reach the time (SegmentMinutes) OR size (MaxSegmentSizeMb) limit, whichever
-/// comes first — the size cap keeps high-bitrate streams from producing enormous
+/// comes first: the size cap keeps high-bitrate streams from producing enormous
 /// files. Every file is independently playable. Day folders are pruned by the same
 /// retention task that expires events.
 /// </summary>
@@ -42,12 +42,12 @@ public sealed class ContinuousRecorder
     private sealed record ActiveInfo(string Date, string File, ClipWriter Writer);
     private volatile ActiveInfo? _active;
 
-    /// <summary>The segment being written right now — day ("yyyy-MM-dd"), file name
-    /// and seconds of media muxed so far — straight from the recorder's memory.
+    /// <summary>The segment being written right now: day ("yyyy-MM-dd"), file name
+    /// and seconds of media muxed so far: straight from the recorder's memory.
     /// The day listing overlays this onto its filesystem view: a file that is held
     /// open reports a STALE directory mtime on NTFS (updated lazily on close) and
     /// on FUSE/network mounts (attribute caches), so an mtime-derived duration can
-    /// trail minutes behind and make a recording camera's lane look stopped —
+    /// trail minutes behind and make a recording camera's lane look stopped,
     /// worst on high-bitrate cameras, whose large segments stay open longest.</summary>
     public (string Date, string File, double Seconds)? ActiveSegment =>
         _active is { } a ? (a.Date, a.File, a.Writer.DurationSeconds) : null;
@@ -57,7 +57,7 @@ public sealed class ContinuousRecorder
     /// <param name="hasRoom">Free-space guard: false = the recordings volume is full,
     /// so no new segment is opened (retried on a backoff). Null = never blocks.</param>
     /// <param name="blocked">Live veto: true = never tape, whatever the switch says.
-    /// A battery camera Neolink lets doze (no always_on) is blocked — 24/7 taping
+    /// A battery camera Neolink lets doze (no always_on) is blocked: 24/7 taping
     /// would demand frames around the clock and hold it awake until the battery
     /// dies. Null = never blocked.</param>
     public ContinuousRecorder(string camera, IStreamHub hub, EventStore store,
@@ -79,13 +79,13 @@ public sealed class ContinuousRecorder
     }
 
     /// <summary>Whether 24/7 taping is EFFECTIVELY on right now: the camera's switch
-    /// (live from settings) minus the sleep veto — the on-demand video hold asks this
+    /// (live from settings) minus the sleep veto, the on-demand video hold asks this
     /// to know if frames have a consumer, so a blocked camera never gets held awake.</summary>
     public bool ContinuousEnabled => _settings.Get(_camera).Continuous && !(_blocked?.Invoke() ?? false);
 
     /// <summary>The passive wake tap: on a sleep-vetoed battery camera, tape whatever
     /// frames happen to flow (self-wakes, viewer sessions) into timeline segments.
-    /// NEVER a frame consumer — only ContinuousEnabled feeds the demand hold, so the
+    /// NEVER a frame consumer, only ContinuousEnabled feeds the demand hold, so the
     /// tap cannot wake the camera, extend a hold, or block parking; when the session
     /// ends the silence roll closes the segment. Battery cost: zero by construction.</summary>
     public bool WakeTapActive => (_blocked?.Invoke() ?? false) && _settings.Get(_camera).WakeTimeline;
@@ -161,9 +161,9 @@ public sealed class ContinuousRecorder
                         writer = null;
                         _active = null;
                         _writing = false;
-                        Log.Info($"{_camera}: stream quiet for {SilenceRoll.TotalSeconds:0}s — segment closed; " +
+                        Log.Info($"{_camera}: stream quiet for {SilenceRoll.TotalSeconds:0}s, segment closed; " +
                                  "footage after the gap starts a new segment");
-                        // Wake-tap sessions are short and episodic — announce each
+                        // Wake-tap sessions are short and episodic: announce each
                         // one, not just the first after a toggle.
                         if (WakeTapActive) wasOn = false;
                     }
@@ -175,7 +175,7 @@ public sealed class ContinuousRecorder
                     Log.Info($"{_camera}: continuous recording source {hub.Name} → {RecordHub().Name}");
                     return;
                 }
-                // Hub indices are global across video and audio — see EventRecorder.
+                // Hub indices are global across video and audio: see EventRecorder.
                 bool gap = lastIndex >= 0 && packet.Index != lastIndex + 1;
                 lastIndex = packet.Index;
 
@@ -206,14 +206,14 @@ public sealed class ContinuousRecorder
                 if (!wasOn)
                 {
                     Log.Info(tap
-                        ? $"{_camera}: taping this wake to the timeline (passive — never holds the camera awake)"
+                        ? $"{_camera}: taping this wake to the timeline (passive, never holds the camera awake)"
                         : $"{_camera}: continuous recording started " +
                           $"(segments roll at {_segmentSeconds / 60:0} min or {_maxSegmentBytes / (1024 * 1024)} MB)");
                     wasOn = true;
                 }
 
                 // Roll to a new file at the first keyframe once the segment reaches
-                // either limit — time OR size, whichever comes first (a size cap keeps
+                // either limit: time OR size, whichever comes first (a size cap keeps
                 // high-bitrate main streams from producing enormous files).
                 if (writer != null && v.Keyframe
                     && (writer.DurationSeconds >= _segmentSeconds || writer.ApproxBytes >= _maxSegmentBytes))
@@ -234,7 +234,7 @@ public sealed class ContinuousRecorder
                     {
                         if (!_fullLogged)
                         {
-                            Log.Error($"{_camera}: recordings storage is FULL — continuous recording halted until space is freed");
+                            Log.Error($"{_camera}: recordings storage is FULL: continuous recording halted until space is freed");
                             _fullLogged = true;
                         }
                         _writing = false;
@@ -243,7 +243,7 @@ public sealed class ContinuousRecorder
                     }
                     if (_fullLogged)
                     {
-                        Log.Info($"{_camera}: storage has room again — continuous recording resumes");
+                        Log.Info($"{_camera}: storage has room again: continuous recording resumes");
                         _fullLogged = false;
                     }
                     string path;

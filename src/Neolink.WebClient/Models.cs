@@ -27,7 +27,7 @@ public sealed record ApiCamera(string Name, bool Online, List<ApiStream> Streams
 
 /// <summary>How a camera is attached to the network, normalized by the server.
 /// <c>Kind</c> is "wifi" (with a 0-4 <c>Level</c> for the icon and the reading
-/// spelled out in its own unit) or "wired" — a camera on a cable is not a camera
+/// spelled out in its own unit) or "wired": a camera on a cable is not a camera
 /// with no signal, and the two must not look alike. The client never re-derives
 /// the level: only the reader knows which unit the camera answered in.</summary>
 public sealed record ApiWifi(int Level, string Label, string? Kind = null)
@@ -61,11 +61,11 @@ public sealed record ApiFeatures(bool Ptz, bool Led, bool Pir, bool Battery,
     // one for it and the panel offers the editor on a card of its own.
     bool LocalZone = false);
 
-/// <summary>GET/POST /api/cameras/{name}/whiteled — spotlight brightness (0-100),
+/// <summary>GET/POST /api/cameras/{name}/whiteled: spotlight brightness (0-100),
 /// on/off and auto mode, over the camera's HTTP API.</summary>
 public sealed record ApiWhiteLed(int Bright, bool On, int Mode);
 
-/// <summary>GET /api/cameras/{name}/httpfeatures — the HTTP-API extras (beta).
+/// <summary>GET /api/cameras/{name}/httpfeatures: the HTTP-API extras (beta).
 /// Null members = that feature is absent on this camera.</summary>
 public sealed record ApiHttpFeatures(ApiImageSettings? Image, int? Volume, ApiWifi? WifiSignal,
     List<ApiPtzPreset>? PtzPresets, List<ApiQuickReply>? QuickReplies, bool? AutoTrack,
@@ -73,7 +73,7 @@ public sealed record ApiHttpFeatures(ApiImageSettings? Image, int? Volume, ApiWi
     List<ApiAiSensitivity>? AiSensitivities = null, ApiOsd? Osd = null,
     bool? RecordAudio = null, int? TalkVolume = null, int? VisitorVolume = null);
 
-/// <summary>GET /api/cameras/{name}/extras — device settings over Baichuan (beta).
+/// <summary>GET /api/cameras/{name}/extras: device settings over Baichuan (beta).
 /// Null members = that feature is absent on this camera.</summary>
 public sealed record ApiDeviceExtras(bool? SdRecording, ApiAutoReboot? AutoReboot, ApiGuard? Guard,
     List<ApiPatrol>? Patrols, ApiPrivacyMasks? PrivacyMasks, List<ApiChime>? Chimes,
@@ -114,7 +114,7 @@ public sealed record ApiAiSensitivity(string Type, int Sensitivity, int? StayTim
     };
 }
 
-/// <summary>GET/POST /api/cameras/{name}/detectionzone — the grid of watched ('1')
+/// <summary>GET/POST /api/cameras/{name}/detectionzone: the grid of watched ('1')
 /// vs ignored ('0') cells, row by row from the top-left. ZoneTypes lists the types
 /// with a grid of their own; a single entry means one zone governs every detection
 /// type. Storage is "camera" when the grid lives on the camera, "neolink" when the
@@ -125,7 +125,7 @@ public sealed record ApiDetectionZone(string Type, int Cols, int Rows, string Ta
     public bool IsGlobal => ZoneTypes is not { Count: > 1 };
 
     /// <summary>True when this grid is kept by Neolink because the camera cannot
-    /// keep one — it governs what Neolink watches, not what the camera alerts on.</summary>
+    /// keep one: it governs what Neolink watches, not what the camera alerts on.</summary>
     public bool StoredOnServer => Storage == "neolink";
 }
 
@@ -133,13 +133,13 @@ public sealed record ApiDetectionZone(string Type, int Cols, int Rows, string Ta
 public sealed record ApiOsd(bool ShowName, string? Name, string? NamePos,
     bool ShowTime, string? TimePos, bool? Watermark, List<string>? PosOptions);
 
-/// <summary>GET /api/cameras/{name}/firmware — the read-only update check.</summary>
+/// <summary>GET /api/cameras/{name}/firmware: the read-only update check.</summary>
 public sealed record ApiFirmware(bool UpdateAvailable, string? NewVersion);
 
-/// <summary>GET /api/cameras/{name}/sdcard/days — calendar of a month on the camera's SD card.</summary>
+/// <summary>GET /api/cameras/{name}/sdcard/days: calendar of a month on the camera's SD card.</summary>
 public sealed record ApiSdDays(int Year, int Month, List<int> Days);
 
-/// <summary>GET /api/cameras/{name}/sdcard/recordings — one recording on the camera's SD card.</summary>
+/// <summary>GET /api/cameras/{name}/sdcard/recordings: one recording on the camera's SD card.</summary>
 public sealed record ApiSdRecording(string File, DateTime Start, DateTime End, long SizeBytes, string StreamType)
 {
     public string TimeLabel => Start.ToString("HH:mm:ss");
@@ -168,17 +168,17 @@ public sealed record ApiQuickReply(int Id, string Name);
 /// <summary>One SD-card slot on the camera (sizes in MB).</summary>
 public sealed record ApiSdCard(int Id, long TotalMb, long FreeMb, bool Formatted, bool Mounted);
 
-/// <summary>GET /api/cameras/{name}/zoomfocus — absolute positions with their ranges.</summary>
+/// <summary>GET /api/cameras/{name}/zoomfocus: absolute positions with their ranges.</summary>
 public sealed record ApiZoomPos(long Cur, long Min, long Max);
 public sealed record ApiZoomFocus(ApiZoomPos? Zoom, ApiZoomPos? Focus);
 
-/// <summary>GET/POST /api/cameras/{name}/floodlight — the spotlight's behavior settings.</summary>
+/// <summary>GET/POST /api/cameras/{name}/floodlight: the spotlight's behavior settings.</summary>
 public sealed record ApiFloodlight(long Brightness, long BrightnessMin, long BrightnessMax, bool Auto);
 
-/// <summary>GET /api/cameras/{name}/settings/stream — one stream's CURRENT encode selection.</summary>
+/// <summary>GET /api/cameras/{name}/settings/stream: one stream's CURRENT encode selection.</summary>
 public sealed record ApiStreamEnc(string Stream, uint Width, uint Height, uint Framerate, uint Bitrate);
 
-/// <summary>GET /api/cameras/{name}/capabilities — discovered device info and features.</summary>
+/// <summary>GET /api/cameras/{name}/capabilities: discovered device info and features.</summary>
 public sealed record ApiCapabilities(bool Online, ApiVersion? Version, ApiFeatures? Features, JsonElement Support);
 
 public sealed record ApiEncodeProfile(string Type, uint Width, uint Height,
@@ -193,13 +193,13 @@ public sealed record ApiEncodeProfile(string Type, uint Width, uint Height,
     };
 }
 
-/// <summary>GET /api/cameras/{name}/streaminfo — the encode profiles of each stream.</summary>
+/// <summary>GET /api/cameras/{name}/streaminfo: the encode profiles of each stream.</summary>
 public sealed record ApiStreamProfiles(List<ApiEncodeProfile> Profiles);
 
 /// <summary>
 /// The server's own loopback API address, injected by the host. Blazor circuits
 /// run SERVER-side: their HTTP calls must not go out through a reverse proxy's
-/// public URL (TLS/hairpin problems) when the target is this very server — they
+/// public URL (TLS/hairpin problems) when the target is this very server, they
 /// use this instead. Browser-side URLs (video WS, media elements) keep the page
 /// origin so they DO flow through the proxy.
 /// <see cref="ClientAddressOf"/> names the browser behind a page request, so the
@@ -216,15 +216,15 @@ public sealed record ApiFeaturesInfo(bool Events, bool Continuous, double Trickl
 /// <summary>The worst storage tier's state (in /api/features); null = all healthy.</summary>
 public sealed record ApiStorageState(string Label, double UsedPercent, bool Full);
 
-/// <summary>GET /api/storage — one configured storage location and its capacity.
+/// <summary>GET /api/storage: one configured storage location and its capacity.
 /// ForecastState is "measuring" | "steady" | "filling" (ForecastDays set only when
 /// filling); both null when talking to an older server.</summary>
 public sealed record ApiStorageLocation(string Role, string Label, string Path,
     long TotalBytes, long FreeBytes, double UsedPercent, bool Online, bool Warn, bool Full,
     string? ForecastState = null, double? ForecastDays = null, bool Rolling = false);
 
-/// <summary>GET /api/admin/config — the editable server settings, plus the live
-/// footage-encryption key report (source, one-way fingerprint — never the key).</summary>
+/// <summary>GET /api/admin/config, the editable server settings, plus the live
+/// footage-encryption key report (source, one-way fingerprint, never the key).</summary>
 public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Settings,
     ApiKeyInfo? Encryption = null, string? WriteProblem = null);
 
@@ -234,7 +234,7 @@ public sealed record ApiAdminConfig(string Path, bool Writable, JsonElement Sett
 public sealed record ApiKeyInfo(bool Enabled, string Source, string Fingerprint,
     string? File, bool OnFootageDisk);
 
-/// <summary>GET /api/admin/cameras — configured cameras for the settings editor.
+/// <summary>GET /api/admin/cameras: configured cameras for the settings editor.
 /// Passwords are never included (only HasPassword); RTSP URLs come masked.</summary>
 public sealed record ApiAdminCamera(string Name, string Type, string? Address, string? Username,
     bool HasPassword, int ChannelId, string? HttpAddress, string? RtspMain, string? RtspSub,
@@ -248,15 +248,15 @@ public sealed record ApiAdminCamera(string Name, string Type, string? Address, s
 public sealed record ApiAdminCameras(bool Writable, List<ApiAdminCamera> Cameras, ApiAdminPtz? Ptz = null,
     string? WriteProblem = null);
 
-/// <summary>GET /api/cameras/{name}/rtsp-link — where the RTSP streams are served; Users is null unless an admin asks.</summary>
+/// <summary>GET /api/cameras/{name}/rtsp-link, where the RTSP streams are served; Users is null unless an admin asks.</summary>
 public sealed record ApiRtspLink(string? Host, int Port, bool LoginRequired, List<string>? Users = null,
     int WebPort = 0, bool SnapshotOpen = false);
-/// <summary>POST /api/cameras/{name}/rtsp-link — "user:password", percent-encoded, for one RTSP user.</summary>
+/// <summary>POST /api/cameras/{name}/rtsp-link: "user:password", percent-encoded, for one RTSP user.</summary>
 public sealed record ApiRtspLogin(string UserInfo);
 
-/// <summary>GET /api/admin/discover — the server's own subnets, what the dialog starts with.</summary>
+/// <summary>GET /api/admin/discover: the server's own subnets, what the dialog starts with.</summary>
 public sealed record ApiLanScanDefaults(List<string> Subnets);
-/// <summary>POST /api/admin/discover — plug-in cameras found on the LAN.</summary>
+/// <summary>POST /api/admin/discover: plug-in cameras found on the LAN.</summary>
 public sealed record ApiLanScan(List<ApiLanCamera> Found);
 public sealed record ApiLanCamera(string Address, string? Model, string? Name, bool Baichuan, bool Onvif,
     string? ConfiguredAs);
@@ -265,7 +265,7 @@ public sealed record ApiLanCamera(string Address, string? Model, string? Name, b
 /// ports, whether it binds to loopback only, and whether any RTSP users exist.</summary>
 public sealed record ApiAdminPtz(int SharedPort, int RtspPort, int WebPort, bool Loopback, bool Users);
 
-/// <summary>GET/PUT /api/admin/notifications — email alert settings. The SMTP
+/// <summary>GET/PUT /api/admin/notifications: email alert settings. The SMTP
 /// password is never returned (only HasPassword); it is sent write-only on PUT.</summary>
 public sealed class ApiNotifications
 {
@@ -321,7 +321,7 @@ public sealed class ApiEmergencyIssue
     public string Reason { get; set; } = "";
 }
 
-/// <summary>GET/PUT /api/admin/emergency — emergency mode (beta).</summary>
+/// <summary>GET/PUT /api/admin/emergency: emergency mode (beta).</summary>
 public sealed class ApiEmergency
 {
     public bool Enabled { get; set; }
@@ -356,7 +356,7 @@ public sealed class ApiDetectAssets
 /// one shared zone sends a single grid naming every group.</summary>
 public sealed record DetectZoneGrid(List<string> Groups, int Cols, int Rows, string Table);
 
-/// <summary>GET /api/detect, PUT /api/admin/detect — live object boxes (preview).</summary>
+/// <summary>GET /api/detect, PUT /api/admin/detect: live object boxes (preview).</summary>
 public sealed class ApiDetect
 {
     public bool Enabled { get; set; }
@@ -375,7 +375,7 @@ public sealed class ApiDetect
         Detailed && DetailedAssets.State == "ready" ? "yolov10s.onnx" : "yolov10n.onnx";
 }
 
-/// <summary>GET /api/auth/status — whether/how the UI must authenticate.
+/// <summary>GET /api/auth/status, whether/how the UI must authenticate.
 /// Language is the signed-in account's own choice (null = follows the server's);
 /// DefaultLanguage is what everyone else gets, including the sign-in screen.</summary>
 public sealed record ApiAuthStatus(bool Enabled, bool SetupRequired, bool ResetAvailable,
@@ -384,13 +384,13 @@ public sealed record ApiAuthStatus(bool Enabled, bool SetupRequired, bool ResetA
 /// <summary>POST /api/auth/login|setup reply.</summary>
 public sealed record ApiAuthToken(string Token, string User, bool Admin);
 
-/// <summary>GET /api/users — one account row. Cameras: the only ones it may see; null = all.</summary>
+/// <summary>GET /api/users: one account row. Cameras: the only ones it may see; null = all.</summary>
 public sealed record ApiUserInfo(string Name, bool Admin, List<string>? Cameras = null);
 
-/// <summary>GET /api/admin/rtsp-users — the config.json "users" names (passwords never leave the server).</summary>
+/// <summary>GET /api/admin/rtsp-users: the config.json "users" names (passwords never leave the server).</summary>
 public sealed record ApiRtspUsers(bool Writable, bool RestartNeeded, List<string> Users);
 
-/// <summary>GET/POST /api/cameras/{name}/recording — runtime recording switches.
+/// <summary>GET/POST /api/cameras/{name}/recording: runtime recording switches.
 /// The capture schedule arrives in effective form: ScheduleDays is the full day
 /// list (never null in practice), Schedule times are "HH:mm" or "" (= midnight).
 /// It only applies while ScheduleEnabled (opt-in; off = capture always).</summary>
@@ -406,11 +406,11 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     bool ArchiveContinuous = false, int? ArchiveRetentionDays = null,
     List<string>? SupportedAiTypes = null, bool? SupportedDoorbell = null,
     // 24/7 taping would hold a dozing battery camera awake until it dies, so the
-    // server vetoes it (no always_on) — the panel disables the toggle and says why.
+    // server vetoes it (no always_on): the panel disables the toggle and says why.
     // WakeTimeline is the replacement offered there: passively tape self-wakes
-    // to the timeline (zero battery cost — the frames are already flowing).
+    // to the timeline (zero battery cost, the frames are already flowing).
     bool ContinuousBlockedBySleep = false, bool WakeTimeline = true,
-    // AI descriptions: AiAvailable mirrors the GLOBAL switch (Settings → AI) —
+    // AI descriptions: AiAvailable mirrors the GLOBAL switch (Settings → AI),
     // the per-camera opt-in only renders while it is on. AiContext is the
     // owner's scene notes for the model ("" = none).
     bool AiAvailable = false, bool AiDescribe = false, string? AiContext = null,
@@ -424,7 +424,7 @@ public sealed record ApiRecordingSettings(bool Events, bool Continuous,
     public bool TypeEnabled(string label) => EventTypes == null || EventTypes.Contains(label);
 }
 
-/// <summary>GET/PUT /api/admin/ai — AI event-description settings (admin only).
+/// <summary>GET/PUT /api/admin/ai: AI event-description settings (admin only).
 /// The API key is write-only; HasApiKey just says one is stored.</summary>
 /// <summary>Sign-in protection: settings plus the live lock state, as served by
 /// /api/admin/security (the users tab's SIGN-IN PROTECTION section).</summary>
@@ -470,20 +470,20 @@ public sealed class ApiAiSettings
     public int MaxFrames { get; set; } = 30;
     public int TimeoutSeconds { get; set; } = 120;
     /// <summary>Whether the server found an ffmpeg (stream sampling, pre-roll
-    /// frames, downscaling) — surfaced so the UI can say so instead of guessing.</summary>
+    /// frames, downscaling): surfaced so the UI can say so instead of guessing.</summary>
     public bool Ffmpeg { get; set; }
 }
 
-/// <summary>GET /api/system/stats — static facts about the server process/host.</summary>
+/// <summary>GET /api/system/stats: static facts about the server process/host.</summary>
 public sealed record ApiSystemInfo(string? Os, string? Arch, string? Runtime, int Processors,
     long MachineMemory, long StartUtcMs, string? Disk, long SamplePeriodMs = 2000);
 
-/// <summary>GET /api/system/stats — one resource sample (compact keys keep the 2s poll light).</summary>
+/// <summary>GET /api/system/stats: one resource sample (compact keys keep the 2s poll light).</summary>
 public sealed record ApiSystemSample(long T, double Cpu, long Ws, long Heap, double Alloc,
     int Thr, int Fd, long DTot, long DFree, long Rec, int View,
     int RecCams = 0, double WMb = 0, long WFiles = 0);
 
-/// <summary>GET /api/system/stats — one camera's availability over the observed window.
+/// <summary>GET /api/system/stats: one camera's availability over the observed window.
 /// Runs are run-length transitions: [startUnixMs, 1|0(online)].</summary>
 public sealed record ApiCamAvail(string Cam, bool On, double Pct, long Obs,
     int Outs, long Longest, long Since, List<long[]> Runs);
@@ -491,10 +491,10 @@ public sealed record ApiCamAvail(string Cam, bool On, double Pct, long Obs,
 public sealed record ApiSystemStats(ApiSystemInfo? Info, List<ApiSystemSample> Samples,
     List<ApiCamAvail>? Avail = null);
 
-/// <summary>GET /api/system/viewers (admin) — one live viewer; Via is "RTSP" or "Web", Since is unix ms.</summary>
+/// <summary>GET /api/system/viewers (admin): one live viewer; Via is "RTSP" or "Web", Since is unix ms.</summary>
 public sealed record ApiViewer(string Camera, string Stream, string Via, string? From, string? User, long Since);
 
-/// <summary>GET /api/recordings/{camera}/{date} — one continuous-recording segment.
+/// <summary>GET /api/recordings/{camera}/{date}: one continuous-recording segment.
 /// Seconds = media length (0 from servers that predate it); the timeline sizes
 /// coverage with it so a cut-short segment doesn't claim minutes it lacks.</summary>
 /// <summary>One timeline bookmark: a named [From, To] stretch (seconds of day) of one date's footage.</summary>
@@ -511,7 +511,7 @@ public sealed record ApiSegment(string File, long Size, double Seconds = 0, bool
 
 // ------------------------------------------------------------ recorded events
 
-/// <summary>GET /api/events/search — natural-language search. Without q the
+/// <summary>GET /api/events/search: natural-language search. Without q the
 /// server reports AI availability only (the search bar's icon).</summary>
 public sealed record ApiSearchUnderstood(List<string>? Labels, List<string>? Cameras,
     string? From, string? To, List<string>? Keywords, List<string>? NotLabels = null);
@@ -519,7 +519,7 @@ public sealed record ApiEventSearch(bool AiAvailable, bool Ai = false,
     ApiSearchUnderstood? Understood = null, List<ApiEvent>? Events = null,
     bool KeywordsMatched = true, bool KeywordsPartial = false, bool Judged = false);
 
-/// <summary>GET /api/events — one recorded detection event.</summary>
+/// <summary>GET /api/events: one recorded detection event.</summary>
 public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime End,
     List<string> Labels, bool Reviewed, bool Ongoing, bool HasClip, bool HasThumb,
     bool HasPreview = false, string? AiDescription = null, string? AiLevel = null,
@@ -554,13 +554,13 @@ public sealed record ApiEvent(string Id, string Camera, DateTime Start, DateTime
 
     /// <summary>Cache-key version for artifact URLs. Closed-event responses are
     /// cached immutable, so a fetch made before the event settled must live under
-    /// a DIFFERENT URL than the finished clip — never shadow it.</summary>
+    /// a DIFFERENT URL than the finished clip, never shadow it.</summary>
     public string ArtifactVersion => Ongoing ? "live" : End.Ticks.ToString();
 
     /// <summary>"Human detected", "Human + Vehicle detected", ...</summary>
     public string Title => LocalTitle(s => s);
 
-    /// <summary>The title through a translator — every display name and the
+    /// <summary>The title through a translator: every display name and the
     /// sentence pattern go through <paramref name="tr"/>, so "Human detected"
     /// can become "Humain détecté" without this record knowing any French.
     /// The identity function reproduces the English <see cref="Title"/>.</summary>
@@ -655,7 +655,7 @@ public static class UiIcon
             "calendar" => "<rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><line x1=\"16\" y1=\"2\" x2=\"16\" y2=\"6\"/><line x1=\"8\" y1=\"2\" x2=\"8\" y2=\"6\"/><line x1=\"3\" y1=\"10\" x2=\"21\" y2=\"10\"/>",
             "camera" => "<path d=\"M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z\"/><circle cx=\"12\" cy=\"13\" r=\"4\"/>",
             "video-off" => "<path d=\"M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10\"/><line x1=\"1\" y1=\"1\" x2=\"23\" y2=\"23\"/>",
-            // RJ45 jack, latch down — "this camera is on a cable".
+            // RJ45 jack, latch down: "this camera is on a cable".
             "lan" => "<rect x=\"5\" y=\"5\" width=\"14\" height=\"12\" rx=\"1.5\"/>"
                 + "<path d=\"M10 17v2.5h4V17\"/>"
                 + "<line x1=\"8.2\" y1=\"5\" x2=\"8.2\" y2=\"9\"/><line x1=\"10.7\" y1=\"5\" x2=\"10.7\" y2=\"9\"/>"
@@ -666,7 +666,7 @@ public static class UiIcon
             "skip-back" => "<polygon points=\"19 20 9 12 19 4 19 20\" fill=\"currentColor\"/><line x1=\"5\" y1=\"19\" x2=\"5\" y2=\"5\"/>",
             "skip-fwd" => "<polygon points=\"5 4 15 12 5 20 5 4\" fill=\"currentColor\"/><line x1=\"19\" y1=\"5\" x2=\"19\" y2=\"19\"/>",
             "zoom" => "<circle cx=\"11\" cy=\"11\" r=\"7\"/><line x1=\"21\" y1=\"21\" x2=\"16\" y2=\"16\"/>",
-            // Record: ring with a filled core — the classic ⏺ shape.
+            // Record: ring with a filled core, the classic ⏺ shape.
             "rec" => "<circle cx=\"12\" cy=\"12\" r=\"9\"/><circle cx=\"12\" cy=\"12\" r=\"4.5\" fill=\"currentColor\" stroke=\"none\"/>",
             // Camera-panel section markers.
             "info" => "<circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" y1=\"16\" x2=\"12\" y2=\"12\"/><line x1=\"12\" y1=\"8\" x2=\"12.01\" y2=\"8\"/>",
@@ -681,7 +681,7 @@ public static class UiIcon
             // The classic ribbon bookmark.
             "link" => "<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/>",
             "bookmark" => "<path d=\"M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\"/>",
-            // Globe with meridians — the UI language.
+            // Globe with meridians: the UI language.
             "globe" => "<circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"2\" y1=\"12\" x2=\"22\" y2=\"12\"/>"
                 + "<path d=\"M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z\"/>",
             // AI features (a big and a small four-point star).
@@ -711,10 +711,10 @@ public static class UiIcon
             $"<line x1=\"23\" y1=\"11\" x2=\"23\" y2=\"13\"/>{fill}</svg>");
     }
 
-    /// <summary>The classic Wi-Fi glyph — a dot with three arcs fanning out above
+    /// <summary>The classic Wi-Fi glyph: a dot with three arcs fanning out above
     /// it. Elements light up to the signal LEVEL (0-4, already normalized by the
     /// server, which is the only place the camera's unit is known), the rest stay
-    /// dimmed — so the icon reads signal quality at a glance.</summary>
+    /// dimmed, so the icon reads signal quality at a glance.</summary>
     public static MarkupString RenderWifi(int signalLevel, int size = 15)
     {
         int level = Math.Clamp(signalLevel, 0, 4);
@@ -785,7 +785,7 @@ public sealed class PersistedView
     /// <summary>Set while a tile is maximized: the view to restore. Survives reloads.
     /// Legacy (pre in-place maximize); still honored when loading old state.</summary>
     public ViewSnapshot? Backup { get; set; }
-    /// <summary>Tile maximized in place, if any — the others stay live but hidden.</summary>
+    /// <summary>Tile maximized in place, if any: the others stay live but hidden.</summary>
     public int? MaxIndex { get; set; }
     /// <summary>Stream the card showed before maximize auto-switched it to main.</summary>
     public string? MaxPrevKind { get; set; }
@@ -801,9 +801,9 @@ public sealed class PersistedView
     public int StripHeight { get; set; } = 160;
     /// <summary>Named layouts the user saved (per account when signed in).</summary>
     public List<SavedLayout> Layouts { get; set; } = new();
-    /// <summary>Sidebar camera order (names, first = top). Cameras not listed —
-    /// new ones, typically — follow in server order. Empty = server order.</summary>
+    /// <summary>Sidebar camera order (names, first = top). Cameras not listed,
+    /// new ones, typically, follow in server order. Empty = server order.</summary>
     public List<string> CamOrder { get; set; } = new();
-    /// <summary>Name of the layout currently loaded, if any — drives the "update or save as new" choice.</summary>
+    /// <summary>Name of the layout currently loaded, if any: drives the "update or save as new" choice.</summary>
     public string? ActiveLayout { get; set; }
 }

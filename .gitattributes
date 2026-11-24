@@ -3,7 +3,7 @@
 ###############################################################################
 * text=auto
 
-# Shell scripts run inside Linux containers — a CRLF checkout breaks them.
+# Shell scripts run inside Linux containers: a CRLF checkout breaks them.
 *.sh text eol=lf
 
 ###############################################################################

@@ -7,7 +7,7 @@ using System.Text;
 namespace Neolink.Mqtt;
 
 /// <summary>
-/// MQTT 3.1.1 (protocol level 4) wire encoding — the small subset a publish/
+/// MQTT 3.1.1 (protocol level 4) wire encoding: the small subset a publish/
 /// subscribe client needs. Kept dependency-free in keeping with the rest of the
 /// project (no external MQTT library). Only what Home Assistant needs is here:
 /// CONNECT, PUBLISH (QoS 0), SUBSCRIBE, PINGREQ, DISCONNECT, and parsing of the

@@ -21,38 +21,38 @@ namespace Neolink.Mqtt;
 ///                    package, line crossing, intrusion,
 ///                    loitering, object left/taken       (from the alarm pushes)
 ///   • binary_sensor: siren sounding                     (from the status pushes)
-///   • switch:        siren — ON sounds until OFF        (audio-alarm cameras)
-///   • switch:        privacy mode — camera dark         (cameras answering msg 574)
+///   • switch:        siren, ON sounds until OFF        (audio-alarm cameras)
+///   • switch:        privacy mode, camera dark         (cameras answering msg 574)
 ///   • event:         doorbell press                     (video doorbells; not retained)
 ///   • binary_sensor: visitor                            (doorbell press pulse; HA
 ///                                                        auto-clears it via off_delay)
 ///   • sensor:        battery                            (battery cameras)
 ///   • sensor:        Wi-Fi signal, diagnostic           (from the status pushes)
 ///   • switch:        PIR sensor                         (PIR cameras)
-///   • switch:        Suspend (beta) — ON = Neolink holds no connection to the
+///   • switch:        Suspend (beta), ON = Neolink holds no connection to the
 ///                    camera (not viewed or recorded here); bridge-only availability
 ///                    so it stays usable while the camera is intentionally offline
-///   • switch:        Record on demand — records ONE clip, no camera detection
+///   • switch:        Record on demand, records ONE clip, no camera detection
 ///                    involved; stops by itself at recording.max_clip_seconds
 ///                    (the switch flips back OFF) or when switched off early.
 ///                    Shares its session with the web UI's record button;
 ///                    announced when the camera has an event recorder
-///   • switch:        Detection events — the web UI's per-camera event-capture
+///   • switch:        Detection events, the web UI's per-camera event-capture
 ///                    master toggle; OFF stops the server recording event clips
 ///                    for this camera (and on-demand). The camera keeps detecting,
 ///                    so the detection sensors above still report. Bridge-only
 ///                    availability, like Suspend; announced with the event recorder
-///   • switch:        email events / webhook events — the camera panel's per-camera
+///   • switch:        email events / webhook events, the camera panel's per-camera
 ///                    notification opt-ins, for presence/schedule automations;
 ///                    bridge-only availability, announced with the event recorder
-///   • switch:        Continuous recording — the web UI's 24/7 "record around the
+///   • switch:        Continuous recording, the web UI's 24/7 "record around the
 ///                    clock" toggle; ON tapes continuously (retention still applies).
 ///                    Bridge-only availability, like Suspend; announced whenever a
 ///                    continuous recorder runs (Baichuan or generic RTSP)
-///   • binary_sensor: recording — ON while the server is writing this camera's
+///   • binary_sensor: recording, ON while the server is writing this camera's
 ///                    footage (an event clip, whatever triggered it, or a
 ///                    continuous segment)
-///   • sensor:        last event — the id of the newest detection event,
+///   • sensor:        last event, the id of the newest detection event,
 ///                    published (retained) the instant the event starts, so a
 ///                    motion automation can deep-link to the exact clip via
 ///                    {web-ui}/events?event={id}
@@ -67,19 +67,19 @@ namespace Neolink.Mqtt;
 ///   • select:        HDR off/on or off/low/high         (via the camera's HTTP API)
 ///   • binary_sensor: firmware update available          (read-only; never installs)
 ///   • switch:        auto-tracking, beta                (GetAbility-gated, HTTP API)
-///   • select:        PTZ preset — picking one moves the
+///   • select:        PTZ preset, picking one moves the
 ///                    camera there, beta                 (via the camera's HTTP API)
 ///   • light:         spotlight (on/off + brightness), beta (white-LED cameras
 ///                    without a FloodlightTask: Lumus/Elite)
 ///   • number:        IR brightness 0-100                (cameras reporting it)
 ///   • switch:        status LED                         (cameras whose lightState
-///                    is the little status LED — i.e. no floodlight, no spotlight)
+///                    is the little status LED, i.e. no floodlight, no spotlight)
 ///   • switch:        doorbell light, beta               (video doorbells)
 ///   • select:        play quick reply, beta             (video doorbells; picking
 ///                                                        an option plays it)
 ///   • number/select/switch: picture settings, beta      (brightness/contrast/
 ///                    saturation/hue/sharpness, day-night, anti-flicker, flip,
-///                    mirror — per what the camera reports; config category)
+///                    mirror, per what the camera reports; config category)
 ///
 /// The SERVER also reports itself: a "Neolink.NET Server" device with health
 /// sensors straight off the monitor page (CPU, memory, disk, recordings size,
@@ -100,7 +100,7 @@ public sealed class HomeAssistantMqtt
 
     /// <summary>Discovery JSON must OMIT unset fields: Home Assistant validates
     /// every key it sees, and an explicit null ("icon": null) fails that
-    /// validation — the whole entity is then discarded with only an HA-side log
+    /// validation, the whole entity is then discarded with only an HA-side log
     /// to show for it. Configs here are anonymous objects whose optional members
     /// default to null, so every discovery publish must serialize with this.</summary>
     internal static readonly JsonSerializerOptions DiscoveryJson = new()
@@ -108,11 +108,11 @@ public sealed class HomeAssistantMqtt
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>Every detection label that gets a binary sensor — ALL announced up
+    /// <summary>Every detection label that gets a binary sensor: ALL announced up
     /// front on every Baichuan camera, so automations can be written in HA before
     /// the first package/perimeter event ever fires. A type the camera never
     /// pushes (feature absent, or not configured in the Reolink app) simply stays
-    /// Clear — visible-but-idle beats invisible-until-it-happens.</summary>
+    /// Clear: visible-but-idle beats invisible-until-it-happens.</summary>
     internal static readonly string[] DetectionLabels =
         { "motion", "person", "vehicle", "animal", "package", "crying", "line-crossing", "intrusion", "loitering",
           "object-left", "object-taken" };
@@ -190,7 +190,7 @@ public sealed class HomeAssistantMqtt
         }
     }
 
-    /// <summary>Re-publishes a camera's volatile HA states immediately — invoked when
+    /// <summary>Re-publishes a camera's volatile HA states immediately: invoked when
     /// one of its settings changed via the web UI/API, so Home Assistant reflects it
     /// within a moment instead of after the periodic refresh, keeping automations from
     /// acting on a stale switch. No-op for an unknown camera / when MQTT is disabled.</summary>
@@ -213,7 +213,7 @@ public sealed class HomeAssistantMqtt
             cam.OnStatus(push);
     }
 
-    /// <summary>An AI description (and threat level) landed on a finished event —
+    /// <summary>An AI description (and threat level) landed on a finished event:
     /// mirror it onto the camera's "AI description"/"AI threat level" sensors.</summary>
     public void OnAiDescribed(Neolink.Recording.EventRecord rec)
     {
@@ -227,7 +227,7 @@ public sealed class HomeAssistantMqtt
     internal Action<string, string>? PublishObserver;
 
     // Last retained payload per topic. Retained state topics are re-published by the
-    // periodic refresh whether or not anything changed — the broker treats identical
+    // periodic refresh whether or not anything changed: the broker treats identical
     // retained publishes as no-ops, but SENDING them is not free: the 20 s refresh
     // burst was the dominant idle-CPU cost of the whole process (issue report:
     // periodic spikes to ~30% of a core on small Docker hosts). Deduplicate here, at
@@ -262,14 +262,14 @@ public sealed class HomeAssistantMqtt
     internal Task PublishAsync(string topic, byte[] payload, CancellationToken ct = default) =>
         _client.PublishAsync(topic, payload, retain: true, ct);
 
-    /// <summary>Publish WITHOUT retain — HA event entities must never replay a
+    /// <summary>Publish WITHOUT retain: HA event entities must never replay a
     /// stale occurrence from the broker after a restart.</summary>
     internal Task PublishTransientAsync(string topic, string payload, CancellationToken ct = default) =>
         _client.PublishAsync(topic, payload, retain: false, ct);
 
     private async Task OnConnectedAsync()
     {
-        // Fresh session: forget what we think the broker holds — it may have
+        // Fresh session: forget what we think the broker holds, it may have
         // restarted without persistence, so everything must be re-publishable.
         lock (_retainedGate) _lastRetained.Clear();
         await _client.PublishAsync(_availabilityTopic, "online", retain: true, CancellationToken.None)
@@ -301,7 +301,7 @@ public sealed class HomeAssistantMqtt
         if (Emergency == null || !_cfg.Discovery) return;
         if (ServerTopicTaken)
         {
-            Log.Warn("MQTT: a camera is named 'server', which owns that topic space — " +
+            Log.Warn("MQTT: a camera is named 'server', which owns that topic space, " +
                      "the Emergency mode switch is not published (rename the camera to get it)");
             return;
         }
@@ -439,7 +439,7 @@ public sealed class HomeAssistantMqtt
 
     /// <summary>The OPTIONAL storage tiers configured beyond the main recordings
     /// volume (which is already the disk_free/disk_used_pct sensors). "clips"
-    /// and/or "archive" — nothing for a plain single-folder install, so HA never
+    /// and/or "archive", nothing for a plain single-folder install, so HA never
     /// shows sensors for storage the user doesn't actually have. Internal/static
     /// so the self-tests can pin the "only what exists" contract.</summary>
     internal static IEnumerable<(string Key, string Label)> StorageTierKeys(Recording.StorageLocations? storage)
@@ -480,7 +480,7 @@ public sealed class HomeAssistantMqtt
             await AnnounceServerSensorAsync(s.Key, s.Name, s.Unit, s.DeviceClass, s.Icon, s.Diagnostic, ct)
                 .ConfigureAwait(false);
 
-        // Per-tier storage sensors — only the tiers that actually exist.
+        // Per-tier storage sensors, only the tiers that actually exist.
         foreach (var (key, label) in StorageTiers())
         {
             await AnnounceServerSensorAsync($"{key}_free", $"{label} free", "GB", null, "mdi:harddisk", false, ct)
@@ -488,7 +488,7 @@ public sealed class HomeAssistantMqtt
             await AnnounceServerSensorAsync($"{key}_used_pct", $"{label} used", "%", null, "mdi:harddisk", false, ct)
                 .ConfigureAwait(false);
         }
-        // Aggregate "any recording drive is out of space" alarm — the unattended
+        // Aggregate "any recording drive is out of space" alarm: the unattended
         // hook so an automation can notify even when nobody has the web UI open.
         if (Storage != null)
         {
@@ -628,7 +628,7 @@ internal sealed class CameraBridge
     private int? _wifiDbm;
     private bool? _sirenOn, _floodlightOn;
     private bool _hasFloodlight, _hasIr, _hasSnapshot;
-    private bool _isBattery; // from the capability probe — gates the Asleep sensor
+    private bool _isBattery; // from the capability probe: gates the Asleep sensor
     // HTTP-API extras (beta): probed once when the camera first comes online.
     private bool _hasVolume, _hasAutoTrack, _hasRecordAudio;
     private IReadOnlyList<PtzPresetInfo>? _presets;
@@ -649,13 +649,13 @@ internal sealed class CameraBridge
     private int _hdrMax = 1;              // 1 = on/off, 2 = off/low/high
     private bool _fwCheckable;            // the camera answers CheckFirmware
     /// <summary>The extras probe saw a working HTTP API. False keeps it retrying on
-    /// the slow cadence — some cameras' HTTP side boots later than Baichuan, and one
+    /// the slow cadence: some cameras' HTTP side boots later than Baichuan, and one
     /// missed probe must not hide the entities until the bridge restarts.</summary>
     private bool _httpExtrasKnown;
     private DateTime _lastHttpPublish = DateTime.MinValue;
     private string? _model;
     private DateTime _lastSnapshot = DateTime.MinValue;
-    // Last battery/LED/PIR poll — these are camera round-trips, not cached reads,
+    // Last battery/LED/PIR poll: these are camera round-trips, not cached reads,
     // so they run once a minute instead of every 20 s refresh tick.
     private DateTime _lastStatePoll = DateTime.MinValue;
     private bool _lastOnline;
@@ -675,7 +675,7 @@ internal sealed class CameraBridge
         Id = HomeAssistantMqtt.Sanitize(cam.Name);
         _base = $"{hub.Config.BaseTopic}/{Id}";
         // The Record switch mirrors the camera's on-demand session, whoever drives
-        // it (this switch, the web UI, the cap auto-stop) — one source of truth.
+        // it (this switch, the web UI, the cap auto-stop): one source of truth.
         // The Recording sensor mirrors actual capture (any event, any trigger).
         if (cam.EventRecorder is { } rec)
         {
@@ -685,8 +685,8 @@ internal sealed class CameraBridge
         }
     }
 
-    /// <summary>The new event's id lands (retained) the instant the event starts —
-    /// together with the motion trigger — so an automation can build a link to the
+    /// <summary>The new event's id lands (retained) the instant the event starts,
+    /// together with the motion trigger, so an automation can build a link to the
     /// exact clip: {web-ui}/events?event={{ states('sensor.X_last_event') }}.</summary>
     /// <summary>An event start time as HA's timestamp device class wants it: RFC3339
     /// UTC with a trailing Z and NO fractional seconds. SpecifyKind guards a
@@ -705,7 +705,7 @@ internal sealed class CameraBridge
             await _hub.PublishAsync(StateTopic("last_event/attr"),
                 JsonSerializer.Serialize(new { labels = ev.Labels, started = ev.StartUtc }), ct)
                 .ConfigureAwait(false);
-            // The start moment again as its own timestamp sensor — HA renders it as
+            // The start moment again as its own timestamp sensor: HA renders it as
             // "n minutes ago" and automations compare it without templating the id
             // sensor's attribute out. See FormatEventTime for the format contract.
             await _hub.PublishAsync(StateTopic("last_event_time"), FormatEventTime(ev.StartUtc), ct)
@@ -713,7 +713,7 @@ internal sealed class CameraBridge
         }
         catch
         {
-            // Broker unreachable — the next event republishes; the topic is retained.
+            // Broker unreachable: the next event republishes; the topic is retained.
         }
     }
 
@@ -726,7 +726,7 @@ internal sealed class CameraBridge
         }
         catch
         {
-            // Broker unreachable right now — the next announce republishes the truth.
+            // Broker unreachable right now: the next announce republishes the truth.
         }
     }
 
@@ -753,7 +753,7 @@ internal sealed class CameraBridge
         }
         catch
         {
-            // Broker unreachable — the periodic refresh or next announce heals it.
+            // Broker unreachable: the periodic refresh or next announce heals it.
         }
     }
 
@@ -771,7 +771,7 @@ internal sealed class CameraBridge
     {
         await PublishAvailabilityAsync(ct).ConfigureAwait(false);
 
-        // Suspend switch (beta) — universal, so announced for every camera (Baichuan
+        // Suspend switch (beta): universal, so announced for every camera (Baichuan
         // and generic RTSP) before the events/no-events split. Its availability is
         // the BRIDGE only, never this camera's online topic: a suspended camera reads
         // offline, and the switch must stay controllable to un-suspend it.
@@ -781,7 +781,7 @@ internal sealed class CameraBridge
             await PublishSuspendStateAsync(ct).ConfigureAwait(false);
         }
 
-        // 24/7 recording switch — universal like suspend (any camera that records
+        // 24/7 recording switch: universal like suspend (any camera that records
         // continuously, Baichuan or generic RTSP), so announced before the split.
         if (_cam.SetContinuousEnabled != null)
         {
@@ -802,7 +802,7 @@ internal sealed class CameraBridge
 
         if (!_cam.EventsAvailableNow)
         {
-            // No way to detect anything — a generic RTSP camera with no ONVIF event
+            // No way to detect anything: a generic RTSP camera with no ONVIF event
             // service, or none reachable. Motion sensors would be dead weight, but
             // an on-demand clip needs no detection at all, and the web UI offers one.
             if (_cam.EventRecorder is { } onDemand)
@@ -823,26 +823,26 @@ internal sealed class CameraBridge
             return;
         }
 
-        // Every detection sensor announces immediately — package and the
-        // perimeter types included — so they exist in HA before their first
+        // Every detection sensor announces immediately, package and the
+        // perimeter types included, so they exist in HA before their first
         // event ever fires. Types the camera never pushes just stay Clear.
         var labels = HomeAssistantMqtt.DetectionLabels;
         foreach (var label in labels)
             await AnnounceEntityAsync("binary_sensor", label, BinarySensorConfig(label), ct).ConfigureAwait(false);
 
-        // The Record switch: capture one clip on demand from HA — no camera
+        // The Record switch: capture one clip on demand from HA, no camera
         // detection involved ("record while the door is open").
         if (_cam.EventRecorder is { } recorder)
         {
             await AnnounceEntityAsync("switch", "record", RecordSwitchConfig(), ct).ConfigureAwait(false);
             await _hub.PublishAsync(StateTopic("record"), recorder.OnDemand != null ? "ON" : "OFF", ct)
                 .ConfigureAwait(false);
-            // Detection events master switch — the same per-camera setting as the
+            // Detection events master switch: the same per-camera setting as the
             // web UI's Events toggle, so event-clip capture can be paused from an
             // automation (this pauses recording; it does not silence the sensors).
             await AnnounceEntityAsync("switch", "detect", DetectSwitchConfig(), ct).ConfigureAwait(false);
             await PublishDetectStateAsync(ct).ConfigureAwait(false);
-            // Per-camera notification opt-ins — the camera panel's Email/Webhook
+            // Per-camera notification opt-ins: the camera panel's Email/Webhook
             // events toggles, exposed so automations can arm them by presence or
             // schedule. Announced whether or not the channel is configured
             // (entities are never pruned; an unconfigured channel is inert).
@@ -862,14 +862,14 @@ internal sealed class CameraBridge
                 await PublishLastEventAsync(lastEvent, ct).ConfigureAwait(false);
             // AI event descriptions: announced for every recording camera whether
             // or not the feature is on for it (entities are never pruned by
-            // enablement — that filtering is web-UI only). Cameras with AI off
+            // enablement, that filtering is web-UI only). Cameras with AI off
             // simply keep an unknown state; both topics are retained.
             await AnnounceEntityAsync("sensor", "ai_description", AiDescriptionConfig(), ct).ConfigureAwait(false);
             await AnnounceEntityAsync("sensor", "ai_threat", AiThreatConfig(), ct).ConfigureAwait(false);
         }
 
         // Recording status: is footage for this camera being written right now
-        // (event clip — detection or on-demand — or a continuous segment)?
+        // (event clip, detection or on-demand, or a continuous segment)?
         if (HasRecordingSensor)
         {
             await AnnounceEntityAsync("binary_sensor", "recording", RecordingSensorConfig(), ct).ConfigureAwait(false);
@@ -899,9 +899,9 @@ internal sealed class CameraBridge
 
     /// <summary>Suspend switch (beta): ON = Neolink holds no connection to the camera
     /// (not viewed or recorded here). Bridge-only availability so it stays usable
-    /// while the camera is (intentionally) offline — otherwise you couldn't resume it.</summary>
+    /// while the camera is (intentionally) offline, otherwise you couldn't resume it.</summary>
     // Internal (not private) so the selftest can assert the bridge-only
-    // availability — the property that keeps the switch usable, and the camera
+    // availability, the property that keeps the switch usable, and the camera
     // RESUMABLE from Home Assistant, while the camera itself reads unavailable.
     internal object SuspendSwitchConfig() => new
     {
@@ -923,7 +923,7 @@ internal sealed class CameraBridge
             : _hub.PublishAsync(StateTopic("suspend"), _cam.Suspended() ? "ON" : "OFF", ct);
 
     /// <summary>Asleep (battery cameras): ON while every stream is parked on purpose
-    /// so the camera can doze — as opposed to streaming (OFF) or genuinely offline
+    /// so the camera can doze, as opposed to streaming (OFF) or genuinely offline
     /// (the camera reads unavailable). Bridge-only availability, like Suspend, so
     /// the sensor itself stays readable while the camera naps.</summary>
     // Internal (not private) so the selftest can assert the bridge-only availability.
@@ -941,7 +941,7 @@ internal sealed class CameraBridge
         availability_mode = "all",
     };
 
-    /// <summary>Continuous (24/7) recording — the web UI's "Record around the clock"
+    /// <summary>Continuous (24/7) recording: the web UI's "Record around the clock"
     /// toggle. ON tapes continuously (retention still applies); it is the same
     /// persisted server setting the UI flips, and the recorder reads it live, so the
     /// switch takes effect at once. Availability is bridge-only, like Suspend, so it
@@ -977,7 +977,7 @@ internal sealed class CameraBridge
         device_class = "connectivity",
         entity_category = "diagnostic",
         device = Device(),
-        // Only the bridge's own liveness gates this one — the sensor itself IS the camera state.
+        // Only the bridge's own liveness gates this one: the sensor itself IS the camera state.
         availability = new object[] { new { topic = _hub.AvailabilityTopic } },
         availability_mode = "all",
     };
@@ -992,7 +992,7 @@ internal sealed class CameraBridge
             _isBattery = true;
             await AnnounceEntityAsync("sensor", "battery", BatterySensorConfig(), ct).ConfigureAwait(false);
             // Asleep sensor: only battery cameras nap, so only they get the
-            // entity — a wired camera must not sprout a permanently-OFF sensor.
+            // entity, a wired camera must not sprout a permanently-OFF sensor.
             await AnnounceEntityAsync("binary_sensor", "asleep", AsleepSensorConfig(), ct).ConfigureAwait(false);
         }
         // The siren is a SWITCH: ON sounds until OFF. Its state topic is the same
@@ -1044,24 +1044,24 @@ internal sealed class CameraBridge
             await ClearEntityAsync("switch", "auto_track", ct).ConfigureAwait(false);
         // Camera-side record-audio (the encode settings' audio flag): whether the
         // microphone goes into every stream and recording. A device setting, not a
-        // control — hence the config category.
+        // control, hence the config category.
         if (_hasRecordAudio)
             await AnnounceEntityAsync("switch", "record_audio",
                 SwitchConfig("Record audio", "record_audio", "mdi:microphone", "config"), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("switch", "record_audio", ct).ConfigureAwait(false);
-        // Gated on real PTZ ability too — never trust the preset list alone.
+        // Gated on real PTZ ability too, never trust the preset list alone.
         if (f.Ptz && _presets?.Any(p => p.Enabled) == true)
             await AnnounceEntityAsync("select", "ptz_preset", PtzPresetSelectConfig(), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("select", "ptz_preset", ct).ConfigureAwait(false);
-        // The white spotlight (Lumus/Elite — no FloodlightTask): on/off rides the
+        // The white spotlight (Lumus/Elite, no FloodlightTask): on/off rides the
         // Baichuan light state; brightness rides the HTTP white LED when available.
         if (_hasSpotlight)
             await AnnounceEntityAsync("light", "spotlight", SpotlightConfig(), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("light", "spotlight", ct).ConfigureAwait(false);
-        // The little status/power LED on cameras with no floodlight or spotlight —
+        // The little status/power LED on cameras with no floodlight or spotlight:
         // the same lightState toggle those use, so only one of the three is ever
         // announced. Config category: it's a device setting, not a room light.
         if (HasStatusLed)
@@ -1103,8 +1103,8 @@ internal sealed class CameraBridge
             await ClearEntityAsync("select", "day_night", ct).ConfigureAwait(false);
         if (_imgCaps?.AntiFlicker != null)
         {
-            // Announce every value any firmware is known to use — indoor models
-            // report "Off" — and keep whatever this camera currently reports even
+            // Announce every value any firmware is known to use: indoor models
+            // report "Off", and keep whatever this camera currently reports even
             // if it's novel, or HA rejects every state publish as an invalid option.
             var flickerOptions = ImageSettings.AntiFlickerValues;
             if (_imgCaps.AntiFlicker is { Length: > 0 } cur && !flickerOptions.Contains(cur))
@@ -1124,7 +1124,7 @@ internal sealed class CameraBridge
                 SwitchConfig("Mirror image", "img_mirror", "mdi:flip-horizontal", "config"), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("switch", "img_mirror", ct).ConfigureAwait(false);
-        // Detection sensitivity: the camera's own thresholds — higher = more
+        // Detection sensitivity: the camera's own thresholds, higher = more
         // sensitive on both scales (MD is normalized server-side).
         if (_hasMdSens)
             await AnnounceEntityAsync("number", "md_sensitivity",
@@ -1268,9 +1268,9 @@ internal sealed class CameraBridge
         state_topic = StateTopic(label),
         payload_on = "ON",
         payload_off = "OFF",
-        // Crying is heard, not seen — HA's "sound" class fits it exactly.
+        // Crying is heard, not seen: HA's "sound" class fits it exactly.
         device_class = label == "crying" ? "sound" : "motion",
-        // The smart labels aren't plain motion — give them a telling icon.
+        // The smart labels aren't plain motion: give them a telling icon.
         // (motion/person keep the device_class default, which reads as a person.)
         icon = label switch
         {
@@ -1330,7 +1330,7 @@ internal sealed class CameraBridge
         availability_mode = "all",
     };
 
-    // The display name says what it IS — "Record" alone reads like a recording
+    // The display name says what it IS: "Record" alone reads like a recording
     // master switch next to a camera that may already be recording continuously.
     // unique_id and topics stay "record": existing HA entities keep their
     // identity (and entity_id) across the rename.
@@ -1351,7 +1351,7 @@ internal sealed class CameraBridge
     /// <summary>Detection events: the same per-camera master toggle as the web UI's
     /// camera settings. OFF stops the server capturing event clips for this camera
     /// (and on-demand recording) until switched back on; the camera keeps detecting,
-    /// so the detection binary_sensors are unaffected — this pauses recording, it is
+    /// so the detection binary_sensors are unaffected: this pauses recording, it is
     /// not a sensor disarm. The setting lives on the SERVER (settings.json), so
     /// availability is bridge-only like Suspend: it must stay controllable while the
     /// camera itself is offline or asleep.</summary>
@@ -1376,7 +1376,7 @@ internal sealed class CameraBridge
             : _hub.PublishAsync(StateTopic("detect"), rec.EventsEnabled ? "ON" : "OFF", ct);
 
     /// <summary>Per-camera notification opt-ins (email / webhook events): server
-    /// settings like Detect, so bridge-only availability — the away/schedule
+    /// settings like Detect, so bridge-only availability, the away/schedule
     /// automations these exist for must reach battery cameras while they sleep.</summary>
     internal object NotifySwitchConfig(string name, string entity, string icon) => new
     {
@@ -1404,8 +1404,8 @@ internal sealed class CameraBridge
     /// <summary>
     /// The HA "Record" switch drives the camera's shared on-demand session (the
     /// same one behind the web UI's record button): ON records one clip capped at
-    /// recording.max_clip_seconds — the OnDemandChanged subscription flips the
-    /// switch back OFF when the cap lands — and OFF stops it early. The clip shows
+    /// recording.max_clip_seconds, the OnDemandChanged subscription flips the
+    /// switch back OFF when the cap lands, and OFF stops it early. The clip shows
     /// up in the timeline/review strip labeled "external"; retention applies.
     /// </summary>
     private async Task SetRecordAsync(bool on)
@@ -1468,7 +1468,7 @@ internal sealed class CameraBridge
     };
 
     /// <summary>The LLM's threat classification of that event: green (routine),
-    /// yellow (suspicious) or red (danger) — the automation hook ("when red, …").</summary>
+    /// yellow (suspicious) or red (danger), the automation hook ("when red, …").</summary>
     private object AiThreatConfig() => new
     {
         name = "AI threat level",
@@ -1504,7 +1504,7 @@ internal sealed class CameraBridge
         }
         catch
         {
-            // Broker unreachable — the topics are retained; the next description republishes.
+            // Broker unreachable: the topics are retained; the next description republishes.
         }
     }
 
@@ -1539,8 +1539,8 @@ internal sealed class CameraBridge
         availability_mode = "all",
     };
 
-    /// <summary>A config-category select whose options are the camera's own API values
-    /// — published and commanded verbatim, so no mapping can drift.</summary>
+    /// <summary>A config-category select whose options are the camera's own API values:
+    /// published and commanded verbatim, so no mapping can drift.</summary>
     private object SelectConfig(string name, string entity, string[] options, string? icon) => new
     {
         name,
@@ -1676,8 +1676,8 @@ internal sealed class CameraBridge
     }
 
     /// <summary>
-    /// A doorbell button press becomes an HA EVENT entity (device_class doorbell) —
-    /// the natural trigger for ring automations — plus a momentary "visitor"
+    /// A doorbell button press becomes an HA EVENT entity (device_class doorbell),
+    /// the natural trigger for ring automations, plus a momentary "visitor"
     /// binary sensor that HA clears by itself (off_delay), so dashboards show a
     /// short "pressed" pulse instead of a state stuck until the next ring.
     /// Both are announced lazily on the FIRST press, so ordinary cameras never
@@ -1708,7 +1708,7 @@ internal sealed class CameraBridge
     }
 
     /// <summary>The momentary press state: ON on the ring, auto-reset by HA a few
-    /// seconds later — no OFF publish needed (and none ever comes from the camera).</summary>
+    /// seconds later, no OFF publish needed (and none ever comes from the camera).</summary>
     private object VisitorConfig() => new
     {
         name = "Visitor",
@@ -1893,7 +1893,7 @@ internal sealed class CameraBridge
     {
         await PublishSensorEdgesAsync(ct).ConfigureAwait(false); // time out stale detections
         await PublishAvailabilityAsync(ct).ConfigureAwait(false);
-        // The suspend flag can flip from the web UI too — keep HA's switch in sync
+        // The suspend flag can flip from the web UI too: keep HA's switch in sync
         // (cheap: publishing a retained ON/OFF is a no-op when unchanged). The switch
         // is announced on connect for every camera that supports suspend.
         await PublishSuspendStateAsync(ct).ConfigureAwait(false);
@@ -1903,7 +1903,7 @@ internal sealed class CameraBridge
         await PublishContinuousStateAsync(ct).ConfigureAwait(false);
         // ...and the per-camera notification opt-ins (same shared-with-web-UI shape).
         await PublishNotifyStatesAsync(ct).ConfigureAwait(false);
-        // Continuous segments start/stop without an event to ride on — the
+        // Continuous segments start/stop without an event to ride on: the
         // periodic sweep keeps the Recording sensor honest for them (and heals
         // a publish that failed mid-outage). Runs regardless of online state:
         // a camera can go offline mid-event and the OFF still has to land.
@@ -1942,7 +1942,7 @@ internal sealed class CameraBridge
                 _model = caps.Version?.Model;
                 if (f.Led) await ProbeLedAsync(ct).ConfigureAwait(false);
                 // The real spotlight capability (FloodlightTask answered), not the
-                // status-LED lightState — gates both discovery and state publishing.
+                // status-LED lightState: gates both discovery and state publishing.
                 _hasFloodlight = f.Floodlight;
                 _hasSnapshot = await ProbeSnapshotAsync(ct).ConfigureAwait(false);
                 // HTTP-API extras (beta): one combined probe decides which of the
@@ -1962,19 +1962,19 @@ internal sealed class CameraBridge
         else if (_announcedEvents != _cam.EventsAvailableNow)
         {
             _announcedEvents = _cam.EventsAvailableNow;
-            Log.Info($"{_cam.Name}: detections became {(_announcedEvents ? "available" : "unavailable")} — " +
+            Log.Info($"{_cam.Name}: detections became {(_announcedEvents ? "available" : "unavailable")}: " +
                      "re-announcing its Home Assistant entities");
             await AnnounceAsync(ct).ConfigureAwait(false);
         }
 
         var caps2 = await TryGetCapabilitiesAsync(ct).ConfigureAwait(false);
         var feat = caps2?.Features;
-        // Battery/LED/PIR are POLLS — real Baichuan round-trips plus XML parsing,
+        // Battery/LED/PIR are POLLS: real Baichuan round-trips plus XML parsing,
         // so they don't need to ride every 20 s tick (which also kept the camera
         // busier than necessary). Changes made through HA or the web UI re-publish
         // immediately (HandleCommandAsync / RepublishAsync); this cadence exists
         // only to catch changes made in the Reolink app, so a minute of staleness
-        // is the ceiling — battery itself drains ~2%/hour and would tolerate far
+        // is the ceiling: battery itself drains ~2%/hour and would tolerate far
         // less, but the queries are small and share the one poll clock.
         if (DateTime.UtcNow - _lastStatePoll > TimeSpan.FromMinutes(1))
         {
@@ -1991,7 +1991,7 @@ internal sealed class CameraBridge
         {
             if (!_httpExtrasKnown && feat is { } f2)
             {
-                // The first probe ran while the camera's HTTP API was still down —
+                // The first probe ran while the camera's HTTP API was still down:
                 // keep retrying on this cadence and announce once it answers.
                 _lastHttpPublish = DateTime.UtcNow;
                 if (await ProbeHttpExtrasAsync(f2, ct).ConfigureAwait(false))
@@ -2013,7 +2013,7 @@ internal sealed class CameraBridge
     /// act on a stale switch). The cheap server-side switches (suspend, detection
     /// events, 24/7 recording, on-demand record) always; the camera-side states
     /// (night vision, floodlight/spotlight, PIR, volume, auto-track, picture) only
-    /// when the camera is online and its features are already known. Never throws —
+    /// when the camera is online and its features are already known. Never throws:
     /// a failed publish heals on the next periodic refresh.</summary>
     public async Task RepublishAsync(CancellationToken ct)
     {
@@ -2113,12 +2113,12 @@ internal sealed class CameraBridge
                 && await _control.GetAiSensitivitiesAsync(ct).ConfigureAwait(false) is { } aiSens)
                 foreach (var ai in aiSens)
                     await _hub.PublishAsync(StateTopic($"ai_sens_{ai.Type}"), ai.Sensitivity.ToString(), ct).ConfigureAwait(false);
-            // Served from the control layer's hours-long cache — no cloud chatter.
+            // Served from the control layer's hours-long cache, no cloud chatter.
             if (_fwCheckable && await _control.CheckFirmwareAsync(ct).ConfigureAwait(false) is { } fw)
                 await _hub.PublishAsync(StateTopic("firmware_update"), fw.UpdateAvailable ? "ON" : "OFF", ct).ConfigureAwait(false);
             if (_hasWhiteLedBrightness && await _control.GetWhiteLedAsync(ct).ConfigureAwait(false) is { } wl)
                 await _hub.PublishAsync(StateTopic("spotlight_brightness"), wl.Bright.ToString(), ct).ConfigureAwait(false);
-            // Preset names can change (the panel saves new ones) — refresh the list
+            // Preset names can change (the panel saves new ones): refresh the list
             // and re-announce the select so its options never go stale.
             if (_presets != null && await _control.GetPtzPresetsAsync(ct).ConfigureAwait(false) is { } fresh)
             {
@@ -2159,7 +2159,7 @@ internal sealed class CameraBridge
     }
 
     /// <summary>The availability POLICY: a battery camera parked on purpose (dozing
-    /// between viewers) counts as alive — its retained states stay meaningful in HA.
+    /// between viewers) counts as alive, its retained states stay meaningful in HA.
     /// Suspend does not (deliberately offline), and a camera we WANT but cannot
     /// reach is not parked, so it still reads offline after the grace.</summary>
     internal static bool AliveByPolicy(bool live, bool asleep, bool suspended) =>
@@ -2237,7 +2237,7 @@ internal sealed class CameraBridge
     private async Task PublishSnapshotAsync(CancellationToken ct)
     {
         // Small variant: brokers cap packet size (Mosquitto 2.1+ at 2 MB) and
-        // disconnect over it — a full dual-lens/4K snapshot doesn't fit.
+        // disconnect over it, a full dual-lens/4K snapshot doesn't fit.
         var jpeg = await TryAsync(() => _control.SnapshotSmallAsync(ct)).ConfigureAwait(false);
         if (jpeg is { Length: > 100 })
         {
@@ -2252,12 +2252,12 @@ internal sealed class CameraBridge
         var led = await TryAsync(() => _control.GetLedStateAsync(ct)).ConfigureAwait(false);
         if (led == null) return;
         _hasIr = Str(led, "state") is { Length: > 0 };
-        // _hasFloodlight is NOT inferred from lightState here — a status LED reports
+        // _hasFloodlight is NOT inferred from lightState here: a status LED reports
         // it too. It's set from the FloodlightTask capability by the caller; this
         // records only that the field EXISTS, and HasStatusLed decides who owns it.
         _hasLightState = Str(led, "lightState") is { Length: > 0 };
         _hasIrBrightness = Num(led, "IRLedBrightness") != null;
-        // The field alone doesn't gate the entity — the Elite reports one without
+        // The field alone doesn't gate the entity: the Elite reports one without
         // having the light; the announce also requires the doorbell capability.
         _hasDoorbellLight = Str(led, "doorbellLightState") is { Length: > 0 };
     }
@@ -2371,7 +2371,7 @@ internal sealed class CameraBridge
                     await PublishLedAsync(ct).ConfigureAwait(false);
                     break;
                 case "status_led":
-                    // Same lightState toggle as the spotlight/floodlight — only one of
+                    // Same lightState toggle as the spotlight/floodlight, only one of
                     // the three is ever announced, so this can't collide with them.
                     await _control.SetLedStateAsync(null, payload == "ON" ? "open" : "close", null, null, ct).ConfigureAwait(false);
                     await PublishLedAsync(ct).ConfigureAwait(false);

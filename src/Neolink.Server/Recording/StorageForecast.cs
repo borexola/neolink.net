@@ -10,7 +10,7 @@ namespace Neolink.Recording;
 /// Free space is sampled every 15 minutes and the samples persisted in the state
 /// dir (storage-trend.json), so the trend survives restarts and can genuinely
 /// cover a week. The forecast is a least-squares fit over up to 7 days of
-/// samples — NET change, not gross write rate, so once retention starts deleting
+/// samples: NET change, not gross write rate, so once retention starts deleting
 /// as fast as the cameras record, the honest answer becomes "steady" instead of
 /// a fictional fill date. No verdict is given until 6 hours of history exist.
 /// </summary>
@@ -77,9 +77,9 @@ public sealed class StorageForecast
     }
 
     /// <summary>The verdict for one location (by path):
-    /// ("measuring", null) — under 6 h of history, no honest answer yet;
-    /// ("steady", null)    — not shrinking (retention keeping up, or freeing);
-    /// ("filling", days)   — shrinking; days until the volume runs out at this rate.</summary>
+    /// ("measuring", null): under 6 h of history, no honest answer yet;
+    /// ("steady", null), not shrinking (retention keeping up, or freeing);
+    /// ("filling", days): shrinking; days until the volume runs out at this rate.</summary>
     public (string State, double? Days) Forecast(string path)
     {
         List<Point>? pts;
@@ -93,7 +93,7 @@ public sealed class StorageForecast
         if (spanMs < MinSpan.TotalMilliseconds)
             return ("measuring", null);
 
-        // Least-squares slope of free bytes over time — one big retention purge
+        // Least-squares slope of free bytes over time: one big retention purge
         // mid-window nudges the fit instead of dominating an endpoint delta.
         double n = pts.Count, sx = 0, sy = 0, sxy = 0, sxx = 0;
         foreach (var p in pts)
@@ -127,7 +127,7 @@ public sealed class StorageForecast
         }
         catch (Exception ex)
         {
-            Log.Warn($"Storage forecast: cannot read {_file}: {ex.Message} — starting fresh");
+            Log.Warn($"Storage forecast: cannot read {_file}: {ex.Message}, starting fresh");
         }
     }
 

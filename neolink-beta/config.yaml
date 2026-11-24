@@ -1,6 +1,6 @@
 # Beta channel of the Neolink.NET add-on. Tracks the rolling :beta image the
 # docker workflow builds from the `beta` branch. Manifest-only (the :beta image
-# already contains the launcher) — it just points HA at that image tag.
+# already contains the launcher), it just points HA at that image tag.
 #
 # Ingress-only, no published ports, so it installs ALONGSIDE the stable add-on
 # without a 8654/8655 clash: use it to try the web UI and the HA sidebar. If you
@@ -8,7 +8,7 @@
 # stable add-on first.
 #
 # NOTE: this file must live on the branch HA reads (the repo's default branch) to
-# appear in the store — the beta CODE + workflow change live on the `beta` branch,
+# appear in the store, the beta CODE + workflow change live on the `beta` branch,
 # this pointer lives on `main`. Rolling :beta means HA won't auto-detect a new
 # build (the version string stays "beta"); reinstall the add-on to pull a fresh one.
 name: Neolink.NET (beta)

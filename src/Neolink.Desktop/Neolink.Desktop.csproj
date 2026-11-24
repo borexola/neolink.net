@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Neolink.NET Desktop — a native shell around the SAME web UI the server
+  <!-- Neolink.NET Desktop: a native shell around the SAME web UI the server
        already serves. It is a client, not a second implementation: the window is
        a WebView2 pointed at your server, so every feature the browser has, this
        has, the day the server ships it.
@@ -10,7 +10,7 @@
        `dotnet build` for Linux contributors. Build it directly:
            dotnet build src/Neolink.Desktop/Neolink.Desktop.csproj -c Release
        The server never references it, so the "no third-party dependencies" rule
-       the product lives by is untouched — WebView2 below is a dependency of the
+       the product lives by is untouched: WebView2 below is a dependency of the
        shell alone, and there is no way to host Edge without it. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -33,7 +33,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- NO InvariantGlobalization here, unlike the server: WinForms maps every
          keyboard-layout switch (WM_INPUTLANGCHANGE) to a real culture, and in
-         invariant mode that lookup throws inside WndProc — switching input
+         invariant mode that lookup throws inside WndProc, switching input
          language with the window focused crashed the whole app (seen live,
          LCID 0x1009). Program.Main pins the thread cultures to invariant
          instead, so formatting behaves identically without disabling the
@@ -42,7 +42,7 @@
     <!-- WinForms designers are not used here; every window is built in code. -->
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <!-- Self-contained so the MSI carries the runtime: nobody installing a camera
-         viewer should have to install .NET first. Deliberately NOT single-file —
+         viewer should have to install .NET first. Deliberately NOT single-file:
          the installer lays the files down once, whereas a single-file bundle
          re-extracts its native libraries on every launch and makes a tray app
          that starts with Windows slower for no benefit. -->
@@ -55,7 +55,7 @@
     <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
     <!-- The WebView2 package references its WPF control unconditionally, which
          binds an older WindowsBase than the WinForms control does. Nothing here
-         touches the WPF type, so the conflict is noise — and CI builds this tree
+         touches the WPF type, so the conflict is noise, and CI builds this tree
          with -warnaserror. -->
     <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
   </PropertyGroup>

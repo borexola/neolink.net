@@ -309,7 +309,7 @@ public sealed partial class OnvifPtzCamera
         {
             if (Interlocked.Read(ref _generation) != generation) return; // a later command took over
             if (attempt == 1 && timedOut)
-                Log.Debug($"{Name}: ONVIF PTZ move had no Stop within {after.TotalSeconds:0}s — stopping the head");
+                Log.Debug($"{Name}: ONVIF PTZ move had no Stop within {after.TotalSeconds:0}s, stopping the head");
             using var limit = new CancellationTokenSource(SendLimit);
             await SendAsync("stop", ArrowSpeed, limit.Token).ConfigureAwait(false);
             _moving = false;
@@ -324,7 +324,7 @@ public sealed partial class OnvifPtzCamera
             else
             {
                 _moving = false; // nothing more this endpoint can do; the status must not claim a move for ever
-                Log.Warn($"{Name}: ONVIF PTZ could not stop the head ({Log.Flatten(ex)}) — stop it from the camera panel");
+                Log.Warn($"{Name}: ONVIF PTZ could not stop the head ({Log.Flatten(ex)}): stop it from the camera panel");
             }
         }
         finally { _moveGate.Release(); }

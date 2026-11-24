@@ -10,7 +10,7 @@ namespace Neolink.Notifications;
 /// The standard alert email: a small, table-based HTML layout with everything
 /// inline (email clients strip &lt;style&gt; and rarely do flexbox), plus a plain-text
 /// alternative for text-only clients. Red banner for a problem, green for a
-/// "resolved" follow-up. Deliberately self-contained — no remote images.
+/// "resolved" follow-up. Deliberately self-contained, no remote images.
 /// </summary>
 internal static class NotificationTemplate
 {

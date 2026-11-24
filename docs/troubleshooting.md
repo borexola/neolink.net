@@ -2,16 +2,16 @@
 
 The common failure signatures and what each one means. First move for
 anything not listed: run with `--verbose` (or `NEOLINK_LOG=debug`) for
-protocol-level logging and read the service log — almost every symptom has a
+protocol-level logging and read the service log, almost every symptom has a
 matching line.
 
 - **`503 Service Unavailable` on DESCRIBE / web tiles stuck on "connecting…"**: the
-  camera is not connected yet (wrong address/credentials, camera booting) — check the
+  camera is not connected yet (wrong address/credentials, camera booting), check the
   service logs.
-- **"the camera moved — it answers at … config.json says …"**: the camera's IP
+- **"the camera moved: it answers at … config.json says …"**: the camera's IP
   changed (DHCP) and Neolink.NET followed it by UID. Click **Use new address**
   in Settings → Cameras to write it to `config.json`, or give the camera a DHCP
-  reservation. **"cannot look for the camera at another address — its UID is
+  reservation. **"cannot look for the camera at another address: its UID is
   not known"**: it never logged in since this feature arrived; set `uid` in its
   config entry (Reolink app → device info). In Docker following and *Auto
   discover* need `--network host`.
@@ -45,13 +45,13 @@ matching line.
   letters and digits only in the Reolink app. See
   [Per camera](configuration.md#per-camera) in the configuration reference.
 - **"the camera's HTTP API is not answering … responds too slowly"**: the HTTP
-  port is open but the camera stalled — common for a Wi-Fi camera busy pushing
+  port is open but the camera stalled, common for a Wi-Fi camera busy pushing
   video. Reads resume automatically when it recovers; nothing to do unless it
   never recovers (then check the camera's Wi-Fi signal, or set a wired
   `http_address`).
 - **A UDP camera (`"udp": true`) times out while every other camera works, and
   the discovery sweep ends in `UDP: SILENCE`**: in Docker, the container is on a
-  bridge network — UDP-only cameras need `network_mode: host` / `--network host`
+  bridge network, UDP-only cameras need `network_mode: host` / `--network host`
   (see [UDP-only battery models](battery-cameras.md#udp-only-models)); under
   Home Assistant, install the **Neolink.NET (host network)** add-on instead.
   Read the sweep's `targets:` line to confirm: if the only broadcast address is
@@ -59,10 +59,10 @@ matching line.
   is the cause.
 - Cameras limit concurrent Baichuan clients; if the Reolink app is streaming
   `mainStream`, use `stream: "subStream"` or close the app.
-- **Choppy browser video on Firefox for main streams**: that's H.265 — use the sub
+- **Choppy browser video on Firefox for main streams**: that's H.265, use the sub
   stream or a Chromium/Safari browser with hardware HEVC.
 - **Configured `clips_path`/`archive_path` but the folders look empty on the
-  host (Docker)**: recording never blocks on a missing directory — Neolink.NET
+  host (Docker)**: recording never blocks on a missing directory, Neolink.NET
   creates it at startup. If no volume is mapped at that container path, the
   directory is created **inside the container's writable layer**: footage
   records fine but lives in the container (surviving restarts, destroyed by
@@ -70,7 +70,7 @@ matching line.
   configured tier. The Monitor page's STORAGE section is the tell: tiers on
   the container layer report the same total/free bytes as the root disk.
 - **Perimeter events (line crossing / intrusion / loitering / object left or taken) don't appear**:
-  they are opt-in — tick them under the camera's ⚙ → *Event types* first
+  they are opt-in, tick them under the camera's ⚙ → *Event types* first
   (they need perimeter protection configured in the Reolink app). If the
   camera still produces none, set `NEOLINK_DEBUG_ALARMS=1`, trip the line
   once, and open an issue with the logged `alarm push <AlarmEventList …>`
@@ -78,8 +78,8 @@ matching line.
 
 ## Cameras that reset the connection at login
 
-A few models — so far all of them cameras sold bundled with an NVR, with port
-9000 as their only open port — accept the TCP connection and then reset it a
+A few models, so far all of them cameras sold bundled with an NVR, with port
+9000 as their only open port, accept the TCP connection and then reset it a
 couple of milliseconds after Neolink sends the first login message, without
 ever answering. The log shows the send followed immediately by
 `Connection closed while waiting for message ID 1`. Credentials are never
@@ -89,9 +89,9 @@ That opening message varies along two axes, and both forms are in use by other
 Baichuan clients today. Which one a given firmware accepts is not discoverable
 except by trying, so two per-camera options exist to try them:
 
-- `max_encryption` — the encryption tier the message advertises:
+- `max_encryption`: the encryption tier the message advertises:
   `none`, `bcencrypt`, `aes`, or `fullaes` (the default).
-- `legacy_login` — `true` sends the older framing, which carries the MD5
+- `legacy_login` - `true` sends the older framing, which carries the MD5
   credential fields in the body instead of leaving it empty.
 
 Work down this list, restarting after each change, until one gets a reply. Each
@@ -99,7 +99,7 @@ row is a real combination some Reolink client ships with today:
 
 | `max_encryption` | `legacy_login` | Also used by |
 |---|---|---|
-| *(unset)* | *(unset)* | the default — what fails if you are reading this |
+| *(unset)* | *(unset)* | the default: what fails if you are reading this |
 | `aes` | `true` | the original Rust neolink |
 | `bcencrypt` | `true` | older firmware, and Neolink's own protocol test sample |
 | `bcencrypt` | `false` | newer clients with encryption capped |
@@ -110,10 +110,10 @@ row is a real combination some Reolink client ships with today:
   "max_encryption": "aes", "legacy_login": true }
 ```
 
-Both options live in the config file — the web UI's camera editor does not offer
+Both options live in the config file: the web UI's camera editor does not offer
 them. The camera's ⚙ → **Test** button re-reads the file on every click, so you
 can try a row by saving the config and hitting Test, and only restart once a row
 answers. When the log stops saying "Connection closed" and starts saying
-`encryption negotiated:`, that row is the answer — please report it along with
+`encryption negotiated:`, that row is the answer, please report it along with
 the camera's model and firmware, so the working combination can become automatic
 instead of something you had to find by hand.

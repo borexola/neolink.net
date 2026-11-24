@@ -28,17 +28,17 @@ public sealed class EventRecord
     public double? CameraClipSeconds { get; set; }
     /// <summary>Seconds of video actually in clip.mp4; shorter than the event when the stream died.</summary>
     public double? ClipSeconds { get; set; }
-    /// <summary>What an LLM said it saw (AI event descriptions, opt-in) — written
+    /// <summary>What an LLM said it saw (AI event descriptions, opt-in): written
     /// after the event closes, once the model answers; null until/unless it does.</summary>
     public string? AiDescription { get; set; }
-    /// <summary>What the model says is IN the frames — "person", "white van",
-    /// "package" — most important first. The camera's own labels say which of four
+    /// <summary>What the model says is IN the frames: "person", "white van",
+    /// "package": most important first. The camera's own labels say which of four
     /// kinds of thing tripped the detector; this says what was actually there, in
     /// words a person would search for. Empty until a description arrives, and on
     /// every event described before this existed.</summary>
     public List<string> AiObjects { get; set; } = new();
     /// <summary>The model's threat classification: "green" (routine), "yellow"
-    /// (suspicious) or "red" (danger — weapon, fighting, break-in, fire).</summary>
+    /// (suspicious) or "red" (danger, weapon, fighting, break-in, fire).</summary>
     public string? AiLevel { get; set; }
     /// <summary>The model that produced <see cref="AiDescription"/>, as the server reported it.</summary>
     public string? AiModel { get; set; }
@@ -46,7 +46,7 @@ public sealed class EventRecord
 }
 
 /// <summary>
-/// File-based event storage — deliberately no database, keeping the zero-dependency
+/// File-based event storage: deliberately no database, keeping the zero-dependency
 /// rule. Layout: everything for one camera-day lives under one date folder:
 ///   {root}/{camera}/{yyyy-MM-dd}/detections/{HHmmss}-{suffix}/   event.json, clip.mp4, thumb.jpg, preview.mp4
 ///   {root}/{camera}/{yyyy-MM-dd}/continuous/{HH-mm-ss}.mp4       24/7 segment files
@@ -55,7 +55,7 @@ public sealed class EventRecord
 /// are gone. An in-memory index (loaded by scanning at startup) serves queries;
 /// JSON files are the source of truth across restarts. Pre-existing storage in the
 /// old layout ({camera}/{date}/{event} and {camera}/continuous/{date}) is migrated
-/// by rename on load — instant even for terabytes, and idempotent.
+/// by rename on load: instant even for terabytes, and idempotent.
 /// </summary>
 public sealed class EventStore
 {
@@ -146,7 +146,7 @@ public sealed class EventStore
         catch (Exception ex)
         {
             // A dead/full clips volume must not kill the event: it still registers
-            // (in memory, so the UI and HA see it) — only its artifacts are lost,
+            // (in memory, so the UI and HA see it), only its artifacts are lost,
             // and every artifact write logs its own failure.
             Log.Error($"{camera}: cannot create event folder {dir}: {ex.Message}");
         }
@@ -193,7 +193,7 @@ public sealed class EventStore
     }
 
     /// <summary>Drops the record from the sorted index: a binary search to its
-    /// StartUtc run, then a scan of that run — retention prunes whole days under
+    /// StartUtc run, then a scan of that run, retention prunes whole days under
     /// the lock the recorder needs, so this must not be linear in the index.</summary>
     private void UnindexLocked(EventRecord rec)
     {
@@ -328,7 +328,7 @@ public sealed class EventStore
     }
 
     /// <summary>The on-disk size of one event's stored artifacts (clip, thumb,
-    /// preview, event.json) in bytes — 0 when the event is unknown or its folder
+    /// preview, event.json) in bytes: 0 when the event is unknown or its folder
     /// is already gone. Used to tell the user how much a deletion will free.</summary>
     public long EventSize(string id)
     {
@@ -339,7 +339,7 @@ public sealed class EventStore
 
     /// <summary>
     /// Permanently deletes one event: its folder and every artifact under it, and
-    /// its index entry. Refuses an event still being recorded (Ongoing) — deleting
+    /// its index entry. Refuses an event still being recorded (Ongoing): deleting
     /// under the writer would race it. Empty parent day/camera folders are pruned
     /// so the tree does not accumulate hollow directories. Returns false when the
     /// event is unknown, ongoing, or the folder could not be removed (logged).
@@ -350,7 +350,7 @@ public sealed class EventStore
         lock (_gate)
         {
             if (!_byId.TryGetValue(id, out var e)) return false;
-            if (e.Record.Ongoing) return false; // still being written — never delete under the recorder
+            if (e.Record.Ongoing) return false; // still being written, never delete under the recorder
             dir = e.Dir;
         }
         if (!DeleteTree(dir)) return false;
@@ -372,7 +372,7 @@ public sealed class EventStore
     /// <paramref name="excludeWakeOnly"/> drops records whose only label is "wake"
     /// (tentative self-wake recordings, and wake events from older versions)
     /// before the limit is applied, so they cannot consume list slots. Off by
-    /// default — internal callers (the HA last-event sensor) see every record.
+    /// default: internal callers (the HA last-event sensor) see every record.
     /// Date-scoped queries allow a far higher cap: the day itself bounds the
     /// reply, and the day views must show a busy day whole.</summary>
     public List<EventRecord> List(string? camera = null, bool? reviewed = null, int limit = 200,
@@ -387,7 +387,7 @@ public sealed class EventStore
         var matched = new List<EventRecord>(Math.Min(limit, 512));
         lock (_gate)
         {
-            // Newest first off the sorted index, stopping at the limit — and, for
+            // Newest first off the sorted index, stopping at the limit, and, for
             // a dated query, at the first event older than the range.
             for (int i = _byStart.Count - 1; i >= 0 && matched.Count < limit; i--)
             {
@@ -409,12 +409,12 @@ public sealed class EventStore
     }
 
     /// <summary>
-    /// Every local day ("yyyy-MM-dd") that holds any recorded content — detection
-    /// events or continuous footage, for any camera — newest first. Feeds the
+    /// Every local day ("yyyy-MM-dd") that holds any recorded content, detection
+    /// events or continuous footage, for any camera, newest first. Feeds the
     /// timeline's calendar so days with footage can be highlighted at a glance.
     /// </summary>
-    // The day walks touch every camera×day directory — on a NAS mount that is a
-    // network round-trip each — and every calendar open repeats them verbatim.
+    // The day walks touch every camera×day directory, on a NAS mount that is a
+    // network round-trip each, and every calendar open repeats them verbatim.
     // A few seconds of staleness is invisible next to how slowly days change.
     private static readonly TimeSpan DaysCacheTtl = TimeSpan.FromSeconds(5);
     private readonly object _daysGate = new();
@@ -507,8 +507,8 @@ public sealed class EventStore
 
     /// <summary>Segment files of one day (live and archived merged), oldest first:
     /// (file name, size in bytes, seconds of media). A closed segment's length is
-    /// read from its MP4 header (cached by size and mtime); a file without one — still
-    /// being written, or never finalized — falls back to mtime minus the start in its
+    /// read from its MP4 header (cached by size and mtime); a file without one, still
+    /// being written, or never finalized, falls back to mtime minus the start in its
     /// name. The timeline uses it to size coverage truthfully: a segment cut short
     /// (camera suspended/offline) must not claim minutes it doesn't have, or the
     /// cursor is sent past the end of the media.</summary>
@@ -810,7 +810,7 @@ public sealed class EventStore
     public void Cleanup(int retentionDays, int continuousRetentionDays) =>
         Cleanup(_ => (retentionDays, continuousRetentionDays));
 
-    /// <summary>Delete-only cleanup (no archiving) — the pre-archive signature.</summary>
+    /// <summary>Delete-only cleanup (no archiving): the pre-archive signature.</summary>
     public void Cleanup(Func<string, (int EventDays, int ContinuousDays)> retentionFor) =>
         Cleanup(cam =>
         {
@@ -819,7 +819,7 @@ public sealed class EventStore
         });
 
     /// <summary>
-    /// Applies each camera's storage lifecycle: expired footage is deleted — or,
+    /// Applies each camera's storage lifecycle: expired footage is deleted, or,
     /// for cameras with archiving enabled, moved to the archive tier and deleted
     /// from there once past the archive window. Detections and continuous footage
     /// expire independently; a date folder disappears once both halves are gone.
@@ -831,7 +831,7 @@ public sealed class EventStore
 
         // Measure the archive work up front (read-only pass over the same
         // conditions), so the admin's progress strip can show a real percentage
-        // while folders move — a cross-volume archive of a day's footage is the
+        // while folders move: a cross-volume archive of a day's footage is the
         // one retention step slow enough to watch. No archive work, no strip.
         var (planHalves, planBytes) = MeasureArchivePlan(policyFor);
         using var archTask = planHalves > 0
@@ -848,13 +848,13 @@ public sealed class EventStore
             if (pct - lastPct >= 0.5) // throttle: one report per half-percent
             {
                 lastPct = pct;
-                archTask?.Report($"{curItem} — {SizeText(movedBytes)} of {SizeText(planBytes)}", pct);
+                archTask?.Report($"{curItem}: {SizeText(movedBytes)} of {SizeText(planBytes)}", pct);
             }
         }
         void Announce(string cam, string day)
         {
             curItem = $"{cam} · {day}";
-            archTask?.Report($"{curItem} — {SizeText(movedBytes)} of {SizeText(planBytes)}");
+            archTask?.Report($"{curItem}: {SizeText(movedBytes)} of {SizeText(planBytes)}");
         }
 
         // The live pass covers every root that holds fresh footage (main +
@@ -884,7 +884,7 @@ public sealed class EventStore
                 // of "I shortened retention and nothing was deleted" are otherwise
                 // unanswerable: the number the server is using (which is not the
                 // number in a config file it has not reloaded) never appeared
-                // anywhere. Debug-level — hourly, one line per camera.
+                // anywhere. Debug-level: hourly, one line per camera.
                 Log.Debug($"Retention [{camName}]: events {(eventActs ? $"{retentionDays}d, cutoff {eventCutoff:yyyy-MM-dd}" : "forever")}" +
                           $"{(archiveEvents ? " (archive)" : "")}; " +
                           $"continuous {(contActs ? $"{continuousRetentionDays}d, cutoff {contCutoff:yyyy-MM-dd}" : "forever")}" +
@@ -924,7 +924,7 @@ public sealed class EventStore
                     TryDeleteIfEmpty(dayDir); // both halves gone: the day is done here
                 }
 
-                // Pre-migration leftovers ({camera}/continuous/{date}) — only present
+                // Pre-migration leftovers ({camera}/continuous/{date}), only present
                 // when a migration pass could not complete; expire them all the same
                 // (delete-only: anything this old predates archiving entirely).
                 var legacyCont = Path.Combine(cameraDir, "continuous");
@@ -1027,7 +1027,7 @@ public sealed class EventStore
         {
             var policy = policyFor(Path.GetFileName(cameraDir)!);
             // The archive window applies even if the user has since switched
-            // archiving off — footage they chose to expire should still expire.
+            // archiving off: footage they chose to expire should still expire.
             int deleteDays = Math.Min(policy.ArchiveDeleteDays, 36500);
             if (deleteDays <= 0) continue; // keep forever
             var cutoff = DateTime.Now.Date.AddDays(-deleteDays);
@@ -1096,7 +1096,7 @@ public sealed class EventStore
 
     /// <summary>
     /// Moves a directory tree, surviving both cross-volume moves (Directory.Move
-    /// can't cross filesystems — files are moved one by one instead, and File.Move
+    /// can't cross filesystems, files are moved one by one instead, and File.Move
     /// handles the copy+delete) and an existing target (contents merge). True when
     /// the source is gone afterwards.
     /// </summary>
@@ -1140,7 +1140,7 @@ public sealed class EventStore
         }
     }
 
-    /// <summary>Total bytes of all files under a directory (best effort — errors count 0).</summary>
+    /// <summary>Total bytes of all files under a directory (best effort, errors count 0).</summary>
     internal static long TreeSize(string dir)
     {
         long total = 0;
@@ -1160,8 +1160,8 @@ public sealed class EventStore
         || File.Exists(Path.Combine(entry, "event.json"));
 
     /// <summary>
-    /// Deletes a day's event storage — the detections tree plus any pre-migration
-    /// event folders — dropping the index entries that pointed inside each
+    /// Deletes a day's event storage, the detections tree plus any pre-migration
+    /// event folders, dropping the index entries that pointed inside each
     /// successfully removed tree.
     /// </summary>
     private int DeleteEventEntries(string dayDir)
@@ -1223,7 +1223,7 @@ public sealed class EventStore
             if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
                 Directory.Delete(dir);
         }
-        catch { /* somebody is writing into it — fine, it is not empty then */ }
+        catch { /* somebody is writing into it: fine, it is not empty then */ }
     }
 
     // ------------------------------------------------------------------ layout migration
@@ -1232,7 +1232,7 @@ public sealed class EventStore
     /// One-time move from the old layout to {camera}/{date}/{detections|continuous}:
     ///   {camera}/{date}/{HHmmss-x}/       → {camera}/{date}/detections/{HHmmss-x}/
     ///   {camera}/continuous/{date}/*.mp4  → {camera}/{date}/continuous/
-    /// Directory renames on the same volume — instant regardless of footage size.
+    /// Directory renames on the same volume, instant regardless of footage size.
     /// Idempotent: runs at every load, retrying anything a previous pass missed.
     /// </summary>
     private void MigrateLegacyLayout()

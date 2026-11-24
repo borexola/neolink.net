@@ -10,7 +10,7 @@ namespace Neolink.Desktop;
 /// <summary>
 /// The window: a WebView2 filling the frame, a tray icon that owns the app's
 /// lifetime, and nothing else. Every feature the browser has is the same code
-/// running in the same place — this shell adds what a browser tab cannot give a
+/// running in the same place: this shell adds what a browser tab cannot give a
 /// camera system, which is being there when nobody is looking at it.
 /// </summary>
 internal sealed class MainForm : Form
@@ -36,13 +36,13 @@ internal sealed class MainForm : Form
     private readonly List<DateTime> _recoveries = new();
     private readonly System.Windows.Forms.Timer _heartbeat = new() { Interval = 30_000 };
 
-    /// <summary>scheme://host:port of the configured server — the only origin the
+    /// <summary>scheme://host:port of the configured server, the only origin the
     /// window may show, and the only one the bootstrap script hands the token to.</summary>
     private readonly string _origin;
     private string? _bootstrapId;
     private string? _bootstrapToken;
 
-    /// <summary>Where the first navigation goes — "/" normally, or the event a
+    /// <summary>Where the first navigation goes: "/" normally, or the event a
     /// clicked notification pointed at when that click had to LAUNCH the app.</summary>
     private readonly string? _initialLink;
 
@@ -126,7 +126,7 @@ internal sealed class MainForm : Form
         menu.Items.Add(_pauseVideoItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Server connection...", null, (_, _) => OpenConnectDialog()));
-        menu.Items.Add(new ToolStripMenuItem("Servers — switch or remove...", null, (_, _) => OpenServersDialog()));
+        menu.Items.Add(new ToolStripMenuItem("Servers: switch or remove...", null, (_, _) => OpenServersDialog()));
         menu.Items.Add(new ToolStripMenuItem("Reload", null, (_, _) => Reload())
         {
             ShortcutKeyDisplayString = "F5",
@@ -142,7 +142,7 @@ internal sealed class MainForm : Form
 
         // The "can't reach the server" screen. The web UI ships one of its own in
         // a service worker, but that only registers on a secure origin, and a LAN
-        // server on plain http is the common case — so the shell carries its own.
+        // server on plain http is the common case, so the shell carries its own.
         _errorText = new Label
         {
             Dock = DockStyle.Fill,
@@ -287,7 +287,7 @@ internal sealed class MainForm : Form
             // after the session was up, leaving whatever the WebView last showed
             // - sometimes nothing at all. OperationCanceled is the shell's own
             // doing (external links bounced to the real browser), and
-            // ConnectionAborted is a navigation that became a file download —
+            // ConnectionAborted is a navigation that became a file download:
             // the page underneath is fine in both.
             else if (args.WebErrorStatus is not (CoreWebView2WebErrorStatus.OperationCanceled
                      or CoreWebView2WebErrorStatus.ConnectionAborted))
@@ -305,7 +305,7 @@ internal sealed class MainForm : Form
 
         // The window is the server's UI and nothing else: any top-level navigation
         // to another origin gets the real browser instead. This is also a security
-        // boundary — the bootstrap script below carries the session token, so no
+        // boundary: the bootstrap script below carries the session token, so no
         // foreign page may ever load top-level in this WebView. Server-issued
         // redirects pass (an http address answered by an https redirect is the
         // server talking, not the page wandering off).
@@ -352,7 +352,7 @@ internal sealed class MainForm : Form
         };
 
         // The page asks for notification permission; inside a desktop app the real
-        // gate is Windows' own notification settings, so grant it — for the
+        // gate is Windows' own notification settings, so grant it, for the
         // server's own pages. Anything else (a stray iframe) is refused.
         core.PermissionRequested += (_, args) =>
         {
@@ -371,7 +371,7 @@ internal sealed class MainForm : Form
             SetFullscreen(core.ContainsFullScreenElement);
 
         // Web-UI notifications become native toasts, deduplicated against the ones
-        // this shell decided on itself — both sides tag detections with the event
+        // this shell decided on itself, both sides tag detections with the event
         // id, so the same event never notifies twice.
         core.NotificationReceived += (_, args) =>
         {
@@ -411,7 +411,7 @@ internal sealed class MainForm : Form
             })();
             """);
         // A REJECTED circuit (server restarted, or the connection was away past
-        // the circuit's retention — a laptop sleep is enough) is the one state the
+        // the circuit's retention, a laptop sleep is enough) is the one state the
         // page cannot recover from: Blazor stops and offers a Reload button. A
         // browser user clicks it; nobody is at a tray app that started on boot,
         // so the page reports the state and the shell reloads it itself.
@@ -492,7 +492,7 @@ internal sealed class MainForm : Form
         && string.Equals(u.GetLeftPart(UriPartial.Authority), _origin, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Runs before any page script, on every navigation — which is exactly why it
+    /// Runs before any page script, on every navigation, which is exactly why it
     /// begins with an origin check. The navigation lockdown should keep foreign
     /// pages out of this window entirely, but a script carrying a session token
     /// does not get to ASSUME that: it refuses to run anywhere but the server.
@@ -500,10 +500,10 @@ internal sealed class MainForm : Form
     /// It marks the document as shell-hosted and carries the "pause video when
     /// hidden" choice, which the page's live players act on by themselves.
     /// Two bigger jobs. It hands the web UI the session token the shell already holds, in
-    /// the exact shape the UI stores it — so the app opens signed in rather than
+    /// the exact shape the UI stores it, so the app opens signed in rather than
     /// on a login form, without a token ever appearing in a URL. And it hides the
     /// service worker's registration from the UI's notification helper, which
-    /// makes the helper fall back to the plain Notification API — the one
+    /// makes the helper fall back to the plain Notification API: the one
     /// WebView2 lets the host intercept. Without that, a notification raised on
     /// an https server would go out through the worker and the shell could
     /// neither style it nor stop it duplicating its own.
@@ -556,8 +556,8 @@ internal sealed class MainForm : Form
         _ = ConfirmReloadAsync(_navCompletions);
     }
 
-    /// <summary>A reload of a hung page looks exactly like a slow one — the
-    /// navigation simply never completes — so the page is asked directly.</summary>
+    /// <summary>A reload of a hung page looks exactly like a slow one, the
+    /// navigation simply never completes, so the page is asked directly.</summary>
     private async Task ConfirmReloadAsync(long completionsBefore)
     {
         await Task.Delay(TimeSpan.FromSeconds(8));
@@ -599,7 +599,7 @@ internal sealed class MainForm : Form
     /// A renderer that has stopped running script is a window that looks alive
     /// and does nothing: clicks, F5 and Reload all wait on it forever, because a
     /// reload needs the old page to let go first. WebView2 reports the state
-    /// (RenderProcessUnresponsive) and otherwise leaves it — Edge would put up
+    /// (RenderProcessUnresponsive) and otherwise leaves it: Edge would put up
     /// its "page unresponsive" dialog here, and nothing does that for a tray app.
     /// The page gets one more chance to answer; then its renderer process is
     /// killed, the browser process stays up, and the page reloads into a fresh
@@ -698,13 +698,13 @@ internal sealed class MainForm : Form
     /// <summary>Reloads a page whose circuit the server rejected, as soon as the
     /// server answers a probe. A dead page would otherwise sit behind the overlay
     /// until a person notices; meanwhile the alert engine keeps running either
-    /// way. Runs on the UI thread — WebMessageReceived raises there and every
-    /// await resumes there — so Reload and ExecuteScriptAsync are safe to call.</summary>
+    /// way. Runs on the UI thread, WebMessageReceived raises there and every
+    /// await resumes there, so Reload and ExecuteScriptAsync are safe to call.</summary>
     private async Task RecoverCircuitAsync()
     {
         if (_recoveringCircuit) return;
         _recoveringCircuit = true;
-        DesktopLog.Write("page session rejected by the server — reloading as soon as it answers");
+        DesktopLog.Write("page session rejected by the server: reloading as soon as it answers");
         try
         {
             while (!IsDisposed && _web.CoreWebView2 != null)
@@ -715,7 +715,7 @@ internal sealed class MainForm : Form
                     return;
                 }
                 await Task.Delay(TimeSpan.FromSeconds(5));
-                // A manual reload or navigation clears the state — stop, so the
+                // A manual reload or navigation clears the state: stop, so the
                 // next rejection can arm a fresh recovery.
                 string still;
                 try
@@ -820,7 +820,7 @@ internal sealed class MainForm : Form
     /// <summary>Tells the page whether anyone can see it, so its live players can
     /// stop and restart streams (when the setting is on). Explicit rather than
     /// trusting the WebView to flip document.hidden: minimising, for one, does
-    /// not. Only speaks on a change — OnResize fires constantly.</summary>
+    /// not. Only speaks on a change: OnResize fires constantly.</summary>
     private async Task ReportVisibilityAsync()
     {
         var core = _web.CoreWebView2;
@@ -898,8 +898,8 @@ internal sealed class MainForm : Form
     /// <summary>Black-window insurance, run on every show. A WebView that
     /// navigated while hidden can come back with a live DOM behind an unpainted
     /// surface; flipping the control's visibility makes the compositor present
-    /// again. Then the document is checked for actual content — a load that died
-    /// on the way can leave a truly empty page — and an empty one is hard-reloaded.
+    /// again. Then the document is checked for actual content, a load that died
+    /// on the way can leave a truly empty page, and an empty one is hard-reloaded.
     /// Either way desktop.log records what was found, so any future black window
     /// names its own cause.</summary>
     private async Task EnsurePaintedAsync()
@@ -914,7 +914,7 @@ internal sealed class MainForm : Form
                 "document.body ? document.body.children.length : -1");
             if (kids is "0" or "-1")
             {
-                DesktopLog.Write($"window shown onto an empty document (children={kids}) — reloading fresh");
+                DesktopLog.Write($"window shown onto an empty document (children={kids}): reloading fresh");
                 await HardReloadAsync();
             }
         }
@@ -948,7 +948,7 @@ internal sealed class MainForm : Form
         }
     }
 
-    /// <summary>A second launch asked for the window — plain (shortcut double-click)
+    /// <summary>A second launch asked for the window: plain (shortcut double-click)
     /// or on a specific event (a notification clicked in the Action Center, which
     /// reaches the app as a neolink-desktop: protocol launch).</summary>
     public void ShowFromAnotherInstance(string? deepLink = null) => ShowWindow(deepLink);
@@ -1045,7 +1045,7 @@ internal sealed class MainForm : Form
     {
         status ??= _engine.LastStatus;
         var host = _settings.ServerUrl.Length > 0 ? _settings.ServerUrl : "not configured";
-        var line = $"Neolink.NET — {status ?? host}";
+        var line = $"Neolink.NET: {status ?? host}";
         if (!_settings.NotificationsEnabled) line += " (alerts off)";
         // The shell tooltip is capped at 63 characters by the shell itself.
         _tray.Text = line.Length <= 63 ? line : line[..60] + "...";
@@ -1084,7 +1084,7 @@ internal sealed class MainForm : Form
 
     /// <summary>The saved-server manager: switch to another saved server, remove
     /// one (confirmed, credentials erased from this PC), or add a new one. Any
-    /// change to the ACTIVE connection ends in a restart — session, token and
+    /// change to the ACTIVE connection ends in a restart: session, token and
     /// alert baseline are all keyed on the old server.</summary>
     private void OpenServersDialog()
     {

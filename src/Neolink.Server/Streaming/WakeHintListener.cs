@@ -15,14 +15,14 @@ namespace Neolink.Streaming;
 ///
 /// Why this works (validated live, OPNsense + Argus Solar, 2026-07-22): on a PIR
 /// event the camera itself contacts pushx.reolink.com over TCP 443 to deliver the
-/// phone push — one new state, at the moment of the event. The router is the
+/// phone push, one new state, at the moment of the event. The router is the
 /// camera's gateway, so it sees that unicast where a LAN host never could. The
 /// signal even survives a BLOCK rule (the logged attempt is the signal), so
 /// cameras firewalled off the internet still produce it.
 ///
 /// Why the filter is TCP/443 ONLY, hardcoded: the same live capture showed the
 /// camera bursting NEW UDP states to the Reolink p2p host ~30-45 s AFTER each
-/// wake — the wake chip re-registering its remote-wake channel as the camera
+/// wake, the wake chip re-registering its remote-wake channel as the camera
 /// dozes off. Treating those as hints would reconnect right after every park and
 /// never let the camera sleep (the exact loop the ping-pattern scan just
 /// escaped). During real sleep the wake chip reuses one long-lived state and
@@ -48,7 +48,7 @@ public sealed class WakeHintListener
     {
         using var udp = new UdpClient(new IPEndPoint(IPAddress.Parse(_bind), _port));
         Log.Info($"Wake hints: listening for router syslog on udp://{_bind}:{_port} " +
-                 "(filterlog; only TCP/443 states count — the camera calling the push service)");
+                 "(filterlog; only TCP/443 states count: the camera calling the push service)");
         // First datagram per syslog source is announced at Info: "is the router
         // actually sending to us" is the first thing every setup needs to verify,
         // and without this line a working pipe with no matching traffic is
@@ -62,11 +62,11 @@ public sealed class WakeHintListener
             catch (SocketException e)
             {
                 // A remote ICMP port-unreachable can surface here; never fatal.
-                Log.Debug($"Wake hints: receive error ({e.SocketErrorCode}) — continuing");
+                Log.Debug($"Wake hints: receive error ({e.SocketErrorCode}), continuing");
                 continue;
             }
             if (senders.Add(r.RemoteEndPoint.Address))
-                Log.Info($"Wake hints: receiving syslog from {r.RemoteEndPoint.Address} — the pipe works");
+                Log.Info($"Wake hints: receiving syslog from {r.RemoteEndPoint.Address}, the pipe works");
             string line;
             try { line = Encoding.UTF8.GetString(r.Buffer); }
             catch { continue; }
@@ -77,10 +77,10 @@ public sealed class WakeHintListener
 
     /// <summary>
     /// Parses one syslog datagram; true only for an event-grade line: a filterlog
-    /// entry for a NEW TCP state to port 443 (any action — pass or block, the
+    /// entry for a NEW TCP state to port 443 (any action, pass or block, the
     /// attempt is the signal). Handles both RFC3164 ("filterlog: csv") and
     /// RFC5424 ("filterlog 1234 - [meta] csv") framings; anything unparseable is
-    /// silently false — a syslog port receives all sorts.
+    /// silently false: a syslog port receives all sorts.
     /// </summary>
     public static bool TryParseEventHint(string payload, out IPAddress sourceIp, out string detail)
     {
