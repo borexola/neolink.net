@@ -13,6 +13,14 @@
    detection events overlay the lanes color-coded by type. *@
 
 <PageTitle>@T["Neolink.NET · Timeline"]</PageTitle>
+@if (!_prefsReady)
+{
+    @* The saved layout is not known yet: painting the toolbar now would make it jump. *@
+    <div class="tl-page">
+        <div class="notice tl-boot" role="status"><span class="btn-spinner"></span> @T["Loading…"]</div>
+    </div>
+    return;
+}
 @{
     var included = Included.ToList();
     var presentKinds = PresentKinds.ToList();
@@ -390,11 +398,18 @@
                         title="@(_included.Contains(name) ? T["Loaded (click to remove)"] : T["Click to load this camera's footage"])"
                         @onclick="() => ToggleCameraAsync(name)">@name</button>
             }
-            <span class="event-sub">
-                @(_continuous
-                    ? T["pick the cameras to scrub; colored marks are events"]
-                    : T["continuous recording is off, so only detection events (colored marks) play here"])
-            </span>
+            @if (!_camsLoaded || _dayLoading)
+            {
+                <span class="event-sub" role="status"><span class="btn-spinner"></span>@(_camsLoaded ? T["Loading…"] : T["Loading cameras…"])</span>
+            }
+            else
+            {
+                <span class="event-sub">
+                    @(_continuous
+                        ? T["pick the cameras to scrub; colored marks are events"]
+                        : T["continuous recording is off, so only detection events (colored marks) play here"])
+                </span>
+            }
         </div>
 
         @* Legend + filter in one: each chip carries the exact colour its marks are
@@ -565,7 +580,11 @@
            studio layout, clicking a tile promotes it to the program monitor (the
            rest become a thumbnail rail); clicking it again restores the grid. *@
         <div class="tl-grid @(FocusActive ? "tl-focused" : "")" style="@GridStyle()">
-            @if (included.Count == 0)
+            @if (!_camsLoaded)
+            {
+                <div class="notice" role="status"><span class="btn-spinner"></span> @T["Loading cameras…"]</div>
+            }
+            else if (included.Count == 0)
             {
                 <div class="notice">@T["Select cameras above to load their footage; colored marks on the lanes are events."]</div>
             }
@@ -666,6 +685,9 @@
     private bool _scrubInit;
     private bool _railInit; // rail-divider drag hooked (focused studio only)
     private bool _booted;
+    private bool _prefsReady; // saved layout known: the toolbar may paint
+    private bool _camsLoaded; // the camera list has arrived (or failed)
+    private bool _dayLoading; // the day's events and coverage are in flight
 
     // Calendar date-picker: days that hold footage are highlighted at a glance.
     private bool _showCalendar;
@@ -896,6 +918,18 @@
     {
         if (firstRender)
         {
+            // Layout first: with a local copy of the prefs the page paints after one round-trip.
+            try
+            {
+                var json = await JS.InvokeAsync<string?>("neolink.lsGet", PrefsKey);
+                if (json != null)
+                {
+                    ApplyPrefs(JsonSerializer.Deserialize<Prefs>(json));
+                    _prefsReady = true;
+                    StateHasChanged();
+                }
+            }
+            catch { }
             // The zoom engine is page-global and idempotent; a direct /timeline
             // load must arm it itself (the live view isn't necessarily visited first).
             try { await JS.InvokeVoidAsync("neolink.zoomInit"); } catch { }
@@ -917,19 +951,18 @@
             if (string.IsNullOrWhiteSpace(_server))
                 _server = _origin;
 
-            try
-            {
-                var json = await JS.InvokeAsync<string?>("neolink.lsGet", PrefsKey);
-                if (json != null)
-                    ApplyPrefs(JsonSerializer.Deserialize<Prefs>(json));
-            }
-            catch { }
             await LoadServerPrefsAsync(); // signed in: the account's copy wins
+            _prefsReady = true; // no local copy (new browser): the layout waited for the account's
+            StateHasChanged();
 
             await LoadCamerasAsync();
-            _detect = await GetJsonAsync<ApiDetect>("/api/detect");
             _included.RemoveWhere(name => _cameras.All(c => !string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)));
+            _camsLoaded = true;
+            _dayLoading = true; // set here so the cameras never paint with a finished-looking hint
+            StateHasChanged();
             await LoadDayAsync();
+            StateHasChanged();
+            _detect = await GetJsonAsync<ApiDetect>("/api/detect");
             await LoadBookmarksAsync();
 
             _selfRef = DotNetObjectReference.Create(this);
@@ -1114,6 +1147,13 @@
     }
 
     private async Task LoadDayAsync()
+    {
+        _dayLoading = true;
+        try { await LoadDayCoreAsync(); }
+        finally { _dayLoading = false; }
+    }
+
+    private async Task LoadDayCoreAsync()
     {
         _cov.Clear();
         _eventSegs.Clear();

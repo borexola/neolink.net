@@ -4014,6 +4014,9 @@ button.ev-switch-opt {
     overflow: hidden;
 }
 
+/* First load, before the saved layout is known: one centered spinner. */
+.tl-page > .tl-boot { margin: auto; }
+
 .tl-toolbar { flex: 0 0 auto; gap: 8px; }
 
 /* Related controls cluster inside a subtle pill so the toolbar reads as a few
