@@ -56,7 +56,9 @@ matching line.
   Home Assistant, install the **Neolink.NET (host network)** add-on instead.
   Read the sweep's `targets:` line to confirm: if the only broadcast address is
   container-internal (`172.x.255.255`) and none is on the camera's subnet, that
-  is the cause.
+  is the cause. If the line does list the camera's own address and the camera
+  sits on another VLAN, a firewall is dropping its answers: pass UDP from the
+  camera to the server, not only from the server to the camera.
 - Cameras limit concurrent Baichuan clients; if the Reolink app is streaming
   `mainStream`, use `stream: "subStream"` or close the app.
 - **Choppy browser video on Firefox for main streams**: that's H.265, use the sub

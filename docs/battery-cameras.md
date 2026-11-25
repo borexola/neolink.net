@@ -389,6 +389,17 @@ host networking they do nothing and can collide. Once connected, everything
 works as over TCP (video, events, battery, recording, controls); these
 cameras carry a **UDP BETA** badge in the UI.
 
+**Camera on another VLAN or subnet.** A stateful firewall between the server
+and the camera (OPNsense, pfSense, UniFi) needs a rule in both directions: UDP
+from the server to the camera, and UDP from the camera back to the server. The
+second one is easy to miss. The server's hello goes to ports 2015 and 2018,
+but the camera answers from other ports and the session carries on there, so
+the firewall takes its replies for new traffic and drops them unless a rule on
+the camera's network passes them. The server listens on a port in 53500-53999,
+or on one the OS picks when that band is taken, so allow every UDP port in
+both rules for a setup that always holds. The tell is a sweep whose `targets:` line lists the camera's own
+address and still ends in `UDP: SILENCE`. TCP cameras need no such rule.
+
 Validated against real hardware (Argus Eco Pro), with thanks to
 **[Rihan9](https://github.com/Rihan9)**, whose patient testing and log captures
 across many beta rounds pinned down the protocol's keepalive and session
@@ -400,7 +411,7 @@ behavior and made this support work
 | Symptom | Likely cause and fix |
 |---|---|
 | `Connection refused` forever, no open ports | UDP-only model: set `uid` + `"udp": true`. |
-| Discovery sweep ends in `UDP: SILENCE` | Docker bridge network. Use host networking. |
+| Discovery sweep ends in `UDP: SILENCE` | Docker bridge network: use host networking. Camera on another VLAN: the firewall must also pass UDP from the camera to the server (see [UDP-only models](#udp-only-models)). |
 | Camera never reads "armed", wake-capture catches nothing | Ping filtered (look for the fallback line), or something holds the camera awake; read the `held awake by` lines. |
 | Repeated `[wake-diag] INCONCLUSIVE` + "it was already up" | The scan misread an idle-awake camera as asleep. Self-heals; watch for the "being more skeptical" line. |
 | Events missed while armed | Event-type selection excludes what the camera reports (keep **Motion** ticked). `brief fast-ping blip` lines near the miss = wake too short for the scan (router hints fix this); no lines at all = the camera's own PIR never fired. |
