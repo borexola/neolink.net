@@ -2318,10 +2318,20 @@
                     document.body.appendChild(tip);
                 }
                 const when = new Date(snapT).toLocaleTimeString(undefined, { hour12: false });
-                // Labels/units/colors are app constants, never user input.
-                tip.innerHTML = '<div class="mon-tip-time">' + when + '</div>' +
-                    rows.map(r => '<div class="mon-tip-row"><i style="background:' + r.c + '"></i>' +
-                        r.l + '<b>' + (Math.round(r.v * 100) / 100) + (data.u || '') + '</b></div>').join('');
+                // Built from nodes, never markup: the disk label comes from the server.
+                const head = document.createElement('div');
+                head.className = 'mon-tip-time';
+                head.textContent = when;
+                tip.replaceChildren(head, ...rows.map(r => {
+                    const row = document.createElement('div');
+                    row.className = 'mon-tip-row';
+                    const dot = document.createElement('i');
+                    dot.style.background = r.c;
+                    const val = document.createElement('b');
+                    val.textContent = (Math.round(r.v * 100) / 100) + (data.u || '');
+                    row.append(dot, String(r.l), val);
+                    return row;
+                }));
                 tip.style.display = 'block';
                 let x = e.clientX + 14;
                 if (x + tip.offsetWidth > innerWidth - 8) x = e.clientX - tip.offsetWidth - 14;

@@ -13,6 +13,7 @@ in docs/development.md). Paste the matching section below into the GitHub releas
 ### Fixed
 
 - **The Timeline page no longer opens in the normal layout before switching to Studio mode,** and it shows that it is loading until the cameras are listed.
+- **The Monitor page's chart tooltip shows labels as plain text,** so a server the page is pointed at cannot run script in your browser through a disk name.
 
 ## 1.2.5
 
