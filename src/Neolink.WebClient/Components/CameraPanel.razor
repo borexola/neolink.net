@@ -1706,10 +1706,24 @@
                             @foreach (var zt in ZoneTypes())
                             {
                                 var key = zt.Key;
-                                <button class="chip @(key == _zoneType ? "chip-active" : "")"
-                                        disabled="@(_zoneLoading || _zoneSaving)"
-                                        @onclick="() => SwitchZoneAsync(key)">@T[zt.Label]</button>
+                                var mark = ZoneChipMark(key);
+                                <button class="chip @(key == _zoneType ? "chip-active" : "") @mark.Css"
+                                        disabled="@(_zoneLoading || _zoneSaving)" title="@mark.Title"
+                                        @onclick="() => PickZoneTypeAsync(key)">
+                                    @if (mark.Icon != null) { @UiIcon.Render(mark.Icon, 12) }
+                                    @T[zt.Label]
+                                </button>
                             }
+                            @* Acts at once on the drawing as it stands: no Apply first, nothing to lose. *@
+                            <span class="zone-types-sep"></span>
+                            <button class="chip" disabled="@(_zone == null || _zoneSaving)"
+                                    title="@T.F("Writes the zone as drawn to {0} and to {1}, replacing theirs. No need to apply first.", ZoneLabel(_zoneType), ZoneLabels(ZoneCopyTargets()))"
+                                    @onclick="CopyZoneToAllNowAsync">
+                                @UiIcon.Render("copy", 12)
+                                @(_zoneCopyStep > 0
+                                    ? T.F("Copying… ({0} of {1})", _zoneCopyStep, ZoneTypes().Count)
+                                    : T.F("Copy {0} zone to all", ZoneLabel(_zoneType)))
+                            </button>
                         </div>
                     }
                     @* The frame is FIXED: head, type chips and the button row keep their
@@ -1786,7 +1800,7 @@
                         @if (_zone != null)
                         {
                             <button class="chip chip-active" disabled="@_zoneSaving" @onclick="SaveZoneAsync">
-                                @(_zoneSaving ? T["Applying…"]
+                                @(_zoneSaving && _zoneCopyStep == 0 ? T["Applying…"]
                                     : _zone.StoredOnServer ? T["Save to Neolink"] : T["Apply to camera"])
                             </button>
                         }
@@ -2397,6 +2411,47 @@
         return SwitchZoneAsync(_zoneType);
     }
 
+    /// <summary>Which type of the copy is being written (1-based), 0 when none is.</summary>
+    private int _zoneCopyStep;
+    /// <summary>What the last copy did per type: null = it has the zone, otherwise why not.</summary>
+    private readonly Dictionary<string, string?> _zoneCopyResult = new();
+    /// <summary>The type whose chip was clicked over unapplied edits: a second click discards them.</summary>
+    private string? _zoneDiscardFor;
+
+    private List<string> ZoneCopyTargets() =>
+        ZoneTypes().Select(t => t.Key).Where(k => k != _zoneType).ToList();
+
+    private string ZoneLabel(string type) =>
+        T[ZoneTypes().FirstOrDefault(t => t.Key == type) is { Label: { } label } ? label : type];
+
+    private string ZoneLabels(IEnumerable<string> types) => string.Join(", ", types.Select(ZoneLabel));
+
+    /// <summary>A chip click. Switching reloads from the camera, so unapplied edits need a second click to go.</summary>
+    private async Task PickZoneTypeAsync(string type)
+    {
+        string? drawn = null;
+        try { drawn = await JS.InvokeAsync<string?>("neolink.zoneRead", _zoneCanvas); }
+        catch { }
+        if (_zone != null && drawn != null && drawn != _zone.Table && _zoneDiscardFor != type)
+        {
+            _zoneDiscardFor = type;
+            ShowToast(T.F("{0} has changes that are not applied yet. Apply them, or click {1} again to discard them.",
+                ZoneLabel(_zoneType), ZoneLabel(type)), error: true, seconds: 10);
+            return;
+        }
+        await SwitchZoneAsync(type);
+    }
+
+    /// <summary>How a type's chip shows the last copy: it took the zone, or why it did not.</summary>
+    private (string Css, string? Icon, string? Title) ZoneChipMark(string type)
+    {
+        if (type == _zoneType) return ("", null, null);
+        if (!_zoneCopyResult.TryGetValue(type, out var error)) return ("", null, null);
+        return error == null
+            ? ("zone-copy-done", "check", T["This zone was copied here"])
+            : ("zone-copy-failed", "x", error);
+    }
+
     private async Task SetZoneModeAsync(string mode)
     {
         _zoneMode = mode;
@@ -2413,6 +2468,8 @@
         _zone = null;
         _zoneError = null;
         _zoneTypesHint = null;
+        _zoneDiscardFor = null;
+        _zoneCopyResult.Clear();
         _zoneLoading = true;
         StateHasChanged();
         try
@@ -2470,6 +2527,8 @@
         _zoneOpen = false;
         _zone = null;
         _zoneError = null;
+        _zoneDiscardFor = null;
+        _zoneCopyResult.Clear();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -2506,13 +2565,21 @@
         catch { }
     }
 
-    private async Task SaveZoneAsync()
+    private Task SaveZoneAsync() => SaveZoneCoreAsync(toAll: false);
+
+    /// <summary>Saves the drawing to this type and writes it to every other type, in one press.</summary>
+    private Task CopyZoneToAllNowAsync() => SaveZoneCoreAsync(toAll: true);
+
+    private async Task SaveZoneCoreAsync(bool toAll)
     {
         string? table = null;
         try { table = await JS.InvokeAsync<string?>("neolink.zoneRead", _zoneCanvas); }
         catch { }
         if (table == null || _zone == null) return;
         _zoneSaving = true;
+        _zoneCopyStep = toAll ? 1 : 0;
+        _zoneDiscardFor = null;
+        _zoneCopyResult.Clear();
         // Cols/Rows ride along for a zone Neolink keeps: the grid on screen is the
         // one being saved, and re-deriving its shape server-side would reject the
         // first save of a camera whose stream became ready while the editor was open.
@@ -2523,11 +2590,14 @@
                 new { type = _zoneType, table, cols = _zone.Cols, rows = _zone.Rows, storage = _zone.Storage }))
         {
             _zone = _zone with { Table = table, Storage = _lastPostStorage ?? _zone.Storage };
-            // Where it went is what the SERVER did, not what the dialog assumed when
-            // it opened: those can differ if the camera answered differently since.
-            ShowToast(_lastPostStorage == "neolink" ? T["Zone saved to Neolink."]
-                : _lastPostStorage == "camera" ? T["Zone saved to the camera."]
-                : _zone.StoredOnServer ? T["Zone saved to Neolink."] : T["Zone saved to the camera."]);
+            if (toAll)
+                await CopyZoneToAllAsync(_zone);
+            else
+                // Where it went is what the SERVER did, not what the dialog assumed when
+                // it opened: those can differ if the camera answered differently since.
+                ShowToast(_lastPostStorage == "neolink" ? T["Zone saved to Neolink."]
+                    : _lastPostStorage == "camera" ? T["Zone saved to the camera."]
+                    : _zone.StoredOnServer ? T["Zone saved to Neolink."] : T["Zone saved to the camera."]);
             await OnZoneSaved.InvokeAsync(CameraName);
         }
         else if (_lastPostStatus == 409)
@@ -2539,6 +2609,74 @@
             ShowToast(T["Where this zone is kept changed while the editor was open, so it has been reloaded. Draw your changes again and save."], error: true);
         }
         _zoneSaving = false;
+        _zoneCopyStep = 0;
+    }
+
+    /// <summary>Writes the zone just saved to every other type, one at a time, and says which took it.</summary>
+    private async Task CopyZoneToAllAsync(ApiDetectionZone source)
+    {
+        var from = _zoneType;
+        var targets = ZoneCopyTargets();
+        // Labels now: closing the editor mid-copy forgets the camera's types.
+        var label = targets.Append(from).ToDictionary(t => t, ZoneLabel);
+        var errors = new Dictionary<string, string>();
+        var fitted = new List<string>();
+        for (int i = 0; i < targets.Count; i++)
+        {
+            _zoneCopyStep = i + 2; // the source type was the first
+            StateHasChanged();
+            var (error, wasFitted) = await CopyZoneToAsync(targets[i], source);
+            if (error != null) errors[targets[i]] = error;
+            else if (wasFitted) fitted.Add(targets[i]);
+        }
+        // Only an editor still on the same zone shows the outcome on its chips.
+        if (_zoneOpen && _zoneType == from)
+            foreach (var t in targets) _zoneCopyResult[t] = errors.GetValueOrDefault(t);
+        string Labels(IEnumerable<string> types) => string.Join(", ", types.Select(t => label[t]));
+        if (errors.Count > 0)
+        {
+            ShowToast(T.F("Zone saved for {0}. Not saved for {1}.",
+                Labels(targets.Where(t => !errors.ContainsKey(t)).Prepend(from)),
+                string.Join("; ", errors.Select(e => $"{label[e.Key]} ({e.Value})"))), error: true, seconds: 12);
+            return;
+        }
+        var done = T.F("Zone saved to the camera for {0}.", Labels(targets.Prepend(from)));
+        ShowToast(fitted.Count == 0 ? done
+            : done + " " + T.F("{0} uses a different grid, so the zone was fitted to it.", Labels(fitted)));
+    }
+
+    /// <summary>Reads one type's grid for its shape, then writes the source zone into it. Error is null when it took.</summary>
+    private async Task<(string? Error, bool Fitted)> CopyZoneToAsync(string type, ApiDetectionZone source)
+    {
+        ApiDetectionZone? target;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var res = await Http.SendAsync(
+                NewRequest(HttpMethod.Get, $"detectionzone?type={Uri.EscapeDataString(type)}"), cts.Token);
+            if (!res.IsSuccessStatusCode)
+                return (res.StatusCode == System.Net.HttpStatusCode.NotFound
+                    ? T["This camera doesn't report a zone for this detection type."]
+                    : await ReadErrorAsync(res) ?? T.F("Request failed ({0})", (int)res.StatusCode), false);
+            target = await res.Content.ReadFromJsonAsync<ApiDetectionZone>(cancellationToken: cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return (T["The camera is taking too long to answer."], false);
+        }
+        catch (Exception ex)
+        {
+            return (T.F("Cannot reach {0}: {1}", Server, ex.Message), false);
+        }
+        if (target == null
+            || ApiDetectionZone.Fit(source.Table, source.Cols, source.Rows, target.Cols, target.Rows) is not { } table)
+            return (T["This camera doesn't report a zone for this detection type."], false);
+        var wasFitted = target.Cols != source.Cols || target.Rows != source.Rows;
+        // Already the same grid: nothing to send the camera.
+        if (table == target.Table) return (null, wasFitted);
+        var error = await PostCoreAsync("detectionzone",
+            new { type, table, cols = target.Cols, rows = target.Rows, storage = target.Storage });
+        return (error, wasFitted);
     }
 
     private void StageOsdNameToggle()
@@ -3097,16 +3235,16 @@
 
     /// <summary>Shows the bottom-of-panel feedback toast; it replaces any current
     /// one and dismisses itself after 5 seconds.</summary>
-    private void ShowToast(string message, bool error = false)
+    private void ShowToast(string message, bool error = false, int seconds = 5)
     {
         _toast = message;
         _toastError = error;
-        _ = DismissToastLaterAsync(++_toastSeq);
+        _ = DismissToastLaterAsync(++_toastSeq, seconds);
     }
 
-    private async Task DismissToastLaterAsync(int seq)
+    private async Task DismissToastLaterAsync(int seq, int seconds)
     {
-        await Task.Delay(TimeSpan.FromSeconds(5));
+        await Task.Delay(TimeSpan.FromSeconds(seconds));
         if (_disposed || seq != _toastSeq) return;
         _toast = null;
         await InvokeAsync(StateHasChanged);
@@ -3696,6 +3834,14 @@
     private async Task<bool> PostAsync(string path, object body, CancellationToken ct = default)
     {
         _toast = null;
+        if (await PostCoreAsync(path, body, ct) is not { } error) return true;
+        ShowToast(error, error: true);
+        return false;
+    }
+
+    /// <summary>A POST that shows nothing itself: null when it worked, otherwise the reason.</summary>
+    private async Task<string?> PostCoreAsync(string path, object body, CancellationToken ct = default)
+    {
         _lastPostStorage = null;
         _lastPostStatus = 0;
         try
@@ -3709,23 +3855,20 @@
             {
                 _error = null;
                 _lastPostStorage = await ReadStorageAsync(res);
-                return true;
+                return null;
             }
             _lastPostStatus = (int)res.StatusCode;
-            ShowToast(res.StatusCode == System.Net.HttpStatusCode.Unauthorized
+            return res.StatusCode == System.Net.HttpStatusCode.Unauthorized
                 ? T["Not authorized; set your credentials under server settings (⚙)."]
-                : await ReadErrorAsync(res) ?? T.F("Request failed ({0})", (int)res.StatusCode), error: true);
-            return false;
+                : await ReadErrorAsync(res) ?? T.F("Request failed ({0})", (int)res.StatusCode);
         }
         catch (OperationCanceledException)
         {
-            ShowToast(T["Timed out waiting for the camera to confirm; it may be slow or offline. Check its state and try again."], error: true);
-            return false;
+            return T["Timed out waiting for the camera to confirm; it may be slow or offline. Check its state and try again."];
         }
         catch (Exception ex)
         {
-            ShowToast(T.F("Cannot reach {0}: {1}", Server, ex.Message), error: true);
-            return false;
+            return T.F("Cannot reach {0}: {1}", Server, ex.Message);
         }
     }
 

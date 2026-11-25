@@ -1586,5 +1586,13 @@
  "none": "ninguno",
  "minimal": "mínimo",
  "medium": "medio",
- "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Se envía como reasoning_effort a servidores tipo OpenAI (llama.cpp, LM Studio, modelos de razonamiento de OpenAI); 'ninguno' también desactiva el pensamiento en Ollama. Un servidor que no conoce el campo rechaza todas las peticiones, así que déjalo sin enviar salvo que el tuyo lo acepte."
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Se envía como reasoning_effort a servidores tipo OpenAI (llama.cpp, LM Studio, modelos de razonamiento de OpenAI); 'ninguno' también desactiva el pensamiento en Ollama. Un servidor que no conoce el campo rechaza todas las peticiones, así que déjalo sin enviar salvo que el tuyo lo acepte.",
+ "Copy {0} zone to all": "Copiar la zona de {0} a todos",
+ "Writes the zone as drawn to {0} and to {1}, replacing theirs. No need to apply first.": "Escribe la zona tal como está dibujada en {0} y en {1}, sustituyendo las suyas. No hace falta aplicar antes.",
+ "Copying… ({0} of {1})": "Copiando… ({0} de {1})",
+ "{0} has changes that are not applied yet. Apply them, or click {1} again to discard them.": "{0} tiene cambios que aún no se han aplicado. Aplíquelos o haga clic de nuevo en {1} para descartarlos.",
+ "This zone was copied here": "Esta zona se copió aquí",
+ "Zone saved for {0}. Not saved for {1}.": "Zona guardada para {0}. No guardada para {1}.",
+ "Zone saved to the camera for {0}.": "Zona guardada en la cámara para {0}.",
+ "{0} uses a different grid, so the zone was fitted to it.": "{0} usa una cuadrícula distinta, así que la zona se ajustó a ella."
 }

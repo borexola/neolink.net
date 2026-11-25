@@ -1586,5 +1586,13 @@
  "none": "aucun",
  "minimal": "minimal",
  "medium": "moyen",
- "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Envoyé comme reasoning_effort aux serveurs de type OpenAI (llama.cpp, LM Studio, modèles de raisonnement OpenAI) ; 'aucun' désactive aussi la réflexion sur Ollama. Un serveur qui ne connaît pas le champ rejette toutes les requêtes : ne l'envoyez que si le vôtre l'accepte."
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Envoyé comme reasoning_effort aux serveurs de type OpenAI (llama.cpp, LM Studio, modèles de raisonnement OpenAI) ; 'aucun' désactive aussi la réflexion sur Ollama. Un serveur qui ne connaît pas le champ rejette toutes les requêtes : ne l'envoyez que si le vôtre l'accepte.",
+ "Copy {0} zone to all": "Copier la zone {0} vers toutes",
+ "Writes the zone as drawn to {0} and to {1}, replacing theirs. No need to apply first.": "Écrit la zone telle que dessinée pour {0} et pour {1}, à la place des leurs. Inutile d'appliquer d'abord.",
+ "Copying… ({0} of {1})": "Copie… ({0} sur {1})",
+ "{0} has changes that are not applied yet. Apply them, or click {1} again to discard them.": "{0} a des modifications qui ne sont pas encore appliquées. Appliquez-les, ou cliquez de nouveau sur {1} pour les abandonner.",
+ "This zone was copied here": "Cette zone a été copiée ici",
+ "Zone saved for {0}. Not saved for {1}.": "Zone enregistrée pour {0}. Non enregistrée pour {1}.",
+ "Zone saved to the camera for {0}.": "Zone enregistrée dans la caméra pour {0}.",
+ "{0} uses a different grid, so the zone was fitted to it.": "{0} utilise une grille différente, la zone y a donc été ajustée."
 }

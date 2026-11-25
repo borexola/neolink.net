@@ -5984,6 +5984,21 @@ select.input-pending {
     flex: 0 0 auto;
 }
 
+.zone-types-sep {
+    width: 1px;
+    align-self: stretch;
+    margin: 0 4px;
+    background: var(--line);
+}
+@media (max-width: 640px) {
+    .zone-types-sep { display: none; }
+}
+
+/* Copy to all: the chips that took the zone, or did not. */
+.zone-copy-done { border-color: var(--ok); }
+.zone-copy-done svg { color: var(--ok); }
+.zone-copy-failed { border-color: var(--err); color: var(--err); }
+
 .zone-mode {
     display: flex;
     gap: 6px;

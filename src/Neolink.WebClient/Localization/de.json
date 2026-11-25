@@ -1586,5 +1586,13 @@
  "none": "keiner",
  "minimal": "minimal",
  "medium": "mittel",
- "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Wird als reasoning_effort an OpenAI-artige Server gesendet (llama.cpp, LM Studio, OpenAI-Reasoning-Modelle); 'keiner' schaltet auch bei Ollama das Denken ab. Ein Server, der das Feld nicht kennt, lehnt jede Anfrage ab; daher nur senden, wenn Ihrer es akzeptiert."
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Wird als reasoning_effort an OpenAI-artige Server gesendet (llama.cpp, LM Studio, OpenAI-Reasoning-Modelle); 'keiner' schaltet auch bei Ollama das Denken ab. Ein Server, der das Feld nicht kennt, lehnt jede Anfrage ab; daher nur senden, wenn Ihrer es akzeptiert.",
+ "Copy {0} zone to all": "Zone „{0}“ auf alle kopieren",
+ "Writes the zone as drawn to {0} and to {1}, replacing theirs. No need to apply first.": "Schreibt die gezeichnete Zone für {0} und für {1} und ersetzt deren Zonen. Vorheriges Anwenden ist nicht nötig.",
+ "Copying… ({0} of {1})": "Wird kopiert… ({0} von {1})",
+ "{0} has changes that are not applied yet. Apply them, or click {1} again to discard them.": "{0} hat Änderungen, die noch nicht angewendet sind. Wenden Sie sie an oder klicken Sie erneut auf {1}, um sie zu verwerfen.",
+ "This zone was copied here": "Diese Zone wurde hierher kopiert",
+ "Zone saved for {0}. Not saved for {1}.": "Zone gespeichert für {0}. Nicht gespeichert für {1}.",
+ "Zone saved to the camera for {0}.": "Zone in der Kamera gespeichert für {0}.",
+ "{0} uses a different grid, so the zone was fitted to it.": "{0} verwendet ein anderes Raster, daher wurde die Zone daran angepasst."
 }

@@ -8157,6 +8157,21 @@ public static class SelfTest
                 """)) == null, "no cell motion rule -> no grid of its own");
         });
 
+        Test("a detection zone copied to a type with another grid keeps its shape", () =>
+        {
+            static string? Fit(string t, int c, int r, int tc, int tr) => WebClient.ApiDetectionZone.Fit(t, c, r, tc, tr);
+            AssertEq(Fit("1001", 2, 2, 2, 2), "1001"); // same grid: untouched
+            // Twice as fine: every cell becomes a 2x2 block.
+            AssertEq(Fit("1001", 2, 2, 4, 4), "1100" + "1100" + "0011" + "0011");
+            // Half as fine: each cell takes the old cell under its centre.
+            AssertEq(Fit("1100" + "1100" + "0011" + "0011", 4, 4, 2, 2), "1001");
+            // A blocked left third stays a left third on a wider, shorter grid.
+            AssertEq(Fit("011" + "011", 3, 2, 6, 1), "001111");
+            Assert(Fit("101", 2, 2, 4, 4) == null, "a table that does not match its grid is refused");
+            Assert(Fit("1", 1, 1, 0, 4) == null, "an empty target grid is refused");
+            Assert(Fit("1", 1, 1, 70000, 1) == null, "a grid past the API's cell limit is refused");
+        });
+
         Test("detection zones Neolink stores for cameras that keep none", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), "neolink-selftest-zone-" + Guid.NewGuid().ToString("N"));

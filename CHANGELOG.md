@@ -6,6 +6,10 @@ in docs/development.md). Paste the matching section below into the GitHub releas
 
 ## 1.2.6
 
+### Added
+
+- **Copy a detection zone to every detection type.** On a camera with a zone per type, the zone editor's *Copy … zone to all* button writes the zone as drawn to all of them in one press and shows which took it.
+
 ### Changed
 
 - **Test connection waits for a sleeping battery camera.** A UDP camera now gets 40 seconds to answer, with a prompt to wake it, and a camera that stays silent gets an explanation of what to try next.

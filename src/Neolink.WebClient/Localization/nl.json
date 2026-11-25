@@ -1586,5 +1586,13 @@
  "none": "geen",
  "minimal": "minimaal",
  "medium": "gemiddeld",
- "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Verzonden als reasoning_effort naar OpenAI-achtige servers (llama.cpp, LM Studio, OpenAI-redeneermodellen); 'geen' zet ook het denken uit op Ollama. Een server die het veld niet kent, weigert elk verzoek; laat het dus niet verzonden tenzij de jouwe het accepteert."
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Verzonden als reasoning_effort naar OpenAI-achtige servers (llama.cpp, LM Studio, OpenAI-redeneermodellen); 'geen' zet ook het denken uit op Ollama. Een server die het veld niet kent, weigert elk verzoek; laat het dus niet verzonden tenzij de jouwe het accepteert.",
+ "Copy {0} zone to all": "Zone {0} naar alle kopiëren",
+ "Writes the zone as drawn to {0} and to {1}, replacing theirs. No need to apply first.": "Schrijft de zone zoals getekend naar {0} en naar {1}; hun zones worden vervangen. Eerst toepassen is niet nodig.",
+ "Copying… ({0} of {1})": "Kopiëren… ({0} van {1})",
+ "{0} has changes that are not applied yet. Apply them, or click {1} again to discard them.": "{0} heeft wijzigingen die nog niet zijn toegepast. Pas ze toe of klik nogmaals op {1} om ze te verwerpen.",
+ "This zone was copied here": "Deze zone is hierheen gekopieerd",
+ "Zone saved for {0}. Not saved for {1}.": "Zone opgeslagen voor {0}. Niet opgeslagen voor {1}.",
+ "Zone saved to the camera for {0}.": "Zone opgeslagen in de camera voor {0}.",
+ "{0} uses a different grid, so the zone was fitted to it.": "{0} gebruikt een ander raster, dus de zone is daaraan aangepast."
 }

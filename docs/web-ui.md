@@ -101,6 +101,12 @@ Neolink watches: today, the live object boxes. Cameras with no snapshot
 command of their own get the editor's backdrop from the stream Neolink is
 already carrying, decoded with ffmpeg.
 
+A camera that keeps a zone per detection type shows one chip per type. To
+use one zone for all of them, press **Copy … zone to all**: the zone as drawn
+is written to every type at once, with no need to apply first, and the chips
+show which took it. A type with a different grid gets the zone fitted to it.
+Switching to another type over changes that are not applied asks first.
+
 ## Events, timeline, export
 
 - New events land in a **review strip** at the top; the Events page keeps the

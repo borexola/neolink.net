@@ -1586,5 +1586,13 @@
  "none": "brak",
  "minimal": "minimalny",
  "medium": "średni",
- "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Wysyłane jako reasoning_effort do serwerów w stylu OpenAI (llama.cpp, LM Studio, modele rozumujące OpenAI); 'brak' wyłącza też myślenie w Ollama. Serwer, który nie zna tego pola, odrzuca każde żądanie, więc nie wysyłaj go, chyba że Twój je akceptuje."
+ "Sent as reasoning_effort to OpenAI-style servers (llama.cpp, LM Studio, OpenAI reasoning models); 'none' also switches thinking off on Ollama. A server that does not know the field rejects every request, so leave it unsent unless yours accepts it.": "Wysyłane jako reasoning_effort do serwerów w stylu OpenAI (llama.cpp, LM Studio, modele rozumujące OpenAI); 'brak' wyłącza też myślenie w Ollama. Serwer, który nie zna tego pola, odrzuca każde żądanie, więc nie wysyłaj go, chyba że Twój je akceptuje.",
+ "Copy {0} zone to all": "Kopiuj strefę {0} do wszystkich",
+ "Writes the zone as drawn to {0} and to {1}, replacing theirs. No need to apply first.": "Zapisuje narysowaną strefę dla: {0} oraz dla: {1}, zastępując ich strefy. Nie trzeba wcześniej stosować.",
+ "Copying… ({0} of {1})": "Kopiowanie… ({0} z {1})",
+ "{0} has changes that are not applied yet. Apply them, or click {1} again to discard them.": "{0}: zmiany nie zostały jeszcze zastosowane. Zastosuj je albo kliknij ponownie {1}, aby je odrzucić.",
+ "This zone was copied here": "Ta strefa została tu skopiowana",
+ "Zone saved for {0}. Not saved for {1}.": "Strefa zapisana dla: {0}. Nie zapisano dla: {1}.",
+ "Zone saved to the camera for {0}.": "Strefa zapisana w kamerze dla: {0}.",
+ "{0} uses a different grid, so the zone was fitted to it.": "{0}: inna siatka, więc strefa została do niej dopasowana."
 }

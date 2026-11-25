@@ -127,6 +127,24 @@ public sealed record ApiDetectionZone(string Type, int Cols, int Rows, string Ta
     /// <summary>True when this grid is kept by Neolink because the camera cannot
     /// keep one: it governs what Neolink watches, not what the camera alerts on.</summary>
     public bool StoredOnServer => Storage == "neolink";
+
+    /// <summary>A grid redrawn at another size: each new cell takes the old cell under its centre.
+    /// Null when the table does not match its dimensions.</summary>
+    public static string? Fit(string table, int cols, int rows, int toCols, int toRows)
+    {
+        if (cols <= 0 || rows <= 0 || toCols <= 0 || toRows <= 0 || table.Length != (long)cols * rows
+            || (long)toCols * toRows > 65536)
+            return null;
+        if (cols == toCols && rows == toRows) return table;
+        var fitted = new char[toCols * toRows];
+        for (int r = 0; r < toRows; r++)
+        {
+            long from = (2L * r + 1) * rows / (2L * toRows) * cols;
+            for (int c = 0; c < toCols; c++)
+                fitted[r * toCols + c] = table[(int)(from + (2L * c + 1) * cols / (2L * toCols))];
+        }
+        return new string(fitted);
+    }
 }
 
 /// <summary>The camera's on-screen-display overlay (name/timestamp/watermark).</summary>
@@ -662,6 +680,7 @@ public static class UiIcon
                 + "<line x1=\"13.3\" y1=\"5\" x2=\"13.3\" y2=\"9\"/><line x1=\"15.8\" y1=\"5\" x2=\"15.8\" y2=\"9\"/>",
             "download" => "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"7 10 12 15 17 10\"/><line x1=\"12\" y1=\"15\" x2=\"12\" y2=\"3\"/>",
             "check" => "<polyline points=\"20 6 9 17 4 12\"/>",
+            "copy" => "<rect x=\"9\" y=\"9\" width=\"13\" height=\"13\" rx=\"2\"/><path d=\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\"/>",
             "trash" => "<polyline points=\"3 6 5 6 21 6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/><line x1=\"10\" y1=\"11\" x2=\"10\" y2=\"17\"/><line x1=\"14\" y1=\"11\" x2=\"14\" y2=\"17\"/>",
             "skip-back" => "<polygon points=\"19 20 9 12 19 4 19 20\" fill=\"currentColor\"/><line x1=\"5\" y1=\"19\" x2=\"5\" y2=\"5\"/>",
             "skip-fwd" => "<polygon points=\"5 4 15 12 5 20 5 4\" fill=\"currentColor\"/><line x1=\"19\" y1=\"5\" x2=\"19\" y2=\"19\"/>",
