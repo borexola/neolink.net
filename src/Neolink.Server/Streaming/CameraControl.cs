@@ -538,6 +538,10 @@ public interface ICameraControl
     /// <summary>Silences a chime for <paramref name="seconds"/>; 0 ends the silence.</summary>
     Task SetChimeSilentAsync(int id, int seconds, CancellationToken ct) => NotHere("chime silent mode");
 
+    /// <summary>Paired chimes and their silent timers, without reading unrelated device settings.</summary>
+    Task<IReadOnlyList<ChimeInfo>?> GetChimeTimersAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<ChimeInfo>?>(null);
+
     /// <summary>Edits (sensitivity, seconds) or deletes one smart-detection rule.</summary>
     Task SetSmartRuleAsync(string type, int index, int? sensitivity, int? seconds, bool delete, CancellationToken ct) =>
         NotHere("smart detection rules");
@@ -3387,20 +3391,7 @@ public sealed class CameraControl : ICameraControl
             await Task.WhenAll(new[] { record, reboot, guard, cruise, shelter, chimes, hdd }.Concat(rules))
                 .ConfigureAwait(false);
 
-            List<ChimeInfo>? chimeList = null;
-            if (chimes.Result is { } list)
-            {
-                chimeList = new List<ChimeInfo>();
-                foreach (var info in list.Descendants("dingdongDeviceInfo"))
-                {
-                    if (XInt(info, "id") is not { } id) continue;
-                    var opt = await TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdDingdongDeviceOpt,
-                        "dingdongDeviceOpt", BuildDingdongOpt(id, "getParam"), ExtrasTimeout, ct)).ConfigureAwait(false);
-                    var silent = await TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdGetDingdongSilent,
-                        "dingdongSilentMode", BuildDingdongSilent(id, null), ExtrasTimeout, ct)).ConfigureAwait(false);
-                    chimeList.Add(ParseChime(info, opt, silent));
-                }
-            }
+            var chimeList = await ReadChimesAsync(camera, chimes.Result, readOptions: true, ct).ConfigureAwait(false);
             List<SmartRule>? smartRules = null;
             for (int i = 0; i < SmartRuleKinds.Length; i++)
                 if (rules[i].Result is { } r)
@@ -3416,6 +3407,33 @@ public sealed class CameraControl : ICameraControl
                 SmartRules: smartRules,
                 SdCards: ParseHdd(hdd.Result));
         }, ct).ConfigureAwait(false);
+    }
+
+    public Task<IReadOnlyList<ChimeInfo>?> GetChimeTimersAsync(CancellationToken ct) =>
+        WithCameraAsync<IReadOnlyList<ChimeInfo>?>(async camera =>
+        {
+            var list = await TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdDingdongList,
+                "dingdongList", timeout: ExtrasTimeout, ct: ct)).ConfigureAwait(false);
+            return await ReadChimesAsync(camera, list, readOptions: false, ct).ConfigureAwait(false);
+        }, ct);
+
+    private static async Task<IReadOnlyList<ChimeInfo>?> ReadChimesAsync(
+        IBcCamera camera, XElement? list, bool readOptions, CancellationToken ct)
+    {
+        if (list == null) return null;
+        var chimes = new List<ChimeInfo>();
+        foreach (var info in list.Descendants("dingdongDeviceInfo"))
+        {
+            if (XInt(info, "id") is not { } id) continue;
+            var opt = readOptions
+                ? await TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdDingdongDeviceOpt,
+                    "dingdongDeviceOpt", BuildDingdongOpt(id, "getParam"), ExtrasTimeout, ct)).ConfigureAwait(false)
+                : null;
+            var silent = await TryAsync(() => camera.GetRawAsync(BcConstants.MsgIdGetDingdongSilent,
+                "dingdongSilentMode", BuildDingdongSilent(id, null), ExtrasTimeout, ct)).ConfigureAwait(false);
+            chimes.Add(ParseChime(info, opt, silent));
+        }
+        return chimes;
     }
 
     public Task SetSdRecordingAsync(bool on, CancellationToken ct) =>
