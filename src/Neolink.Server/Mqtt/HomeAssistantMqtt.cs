@@ -1,6 +1,7 @@
 ﻿// Copyright (c) 2026 Oluwabori Olaleye
 // Licensed under the GNU Affero General Public License v3.0; see the LICENSE file
 // in the repository root.
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -621,6 +622,10 @@ internal sealed class CameraBridge
     /// detect anything, so a change can be noticed and re-announced.</summary>
     private bool _announcedEvents;
     private bool _doorbellAnnounced;
+    private const string ChimeTimerPrefix = "chime_silent_time_";
+    private const int ChimeTimerMaxMinutes = 12 * 60;
+    private readonly SemaphoreSlim _chimeTimerGate = new(1, 1);
+    private IReadOnlyDictionary<int, string> _chimeTimers = new Dictionary<int, string>();
     private int _ringNoticeLogged;
     private DateTime _lastDoorbellPress = DateTime.MinValue;
 
@@ -1038,6 +1043,9 @@ internal sealed class CameraBridge
             await AnnounceEntityAsync("number", "volume", NumberConfig("Volume", "volume", 0, 100, "mdi:volume-high"), ct).ConfigureAwait(false);
         else
             await ClearEntityAsync("number", "volume", ct).ConfigureAwait(false);
+
+        foreach (var (id, name) in Volatile.Read(ref _chimeTimers))
+            await AnnounceChimeTimerAsync(id, name, ct).ConfigureAwait(false);
         if (_hasAutoTrack)
             await AnnounceEntityAsync("switch", "auto_track", SwitchConfig("Auto-tracking", "auto_track"), ct).ConfigureAwait(false);
         else
@@ -1522,7 +1530,8 @@ internal sealed class CameraBridge
     };
 
     /// <summary>A config-category slider number entity (beta HTTP-API controls).</summary>
-    private object NumberConfig(string name, string entity, int min, int max, string? icon) => new
+    private object NumberConfig(string name, string entity, int min, int max, string? icon,
+        string? unit = null, string mode = "slider") => new
     {
         name,
         unique_id = $"neolink_{Id}_{entity}",
@@ -1531,7 +1540,8 @@ internal sealed class CameraBridge
         min,
         max,
         step = 1,
-        mode = "slider",
+        mode,
+        unit_of_measurement = unit,
         icon,
         entity_category = "config",
         device = Device(),
@@ -1982,6 +1992,7 @@ internal sealed class CameraBridge
             if (feat?.Battery == true) await PublishBatteryAsync(ct).ConfigureAwait(false);
             if (feat?.Led == true) await PublishLedAsync(ct).ConfigureAwait(false);
             if (feat?.Pir == true) await PublishPirAsync(ct).ConfigureAwait(false);
+            if (feat?.Doorbell == true) await RefreshChimeTimersAsync(ct).ConfigureAwait(false);
         }
         if (_hasSnapshot && DateTime.UtcNow - _lastSnapshot > TimeSpan.FromMinutes(2))
             await PublishSnapshotAsync(ct).ConfigureAwait(false);
@@ -2033,6 +2044,7 @@ internal sealed class CameraBridge
             var feat = caps?.Features;
             if (feat?.Led == true) await PublishLedAsync(ct).ConfigureAwait(false);
             if (feat?.Pir == true) await PublishPirAsync(ct).ConfigureAwait(false);
+            if (feat?.Doorbell == true) await RefreshChimeTimersAsync(ct).ConfigureAwait(false);
             if (_httpExtrasKnown)
             {
                 _lastHttpPublish = DateTime.UtcNow; // this publish counts; don't double up on the next refresh
@@ -2271,6 +2283,70 @@ internal sealed class CameraBridge
         return true;
     }
 
+    private static string ChimeTimerTopic(int id) => ChimeTimerPrefix + id.ToString(CultureInfo.InvariantCulture);
+
+    private Task AnnounceChimeTimerAsync(int id, string name, CancellationToken ct)
+    {
+        var entity = ChimeTimerTopic(id);
+        var label = string.IsNullOrWhiteSpace(name) ? $"Chime {id} silent time" : $"{name} silent time";
+        return AnnounceEntityAsync("number", entity,
+            NumberConfig(label, entity, 0, ChimeTimerMaxMinutes, "mdi:bell-off-outline", "min", "box"), ct);
+    }
+
+    private async Task RefreshChimeTimersAsync(CancellationToken ct)
+    {
+        await _chimeTimerGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var chimes = await TryAsync(() => _control.GetChimeTimersAsync(ct)).ConfigureAwait(false);
+            if (chimes == null) return;
+
+            var previous = Volatile.Read(ref _chimeTimers);
+            var timers = new Dictionary<int, string>();
+            foreach (var chime in chimes)
+            {
+                // A failed timer read must not remove an already discovered chime.
+                if (chime.SilentSeconds != null || previous.ContainsKey(chime.Id))
+                    timers[chime.Id] = chime.Name;
+            }
+            Volatile.Write(ref _chimeTimers, timers);
+
+            foreach (var id in previous.Keys)
+                if (!timers.ContainsKey(id))
+                    await ClearEntityAsync("number", ChimeTimerTopic(id), ct).ConfigureAwait(false);
+
+            foreach (var chime in chimes)
+            {
+                if (chime.SilentSeconds is not { } seconds) continue;
+                await AnnounceChimeTimerAsync(chime.Id, chime.Name, ct).ConfigureAwait(false);
+                // Keep a partial minute visible until the timer has actually expired.
+                int minutes = Math.Clamp((int)Math.Ceiling(seconds / 60.0), 0, ChimeTimerMaxMinutes);
+                await _hub.PublishAsync(StateTopic(ChimeTimerTopic(chime.Id)),
+                    minutes.ToString(CultureInfo.InvariantCulture), ct).ConfigureAwait(false);
+            }
+        }
+        finally { _chimeTimerGate.Release(); }
+    }
+
+    private async Task SetChimeTimerAsync(string entity, string payload, CancellationToken ct)
+    {
+        if (!int.TryParse(entity.AsSpan(ChimeTimerPrefix.Length), NumberStyles.None,
+                CultureInfo.InvariantCulture, out int id) || entity != ChimeTimerTopic(id)
+            || !decimal.TryParse(payload, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal minutes)
+            || minutes < 0 || minutes > ChimeTimerMaxMinutes || minutes != decimal.Truncate(minutes))
+            return;
+
+        await _chimeTimerGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!Volatile.Read(ref _chimeTimers).ContainsKey(id)) return;
+            await _control.SetChimeSilentAsync(id, (int)minutes * 60, ct).ConfigureAwait(false);
+            await _hub.PublishAsync(StateTopic(entity),
+                ((int)minutes).ToString(CultureInfo.InvariantCulture), ct).ConfigureAwait(false);
+        }
+        finally { _chimeTimerGate.Release(); }
+    }
+
     // ------------------------------------------------------------------ commands from HA
 
     public async Task HandleCommandAsync(string entity, string payload)
@@ -2345,6 +2421,9 @@ internal sealed class CameraBridge
                     break;
                 case "ptz_up" or "ptz_down" or "ptz_left" or "ptz_right" when payload == "PRESS":
                     await PtzStepAsync(entity["ptz_".Length..], ct).ConfigureAwait(false);
+                    break;
+                case var chimeTimer when chimeTimer.StartsWith(ChimeTimerPrefix, StringComparison.Ordinal):
+                    await SetChimeTimerAsync(chimeTimer, payload, ct).ConfigureAwait(false);
                     break;
                 case "volume" when int.TryParse(payload, out var vol):
                     vol = Math.Clamp(vol, 0, 100);
