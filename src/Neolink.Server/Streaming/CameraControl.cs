@@ -100,7 +100,11 @@ public sealed record PrivacyMaskState(bool Enabled, int Count);
 
 /// <param name="Volume">0-4.</param>
 /// <param name="SilentSeconds">Time left silenced; null when the doorbell doesn't say.</param>
-public sealed record ChimeInfo(int Id, string Name, bool Online, int? Volume, bool? Led, int? SilentSeconds = null);
+public sealed record ChimeInfo(int Id, string Name, bool Online, int? Volume, bool? Led, int? SilentSeconds = null)
+{
+    /// <summary>Longest silence the web API and Home Assistant accept, in minutes.</summary>
+    public const int MaxSilentMinutes = 12 * 60;
+}
 
 /// <param name="Type">crossline, intrusion, loitering, object-left or object-taken.</param>
 /// <param name="Seconds">stayTime (intrusion, loitering) or timeThresh (object rules).</param>

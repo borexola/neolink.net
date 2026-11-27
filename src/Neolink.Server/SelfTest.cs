@@ -8908,6 +8908,107 @@ public static class SelfTest
             AssertEq(root.GetProperty("value_template").GetString(), "{{ {'event_type': 'ring'} | tojson }}");
         });
 
+        Test("HA chime silent time: discovery, state, set, cancel and refused payloads", () =>
+        {
+            var bell = new ChimeStub("chimecam");
+            bell.Chimes.Add(new Streaming.ChimeInfo(3, "Hallway", true, null, null, 0));
+            bell.Chimes.Add(new Streaming.ChimeInfo(7, "", true, null, null, 125));
+            var (bridge, published) = ChimeBridge(bell);
+
+            bridge.RefreshChimeTimersAsync(CancellationToken.None).GetAwaiter().GetResult();
+            var config = System.Text.Json.JsonDocument.Parse(
+                published["homeassistant/number/neolink_chimecam/chime_silent_time_3/config"]).RootElement;
+            AssertEq(config.GetProperty("name").GetString(), "Hallway silent time");
+            AssertEq(config.GetProperty("max").GetInt32(), Streaming.ChimeInfo.MaxSilentMinutes);
+            AssertEq(config.GetProperty("mode").GetString(), "box");
+            AssertEq(config.GetProperty("unit_of_measurement").GetString(), "min");
+            Assert(published["homeassistant/number/neolink_chimecam/chime_silent_time_7/config"]
+                .Contains("\"Chime 7 silent time\""), "a chime without a name is labelled by its id");
+            AssertEq(published["neolink/chimecam/chime_silent_time_3"], "0");
+            // 125 s left shows as 3: a part minute stays visible until the timer runs out.
+            AssertEq(published["neolink/chimecam/chime_silent_time_7"], "3");
+
+            bridge.HandleCommandAsync("chime_silent_time_3", "15").GetAwaiter().GetResult();
+            AssertEq(bell.LastSet, (3, 900));
+            AssertEq(published["neolink/chimecam/chime_silent_time_3"], "15");
+            // Home Assistant sends numbers with a decimal point.
+            bridge.HandleCommandAsync("chime_silent_time_7", "720.0").GetAwaiter().GetResult();
+            AssertEq(bell.LastSet, (7, 43200));
+            bridge.HandleCommandAsync("chime_silent_time_3", "0").GetAwaiter().GetResult();
+            AssertEq(bell.LastSet, (3, 0));
+            AssertEq(published["neolink/chimecam/chime_silent_time_3"], "0");
+
+            int sets = bell.Sets;
+            foreach (var bad in new[] { "-1", "721", "1.5", "abc", "", "1e2" })
+                bridge.HandleCommandAsync("chime_silent_time_3", bad).GetAwaiter().GetResult();
+            // A chime the doorbell never listed, and an id that is not written the way it was announced.
+            bridge.HandleCommandAsync("chime_silent_time_9", "5").GetAwaiter().GetResult();
+            bridge.HandleCommandAsync("chime_silent_time_03", "5").GetAwaiter().GetResult();
+            AssertEq(bell.Sets, sets);
+        });
+
+        Test("HA chime poll backs off while the doorbell leaves a read unanswered", () =>
+        {
+            var bell = new ChimeStub("chimecam") { Answers = false };
+            var (bridge, _) = ChimeBridge(bell);
+            var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            void Poll(double minute) =>
+                bridge.RefreshChimeTimersAsync(CancellationToken.None, t0.AddMinutes(minute)).GetAwaiter().GetResult();
+
+            Poll(0); AssertEq(bell.Reads, 1);
+            Poll(1); AssertEq(bell.Reads, 1);   // 2 min wait
+            Poll(2); AssertEq(bell.Reads, 2);   // 4 min wait
+            Poll(5); AssertEq(bell.Reads, 2);
+            Poll(6); AssertEq(bell.Reads, 3);   // 8 min wait
+            // The list answers but one chime's timer does not: still a timeout, still a wait.
+            bell.Answers = true;
+            bell.Chimes.Add(new Streaming.ChimeInfo(3, "Hallway", true, null, null, null));
+            Poll(14); AssertEq(bell.Reads, 4);  // 16 min wait
+            Poll(29); AssertEq(bell.Reads, 4);
+            // The wait stops growing at 30 minutes.
+            Poll(30); AssertEq(bell.Reads, 5);
+            Poll(59); AssertEq(bell.Reads, 5);
+            Poll(60); AssertEq(bell.Reads, 6);
+            Poll(89); AssertEq(bell.Reads, 6);
+            // Every read answered: back to every poll.
+            bell.Chimes[0] = bell.Chimes[0] with { SilentSeconds = 0 };
+            Poll(90); AssertEq(bell.Reads, 7);
+            Poll(91); AssertEq(bell.Reads, 8);
+            // An offline doorbell was not asked anything, so it costs no wait.
+            bell.Offline = true;
+            Poll(92); AssertEq(bell.Reads, 9);
+            Poll(93); AssertEq(bell.Reads, 10);
+        });
+
+        Test("HA chime entity left on the broker goes once its chime is unpaired", () =>
+        {
+            Assert(Mqtt.HomeAssistantMqtt.TryParseNumberConfig("homeassistant",
+                "homeassistant/number/neolink_chimecam/chime_silent_time_5/config", out var camId, out var objectId),
+                "a number entity's discovery topic must parse");
+            AssertEq((camId, objectId), ("chimecam", "chime_silent_time_5"));
+            Assert(!Mqtt.HomeAssistantMqtt.TryParseNumberConfig("homeassistant",
+                "homeassistant/switch/neolink_chimecam/siren_switch/config", out _, out _), "only number entities");
+            Assert(!Mqtt.HomeAssistantMqtt.TryParseNumberConfig("homeassistant",
+                "homeassistant/number/neolink_chimecam/volume/config/extra", out _, out _), "no deeper topics");
+
+            var bell = new ChimeStub("chimecam");
+            bell.Chimes.Add(new Streaming.ChimeInfo(3, "Hallway", true, null, null, 0));
+            bell.Chimes.Add(new Streaming.ChimeInfo(8, "Garage", true, null, null, null));
+            var (bridge, published) = ChimeBridge(bell);
+            // What a broker replays after a restart: two chimes from before, and an entity that is no chime.
+            bridge.OnNumberConfig("chime_silent_time_5", present: true);
+            bridge.OnNumberConfig("chime_silent_time_8", present: true);
+            bridge.OnNumberConfig("volume", present: true);
+
+            bridge.RefreshChimeTimersAsync(CancellationToken.None).GetAwaiter().GetResult();
+            AssertEq(published["homeassistant/number/neolink_chimecam/chime_silent_time_5/config"], "");
+            // Still paired, so it stays although its timer went unanswered this time.
+            Assert(published["homeassistant/number/neolink_chimecam/chime_silent_time_8/config"].Contains("Garage"),
+                "a paired chime the broker already holds must be kept");
+            Assert(!published.ContainsKey("homeassistant/number/neolink_chimecam/volume/config"),
+                "entities that are not chimes are left alone");
+        });
+
         Test("camera state store: suspend flag round-trip + restart persistence", () =>
         {
             var dir = Path.Combine(Path.GetTempPath(), $"neolink-selftest-{Guid.NewGuid():N}");
@@ -13540,6 +13641,41 @@ public static class SelfTest
 
     /// <summary>A snapshot-capable camera returning a canned JPEG and counting
     /// calls, so the endpoint's cache/single-flight behavior is observable.</summary>
+    /// <summary>A doorbell whose paired chimes, and whether it answers for them, the test sets.</summary>
+    private sealed class ChimeStub(string name) : StubCameraControl(name), Streaming.ICameraControl
+    {
+        public readonly List<Streaming.ChimeInfo> Chimes = new();
+        public bool Answers = true, Offline;
+        public int Reads, Sets;
+        public (int Id, int Seconds) LastSet;
+
+        public Task<IReadOnlyList<Streaming.ChimeInfo>?> GetChimeTimersAsync(CancellationToken ct)
+        {
+            Reads++;
+            if (Offline) throw new Streaming.CameraOfflineException(CameraName);
+            return Task.FromResult<IReadOnlyList<Streaming.ChimeInfo>?>(Answers ? Chimes.ToList() : null);
+        }
+
+        public Task SetChimeSilentAsync(int id, int seconds, CancellationToken ct)
+        {
+            Sets++;
+            LastSet = (id, seconds);
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>A bridge over <paramref name="bell"/> with no broker, and everything it publishes.</summary>
+    private static (Mqtt.CameraBridge Bridge, Dictionary<string, string> Published) ChimeBridge(ChimeStub bell)
+    {
+        var cam = new Web.WebCameraInfo(bell.CameraName, new List<Web.WebStreamInfo>(), bell, null);
+        var hub = new Mqtt.HomeAssistantMqtt(
+            new Config.MqttConfig { Broker = "127.0.0.1", Port = 1 }, // never connected
+            new List<Web.WebCameraInfo> { cam }, "test");
+        var published = new Dictionary<string, string>();
+        hub.PublishObserver = (topic, payload) => published[topic] = payload;
+        return (new Mqtt.CameraBridge(cam, hub), published);
+    }
+
     private sealed class SnapStub(string name) : StubCameraControl(name)
     {
         public int Calls;

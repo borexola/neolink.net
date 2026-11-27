@@ -8,10 +8,12 @@ in docs/development.md). Paste the matching section below into the GitHub releas
 
 ### Added
 
+- **Chime silent time in Home Assistant (beta).** Each chime paired to a doorbell gets a number entity: set minutes to silence the physical chime, or 0 to let it ring again (thanks to @joeldevnull, #75).
 - **Copy a detection zone to every detection type.** On a camera with a zone per type, the zone editor's *Copy … zone to all* button writes the zone as drawn to all of them in one press and shows which took it.
 
 ### Changed
 
+- **The web API's chime `silentMinutes` stops at 720 (12 hours) instead of 1440,** the same limit as the Home Assistant control.
 - **Test connection waits for a sleeping battery camera.** A UDP camera now gets 40 seconds to answer, with a prompt to wake it, and a camera that stays silent gets an explanation of what to try next.
 
 ### Fixed

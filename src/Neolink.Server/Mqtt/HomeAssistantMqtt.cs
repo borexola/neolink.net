@@ -278,6 +278,7 @@ public sealed class HomeAssistantMqtt
         // One wildcard per camera captures every ".../{entity}/set" command.
         var subs = _cameras.Values.Select(c => $"{_cfg.BaseTopic}/{c.Id}/+/set").ToList();
         if (Emergency != null && !ServerTopicTaken) subs.Add($"{_cfg.BaseTopic}/server/+/set");
+        subs.AddRange(_cameras.Values.Where(c => c.WatchesNumberConfigs).Select(c => NumberConfigFilter(c.Id)));
         await _client.SubscribeAsync(subs, CancellationToken.None).ConfigureAwait(false);
         foreach (var cam in _cameras.Values)
             await cam.AnnounceAsync(CancellationToken.None).ConfigureAwait(false);
@@ -363,8 +364,31 @@ public sealed class HomeAssistantMqtt
         }
     }
 
+    private string NumberConfigFilter(string camId) => $"{_cfg.DiscoveryPrefix}/number/neolink_{camId}/+/config";
+
+    /// <summary>Asks the broker for a camera's retained number entities, so the bridge learns what Home Assistant still holds.</summary>
+    internal Task<bool> WatchNumberConfigsAsync(string camId, CancellationToken ct) =>
+        _client.SubscribeAsync(new[] { NumberConfigFilter(camId) }, ct);
+
+    /// <summary>Splits a number entity's discovery topic into its camera id and object id.</summary>
+    internal static bool TryParseNumberConfig(string discoveryPrefix, string topic, out string camId, out string objectId)
+    {
+        camId = objectId = "";
+        var head = discoveryPrefix + "/number/neolink_";
+        if (!topic.StartsWith(head, StringComparison.Ordinal)) return false;
+        var rest = topic[head.Length..].Split('/');
+        if (rest.Length != 3 || rest[2] != "config" || rest[0].Length == 0) return false;
+        (camId, objectId) = (rest[0], rest[1]);
+        return true;
+    }
+
     private void OnMessage(string topic, byte[] payload)
     {
+        if (TryParseNumberConfig(_cfg.DiscoveryPrefix, topic, out var numberCam, out var numberId))
+        {
+            if (_cameras.TryGetValue(numberCam, out var owner)) owner.OnNumberConfig(numberId, payload.Length > 0);
+            return;
+        }
         // topic = {base}/{camId}/{entity}/set
         var prefix = _cfg.BaseTopic + "/";
         if (!topic.StartsWith(prefix, StringComparison.Ordinal)) return;
@@ -623,9 +647,15 @@ internal sealed class CameraBridge
     private bool _announcedEvents;
     private bool _doorbellAnnounced;
     private const string ChimeTimerPrefix = "chime_silent_time_";
-    private const int ChimeTimerMaxMinutes = 12 * 60;
+    private const int ChimeTimerMaxMinutes = ChimeInfo.MaxSilentMinutes;
+    private static readonly TimeSpan ChimePollMaxWait = TimeSpan.FromMinutes(30);
     private readonly SemaphoreSlim _chimeTimerGate = new(1, 1);
     private IReadOnlyDictionary<int, string> _chimeTimers = new Dictionary<int, string>();
+    /// <summary>Chime entities the broker holds, so one unpaired while the server was stopped can be removed.</summary>
+    private readonly HashSet<int> _brokerChimes = new();
+    private TimeSpan _chimePollWait;   // zero while the doorbell answers every read
+    private DateTime _chimePollAfter;  // no chime read before this
+    private int _watchesNumberConfigs;
     private int _ringNoticeLogged;
     private DateTime _lastDoorbellPress = DateTime.MinValue;
 
@@ -1529,7 +1559,7 @@ internal sealed class CameraBridge
         availability_mode = "all",
     };
 
-    /// <summary>A config-category slider number entity (beta HTTP-API controls).</summary>
+    /// <summary>A config-category number entity: a slider unless <paramref name="mode"/> says otherwise.</summary>
     private object NumberConfig(string name, string entity, int min, int max, string? icon,
         string? unit = null, string mode = "slider") => new
     {
@@ -2293,32 +2323,80 @@ internal sealed class CameraBridge
             NumberConfig(label, entity, 0, ChimeTimerMaxMinutes, "mdi:bell-off-outline", "min", "box"), ct);
     }
 
-    private async Task RefreshChimeTimersAsync(CancellationToken ct)
+    internal bool WatchesNumberConfigs => Volatile.Read(ref _watchesNumberConfigs) != 0;
+
+    /// <summary>A retained number entity of this camera arrived from the broker, or was removed there.</summary>
+    internal void OnNumberConfig(string objectId, bool present)
+    {
+        if (!TryChimeId(objectId, out int id)) return;
+        lock (_brokerChimes)
+        {
+            if (present) _brokerChimes.Add(id);
+            else _brokerChimes.Remove(id);
+        }
+    }
+
+    private static bool TryChimeId(string entity, out int id)
+    {
+        id = 0;
+        return entity.StartsWith(ChimeTimerPrefix, StringComparison.Ordinal)
+            && int.TryParse(entity.AsSpan(ChimeTimerPrefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out id)
+            && entity == ChimeTimerTopic(id);
+    }
+
+    /// <summary>Reads the paired chimes and publishes their timers; <paramref name="now"/> is the clock, for tests.</summary>
+    internal async Task RefreshChimeTimersAsync(CancellationToken ct, DateTime? now = null)
     {
         await _chimeTimerGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var chimes = await TryAsync(() => _control.GetChimeTimersAsync(ct)).ConfigureAwait(false);
+            var at = now ?? DateTime.UtcNow;
+            if (at < _chimePollAfter) return;
+            if (_hub.Config.Discovery && Interlocked.Exchange(ref _watchesNumberConfigs, 1) == 0)
+                await _hub.WatchNumberConfigsAsync(Id, ct).ConfigureAwait(false);
+
+            IReadOnlyList<ChimeInfo>? chimes;
+            try { chimes = await _control.GetChimeTimersAsync(ct).ConfigureAwait(false); }
+            catch (CameraOfflineException) { return; } // nothing was sent, so the next poll may try again
+            catch (Exception ex) when (ex is CameraCommandException or TimeoutException or System.IO.IOException) { chimes = null; }
+
+            // Each unanswered read costs a timeout, so a doorbell that leaves one open is asked less often.
+            if (chimes != null && chimes.All(c => c.SilentSeconds != null))
+                _chimePollWait = TimeSpan.Zero;
+            else
+            {
+                _chimePollWait = _chimePollWait == TimeSpan.Zero
+                    ? TimeSpan.FromMinutes(2)
+                    : TimeSpan.FromTicks(Math.Min(_chimePollWait.Ticks * 2, ChimePollMaxWait.Ticks));
+                _chimePollAfter = at + _chimePollWait;
+                Log.Debug($"{_cam.Name}: chime timers went unanswered, next read in {_chimePollWait.TotalMinutes:0} min");
+            }
             if (chimes == null) return;
 
             var previous = Volatile.Read(ref _chimeTimers);
+            var known = new HashSet<int>(previous.Keys);
+            lock (_brokerChimes) known.UnionWith(_brokerChimes);
             var timers = new Dictionary<int, string>();
             foreach (var chime in chimes)
             {
                 // A failed timer read must not remove an already discovered chime.
-                if (chime.SilentSeconds != null || previous.ContainsKey(chime.Id))
+                if (chime.SilentSeconds != null || known.Contains(chime.Id))
                     timers[chime.Id] = chime.Name;
             }
             Volatile.Write(ref _chimeTimers, timers);
 
-            foreach (var id in previous.Keys)
-                if (!timers.ContainsKey(id))
-                    await ClearEntityAsync("number", ChimeTimerTopic(id), ct).ConfigureAwait(false);
+            foreach (var id in known)
+            {
+                if (timers.ContainsKey(id)) continue;
+                await ClearEntityAsync("number", ChimeTimerTopic(id), ct).ConfigureAwait(false);
+                lock (_brokerChimes) _brokerChimes.Remove(id);
+            }
 
             foreach (var chime in chimes)
             {
-                if (chime.SilentSeconds is not { } seconds) continue;
+                if (!timers.ContainsKey(chime.Id)) continue;
                 await AnnounceChimeTimerAsync(chime.Id, chime.Name, ct).ConfigureAwait(false);
+                if (chime.SilentSeconds is not { } seconds) continue;
                 // Keep a partial minute visible until the timer has actually expired.
                 int minutes = Math.Clamp((int)Math.Ceiling(seconds / 60.0), 0, ChimeTimerMaxMinutes);
                 await _hub.PublishAsync(StateTopic(ChimeTimerTopic(chime.Id)),
@@ -2330,8 +2408,7 @@ internal sealed class CameraBridge
 
     private async Task SetChimeTimerAsync(string entity, string payload, CancellationToken ct)
     {
-        if (!int.TryParse(entity.AsSpan(ChimeTimerPrefix.Length), NumberStyles.None,
-                CultureInfo.InvariantCulture, out int id) || entity != ChimeTimerTopic(id)
+        if (!TryChimeId(entity, out int id)
             || !decimal.TryParse(payload, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal minutes)
             || minutes < 0 || minutes > ChimeTimerMaxMinutes || minutes != decimal.Truncate(minutes))
             return;

@@ -3830,8 +3830,8 @@ public static class WebApi
             {
                 if (req.Id is not { } id || (req.Volume == null && req.Led == null && req.Ring != true && req.SilentMinutes == null))
                     return Results.Json(new { error = "provide id and volume (0-4), led, ring and/or silentMinutes" }, statusCode: 400);
-                if (req.SilentMinutes is < 0 or > 24 * 60)
-                    return Results.Json(new { error = "silentMinutes must be 0-1440" }, statusCode: 400);
+                if (req.SilentMinutes is < 0 or > ChimeInfo.MaxSilentMinutes)
+                    return Results.Json(new { error = $"silentMinutes must be 0-{ChimeInfo.MaxSilentMinutes}" }, statusCode: 400);
                 if (req.Volume != null || req.Led != null)
                     await control.SetChimeAsync(id, req.Volume, req.Led, reqCt);
                 if (req.SilentMinutes is { } minutes)
