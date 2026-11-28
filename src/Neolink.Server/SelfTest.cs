@@ -8932,14 +8932,14 @@ public static class SelfTest
             AssertEq(bell.LastSet, (3, 900));
             AssertEq(published["neolink/chimecam/chime_silent_time_3"], "15");
             // Home Assistant sends numbers with a decimal point.
-            bridge.HandleCommandAsync("chime_silent_time_7", "720.0").GetAwaiter().GetResult();
-            AssertEq(bell.LastSet, (7, 43200));
+            bridge.HandleCommandAsync("chime_silent_time_7", "1440.0").GetAwaiter().GetResult();
+            AssertEq(bell.LastSet, (7, 86400));
             bridge.HandleCommandAsync("chime_silent_time_3", "0").GetAwaiter().GetResult();
             AssertEq(bell.LastSet, (3, 0));
             AssertEq(published["neolink/chimecam/chime_silent_time_3"], "0");
 
             int sets = bell.Sets;
-            foreach (var bad in new[] { "-1", "721", "1.5", "abc", "", "1e2" })
+            foreach (var bad in new[] { "-1", "1441", "1.5", "abc", "", "1e2" })
                 bridge.HandleCommandAsync("chime_silent_time_3", bad).GetAwaiter().GetResult();
             // A chime the doorbell never listed, and an id that is not written the way it was announced.
             bridge.HandleCommandAsync("chime_silent_time_9", "5").GetAwaiter().GetResult();

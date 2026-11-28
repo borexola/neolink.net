@@ -97,7 +97,7 @@ Alternatively, skip MQTT for the picture entirely: point a Home Assistant
 | Spotlight (beta) | `light` | White-LED cameras (Lumus/Elite): on/off, plus brightness where the HTTP white LED answers |
 | IR brightness | `number` | Infrared LED intensity 0-100, on cameras that report it |
 | Doorbell light (beta) | `switch` | The doorbell's button light |
-| Chime silent time (beta) | `number` | One control per paired chime that reports its silent timer. Set minutes (up to 720) to temporarily mute the physical chime, or set 0 to cancel. The displayed time is refreshed from the doorbell about once a minute, so it counts down while a silence runs; exclude the entity from the recorder if you do not want that history |
+| Chime silent time (beta) | `number` | One control per paired chime that reports its silent timer. Set minutes (up to 1440) to temporarily mute the physical chime, or set 0 to cancel. The displayed time is refreshed from the doorbell about once a minute, so it counts down while a silence runs; exclude the entity from the recorder if you do not want that history |
 | Play quick reply (beta) | `select` | Video doorbells: picking a pre-recorded message plays it through the speaker |
 | Picture settings (beta) | `number`/`select`/`switch` | Image brightness/contrast/saturation/hue/sharpness, day/night mode, anti-flicker, flip and mirror: per what the camera reports (config category) |
 | Motion sensitivity | `number` | The camera's own motion-detection threshold, 1-50, higher = more sensitive (normalized across firmware dialects) |

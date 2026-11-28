@@ -13,7 +13,7 @@ in docs/development.md). Paste the matching section below into the GitHub releas
 
 ### Changed
 
-- **The web API's chime `silentMinutes` stops at 720 (12 hours) instead of 1440,** the same limit as the Home Assistant control.
+- **A day on the Timeline lists quickly after a restart.** Recording lengths are now kept on disk, so the server no longer reads every file again to draw the day.
 - **Test connection waits for a sleeping battery camera.** A UDP camera now gets 40 seconds to answer, with a prompt to wake it, and a camera that stays silent gets an explanation of what to try next.
 
 ### Fixed

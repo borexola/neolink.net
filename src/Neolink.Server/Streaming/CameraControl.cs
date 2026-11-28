@@ -103,7 +103,7 @@ public sealed record PrivacyMaskState(bool Enabled, int Count);
 public sealed record ChimeInfo(int Id, string Name, bool Online, int? Volume, bool? Led, int? SilentSeconds = null)
 {
     /// <summary>Longest silence the web API and Home Assistant accept, in minutes.</summary>
-    public const int MaxSilentMinutes = 12 * 60;
+    public const int MaxSilentMinutes = 24 * 60;
 }
 
 /// <param name="Type">crossline, intrusion, loitering, object-left or object-taken.</param>
