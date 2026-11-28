@@ -3,6 +3,25 @@
 Release notes for the Neolink.NET Home Assistant add-on. Home Assistant shows
 the sections between your installed version and the update on offer.
 
+## 1.2.6
+
+Chime silent time in Home Assistant (beta), one-press copy of a detection zone to every detection type, a Timeline that lists quickly after a restart, and a Test connection that waits for sleeping battery cameras.
+
+### Added
+
+- **Chime silent time in Home Assistant (beta).** Each chime paired to a doorbell gets a number entity: set minutes to silence the physical chime, or 0 to let it ring again (thanks to @joeldevnull, #75).
+- **Copy a detection zone to every detection type.** On a camera with a zone per type, the zone editor's *Copy … zone to all* button writes the zone as drawn to all of them in one press and shows which took it.
+
+### Changed
+
+- **A day on the Timeline lists quickly after a restart.** Recording lengths are now kept on disk, so the server no longer reads every file again to draw the day.
+- **Test connection waits for a sleeping battery camera.** A UDP camera now gets 40 seconds to answer, with a prompt to wake it, and a camera that stays silent gets an explanation of what to try next.
+
+### Fixed
+
+- **The Timeline page no longer opens in the normal layout before switching to Studio mode,** and it shows that it is loading until the cameras are listed.
+- **The Monitor page's chart tooltip shows labels as plain text,** so a server the page is pointed at cannot run script in your browser through a disk name.
+
 ## 1.2.5
 
 Click-to-move and autotracking in Frigate for Reolink pan/tilt cameras (beta), presets on the pan/tilt pad, AI descriptions over HTTPS from your own CA, and pan/tilt commands that go out at once. One breaking change: the Home Assistant doorbell event now reports `ring` instead of `press`.

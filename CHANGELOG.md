@@ -6,6 +6,8 @@ in docs/development.md). Paste the matching section below into the GitHub releas
 
 ## 1.2.6
 
+Chime silent time in Home Assistant (beta), one-press copy of a detection zone to every detection type, a Timeline that lists quickly after a restart, and a Test connection that waits for sleeping battery cameras.
+
 ### Added
 
 - **Chime silent time in Home Assistant (beta).** Each chime paired to a doorbell gets a number entity: set minutes to silence the physical chime, or 0 to let it ring again (thanks to @joeldevnull, #75).
